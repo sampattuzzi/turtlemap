@@ -377,3 +377,9 @@ button { cursor: pointer; }
 .compare-form .small { font-size: 0.85em; line-height: 1.45; }
 .compare-form .actions { display: flex; gap: 8px; }
 .btn.comparing { border-color: var(--diff-mod); color: var(--diff-mod); }
+.focus-chip { position: absolute; left: max(12px, env(safe-area-inset-left, 0px)); top: 10px; z-index: 5; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 320px); padding: 4px 6px 4px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--chrome); color: var(--fg-dim); font-size: 0.88em; box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+.focus-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.focus-chip strong { color: var(--fg); font-family: var(--font-pin); font-weight: 600; }
+.nb.focused { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 55%, transparent); }
+.nhidden { margin-left: 8px; font-weight: 400; font-size: 0.85em; opacity: 0.7; font-style: italic; }
+@media (max-width: 760px) { .focus-chip { max-width: calc(100% - 24px); top: 48px; } }

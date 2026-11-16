@@ -10,7 +10,10 @@ Open a project folder and you get two views:
   boxes. Click a box to open it. Lines show how things depend on each other:
   inherits, has a field of, creates, calls, reads, writes and uses. Lines are
   coloured only at the deepest level you have opened; the rest stay grey until
-  you hover over a box. Libraries appear as one box each, and the standard
+  you hover over a collapsed box or the header of an open one. Select a
+  module (click it, or pick it in the file tree or with Find) and the map hides
+  every module that neither depends on it nor is used by it; **✕ Show all**
+  brings them back. Libraries appear as one box each, and the standard
   library gets one box of its own. The panel under the map shows the real
   source, folded to match what you have opened.
 - **The blueprint.** Click a function or method to see it as a dataflow graph

@@ -53,6 +53,7 @@ function loadOverview(data) {
   FILES = {};
   CALLERS = null;
   NET_CACHE = null;
+  FOCUS_CACHE.clear();
   FUNCTIONS.clear();
   FUNCTION_REQUESTS.clear();
   for (const key of Object.keys(OUTLINES)) delete OUTLINES[key];
@@ -453,6 +454,34 @@ function netLabel(id) {
   return n.name;
 }
 function moduleOf(id) { const c = net().chain(id); const m = c.find((n) => n.kind === 'module' || n.kind === 'libmodule'); return m ? m.name : null; }
+const UNIT_KINDS = new Set(['module', 'libmodule']);
+function focusUnitOf(id) {
+  const chain = net().chain(id);
+  if (!chain.length || id === 'root') return null;
+  const unit = [...chain].reverse().find((n) => UNIT_KINDS.has(n.kind));
+  return unit ? unit.id : id;
+}
+const FOCUS_CACHE = new Map();
+function relatedTo(unitId) {
+  const N = net();
+  if (!unitId || !N.nodes.has(unitId)) return null;
+  if (FOCUS_CACHE.has(unitId)) return FOCUS_CACHE.get(unitId);
+  const unit = N.nodes.get(unitId);
+  const inside = (id) => N.chain(id).includes(unit);
+  const related = new Set();
+  for (const e of N.edges) {
+    const a = inside(e.from), b = inside(e.to);
+    if (a && !b) related.add(focusUnitOf(e.to));
+    else if (b && !a) related.add(focusUnitOf(e.from));
+  }
+  related.delete(null);
+  const units = new Set([unitId, ...related]);
+  const shown = new Set();
+  for (const id of units) for (const n of N.chain(id)) shown.add(n.id);
+  const filter = { unit: unitId, related, units, shown, visible: (n) => shown.has(n.id) || N.chain(n.id).some((a) => units.has(a.id)) };
+  FOCUS_CACHE.set(unitId, filter);
+  return filter;
+}
 function netDefaultExpanded(path) { const n = net().nodes.get(`mod:${path}`); return new Set(n ? net().chain(n.id).slice(1).map((x) => x.id) : []); }
 
 function opBlock(fnSym) {
@@ -470,7 +499,7 @@ function summaryOf(n) {
   for (const k of n.children) counts.set(word[k.kind], (counts.get(word[k.kind]) || 0) + 1);
   return [...counts].map(([w, c]) => plural(c, w)).join(' · ');
 }
-function netBoxEl(n, expanded, ctx) {
+function netBoxEl(n, expanded, ctx, filter = null) {
   if (!n.children.length) {
     const stripe = { method: '--h-method', function: '--h-call', field: '--h-break', member: '--h-enum', constant: '--h-var', name: '--h-lit' }[n.kind] || '--h-lit';
     const isFn = n.kind === 'method' || n.kind === 'function';
@@ -489,14 +518,17 @@ function netBoxEl(n, expanded, ctx) {
     : sym.kind === 'enum' ? '--h-enum' : sym.cat === 'iface' ? '--h-iface' : sym.cat === 'struct' ? '--h-struct' : '--h-break';
   const stereo = n.kind === 'class' ? stereotypeOf(sym) : n.kind === 'module' ? 'module' : n.kind === 'library' ? 'library' : null;
   const title = n.kind === 'package' ? `${n.name}/` : n.name;
-  const box = el('div', { class: `nb k-${n.kind} ${isOpen ? 'open' : ''} ${n.diff ? `diff-${n.diff}` : ''}`, 'data-id': n.id, style: `--hc: var(${hc})` });
+  const shownKids = filter ? n.children.filter((k) => filter.visible(k)) : n.children;
+  const hiddenKids = n.children.length - shownKids.length;
+  const box = el('div', { class: `nb k-${n.kind} ${isOpen ? 'open' : ''} ${n.diff ? `diff-${n.diff}` : ''} ${filter && filter.unit === n.id ? 'focused' : ''}`, 'data-id': n.id, style: `--hc: var(${hc})` });
   const head = el('div', { class: 'nhead', title: isOpen ? 'Collapse' : 'Expand' }, el('span', { class: 'chev' }, isOpen ? '▾' : '▸'), diffBadge(n.diff),
-    stereo ? el('span', { class: 'stereo' }, `«${stereo}»`) : null, el('span', { class: 'ntitle' }, title));
+    stereo ? el('span', { class: 'stereo' }, `«${stereo}»`) : null, el('span', { class: 'ntitle' }, title),
+    isOpen && hiddenKids ? el('span', { class: 'nhidden', title: 'Hidden because they have no dependency on the selected module' }, `${hiddenKids} unrelated hidden`) : null);
   head.addEventListener('click', (e) => { e.stopPropagation(); ctx.select(n.id); ctx.toggle(n.id); });
   box.append(head);
   if (!isOpen) { box.append(el('div', { class: 'nsum' }, summaryOf(n))); return box; }
   const inner = el('div', { class: 'ninner' });
-  for (const k of n.children) inner.append(netBoxEl(k, expanded, ctx));
+  for (const k of shownKids) inner.append(netBoxEl(k, expanded, ctx, filter));
   box.append(inner);
   return box;
 }
@@ -602,14 +634,14 @@ function layoutNet(n, boxEl, edges) {
   for (const r of entryRoutes) NET_ENTRIES.set(`${n.id}|${r.k.node.id}`, { inner, via: r.via });
 }
 
-function buildNetScene(expanded, ctx) {
+function buildNetScene(expanded, ctx, filter = null) {
   const N = net();
   const scene = new Scene(ctx);
   const effective = new Set(['root']);
   for (const id of expanded) { const c = N.chain(id); if (c.length && c[c.length - 1].children.length && c.slice(1).every((x) => expanded.has(x.id))) effective.add(id); }
   const rootEl = el('div', { class: 'nroot', 'data-id': 'root' });
   const inner = el('div', { class: 'ninner' });
-  for (const k of N.root.children) inner.append(netBoxEl(k, effective, ctx));
+  for (const k of N.root.children) if (!filter || filter.visible(k)) inner.append(netBoxEl(k, effective, ctx, filter));
   rootEl.append(inner);
   const rootV = scene.add(rootEl);
   NET_ROUTES.clear(); NET_EXITS.clear(); NET_ENTRIES.clear();
@@ -634,7 +666,8 @@ function buildNetScene(expanded, ctx) {
     rects.set(b.dataset.id, { x: rootV.x + x, y: rootV.y + y, w: b.offsetWidth, h: b.offsetHeight, anchorY: head ? head.offsetHeight / 2 : b.offsetHeight / 2, el: b });
     sizes.push({ el: b, w: b.offsetWidth, h: b.offsetHeight });
   });
-  const depthMax = Math.max(...[...effective].map((id) => N.nodes.get(id).depth));
+  const drawnOpen = new Set([...effective].filter((id) => id === 'root' || rects.has(id)));
+  const depthMax = Math.max(...[...drawnOpen].map((id) => N.nodes.get(id).depth));
   const agg = new Map();
   for (const { from: a, to: b, atoms } of shown.values()) {
     if (!rects.has(a) || !rects.has(b)) continue;
@@ -731,7 +764,7 @@ function buildNetScene(expanded, ctx) {
     }
   };
   let hovered = null;
-  scene.el.addEventListener('mouseover', (e) => { const b = e.target.closest('.nb'); const id = b ? b.dataset.id : null; if (id !== hovered) { hovered = id; highlight(id); } });
+  scene.el.addEventListener('mouseover', (e) => { const b = e.target.closest('.nb'); const id = b && (!b.classList.contains('open') || e.target.closest('.nhead')) ? b.dataset.id : null; if (id !== hovered) { hovered = id; highlight(id); } });
   scene.el.addEventListener('mouseleave', () => { hovered = null; highlight(null); });
   scene.cull = (view) => {
     for (const r of rects.values()) setCulled(r.el, r, !overlaps(r, view));
@@ -745,7 +778,7 @@ function buildNetScene(expanded, ctx) {
   scene.sizes = sizes;
   scene.netRects = rects;
   scene.depthMax = depthMax;
-  scene.effective = effective;
+  scene.effective = drawnOpen;
   return scene;
 }
 
@@ -1253,18 +1286,27 @@ function Explorer(root) {
     const expanded = new Set(lastNet().expanded);
     if (!ref.sym) { expanded.clear(); netDefaultExpanded(ref.path).forEach((x) => expanded.add(x)); }
     else { net().chain(target).slice(1).forEach((x) => expanded.add(x.id)); }
-    st.stack.push({ view: 'net', expanded, focus: target, open: new Set() }); st.fwd = []; st.selected = ref.sym ? target : null; render(false);
+    st.stack.push({ view: 'net', expanded, focus: target, related: focusUnitOf(target), open: new Set() }); st.fwd = []; st.selected = ref.sym ? target : null; render(false);
   }
   function toggleNet(id) {
     const target = net().nodes.get(id);
-    if (!target || !target.children.length) { render(true); return; }
-    const before = document.querySelector(`.viewport .nb[data-id="${CSS.escape(id)}"]`);
-    const r0 = before ? before.getBoundingClientRect() : null;
+    if (!target || !target.children.length) { keepInPlace(id, () => render(true)); return; }
     const ex = cur().expanded;
     if (ex.has(id)) ex.delete(id); else ex.add(id);
-    render(true);
-    const after = document.querySelector(`.viewport .nb[data-id="${CSS.escape(id)}"]`);
-    if (r0 && after) { const r1 = after.getBoundingClientRect(); vp.x += r0.left - r1.left; vp.y += r0.top - r1.top; vp.apply(); }
+    keepInPlace(id, () => render(true));
+  }
+  function keepInPlace(id, change) {
+    const before = currentScene && currentScene.netRects && currentScene.netRects.get(id);
+    const x0 = before ? vp.x + before.x * vp.s : null, y0 = before ? vp.y + before.y * vp.s : null;
+    change();
+    const after = currentScene && currentScene.netRects && currentScene.netRects.get(id);
+    if (before && after) { vp.x = x0 - after.x * vp.s; vp.y = y0 - after.y * vp.s; vp.apply(); }
+  }
+  function showEverything() {
+    const c = cur();
+    const keep = c.related;
+    c.related = null;
+    keepInPlace(keep, () => render(true));
   }
   function toggle(k, button) {
     const open = cur().open;
@@ -1312,7 +1354,18 @@ function Explorer(root) {
     wrap.append(inner.el);
     return wrap;
   }
-  const netCtx = { refresh: () => { if (cur().view === 'net') panel(); }, go: (ref) => go(ref), toggle: (id) => toggleNet(id), select: (id) => { st.selected = id; panel(); if (window.innerWidth <= 760) ui.right.hidden = false; } };
+  const netCtx = {
+    refresh: () => { if (cur().view === 'net') panel(); },
+    go: (ref) => go(ref),
+    toggle: (id) => toggleNet(id),
+    select: (id) => {
+      st.selected = id;
+      const unit = focusUnitOf(id);
+      if (unit && unit !== cur().related) { cur().related = unit; cur().refocused = true; queueMicrotask(() => { if (cur().refocused) keepInPlace(id, () => render(true)); }); }
+      panel();
+      if (window.innerWidth <= 760) ui.right.hidden = false;
+    },
+  };
   let currentScene = null;
   function panel() {
     if (cur().view === 'net') { netPanel(ui.right, typeof st.selected === 'string' ? st.selected : null, netCtx, currentScene && currentScene.effective); return; }
@@ -1338,7 +1391,11 @@ function Explorer(root) {
       return;
     }
     const keep = { x: vp.x, y: vp.y, s: vp.s };
-    currentScene = isNet ? buildNetScene(c.expanded, netCtx) : buildFunctionScene(lookup(c), makeCtx('root'));
+    c.refocused = false;
+    const filter = isNet ? relatedTo(c.related) : null;
+    currentScene = isNet ? buildNetScene(c.expanded, netCtx, filter) : buildFunctionScene(lookup(c), makeCtx('root'));
+    ui.vpHost.querySelectorAll('.focus-chip').forEach((chip) => chip.remove());
+    if (filter) ui.vpHost.append(el('div', { class: 'focus-chip' }, el('span', {}, 'Showing what ', el('strong', {}, netLabel(filter.unit)), ` depends on or is used by · ${plural(filter.related.size, 'related module')}`), el('button', { class: 'btn small', title: 'Show every module again', onclick: () => showEverything() }, '✕ Show all')));
     vp.setScene(currentScene, keepView ? 'none' : 'start');
     if (keepView) { Object.assign(vp, keep); vp.apply(); }
     else if (isNet && c.focus) { const f = currentScene.el.querySelector(`.nb[data-id="${CSS.escape(c.focus)}"]`); const r = currentScene.netRects && currentScene.netRects.get(c.focus); vp.fit(); if (r && vp.s < 0.6) { vp.s = 0.85; vp.x = 40 - r.x * vp.s; vp.y = 60 - r.y * vp.s; vp.apply(); } if (f) f.classList.add('flash'); }
