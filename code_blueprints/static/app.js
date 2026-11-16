@@ -8,6 +8,9 @@ async function api(path) {
   return body;
 }
 let OVERVIEW = null;
+let DIFF = null;
+const DIFF_SIGN = { added: '+', removed: '−', modified: '~' };
+const DIFF_WORD = { added: 'added', removed: 'removed', modified: 'changed' };
 let FILES = {};
 let CALLERS = null;
 const FUNCTIONS = new Map();
@@ -15,7 +18,37 @@ const FUNCTION_REQUESTS = new Map();
 const OUTLINES = {};
 const OUTLINE_REQUESTS = new Map();
 const fnKey = (ref) => `${ref.path}::${ref.sym}`;
+function addRemovedSymbols(data) {
+  for (const [path, entry] of Object.entries(DIFF ? DIFF.removed : {})) {
+    if (entry.module) { if (!data.modules.some((m) => m.path === path)) data.modules.push({ ...entry.module, path }); continue; }
+    const module = data.modules.find((m) => m.path === path);
+    if (!module) continue;
+    const owner = (qual) => module.symbols.find((s) => s.qual === qual);
+    module.symbols.push(...(entry.symbols || []));
+    for (const [qual, methods] of Object.entries(entry.methods || {})) { const c = owner(qual); if (c) c.methods = [...(c.methods || []), ...methods]; }
+    for (const [qual, fields] of Object.entries(entry.fields || {})) { const c = owner(qual); if (c) c.fields = [...(c.fields || []), ...fields]; }
+    for (const [qual, members] of Object.entries(entry.members || {})) { const c = owner(qual); if (c) c.members = [...(c.members || []), ...members]; }
+    module.constants = [...(module.constants || []), ...(entry.constants || [])];
+  }
+}
+function fileDiff(path) { return DIFF && DIFF.files[path] ? DIFF.files[path].status : null; }
+function folderDiff(prefix) {
+  if (!DIFF) return null;
+  const inside = Object.keys(FILES).filter((p) => p.startsWith(`${prefix}/`));
+  const states = inside.map(fileDiff).filter(Boolean);
+  if (!states.length) return null;
+  if (states.length === inside.length && states.every((s) => s === states[0]) && states[0] !== 'modified') return states[0];
+  return 'modified';
+}
+function symbolDiff(ref) {
+  if (!DIFF || !ref) return null;
+  const sym = lookup(ref);
+  const kind = sym && sym.kind !== 'function' ? 'cls' : sym && sym.owner ? 'm' : 'fn';
+  return DIFF.status[`${kind}:${ref.path}:${ref.sym}`] || null;
+}
+function diffBadge(state) { return state ? el('span', { class: `diff-badge diff-${state}`, title: DIFF_WORD[state] }, DIFF_SIGN[state]) : null; }
 function loadOverview(data) {
+  addRemovedSymbols(data);
   OVERVIEW = data;
   FILES = {};
   CALLERS = null;
@@ -60,10 +93,10 @@ function freshGraph(fnSym) {
     const from = byId.get(e.from), to = byId.get(e.to);
     if (!from || !to) continue;
     const pin = from.outs.find((o) => o.name === e.fp);
-    edges.push({ from, fp: e.fp, to, tp: e.tp, type: pin ? pin.type : { label: 'Any', cat: 'any' } });
+    edges.push({ from, fp: e.fp, to, tp: e.tp, type: pin ? pin.type : { label: 'Any', cat: 'any' }, diff: e.diff });
   }
   const exec = [];
-  for (const e of graph.exec || []) { const from = byId.get(e.from), to = byId.get(e.to); if (from && to) exec.push({ from, fp: e.fp, to }); }
+  for (const e of graph.exec || []) { const from = byId.get(e.from), to = byId.get(e.to); if (from && to) exec.push({ from, fp: e.fp, to, diff: e.diff }); }
   return { nodes, edges, exec };
 }
 function lookup(ref) { if (!ref) return null; const f = FILES[ref.path]; return f ? f.index[ref.sym] || null : null; }
@@ -130,7 +163,7 @@ function pinEl(side, key, name, tp, opts = {}) {
   const typeLabel = tp && (settings.types || opts.showType) ? el('span', { class: 'ptype' }, tp.label) : null;
   const lit = opts.lit != null ? el('span', { class: 'lit', style: `color:var(--t-${tp ? tp.cat : 'any'})` }, opts.lit) : null;
   const tip = tp ? `${name || 'value'}: ${tp.label}` : 'execution order';
-  return el('div', { class: 'pin', 'data-pin': key, title: tip }, ...(side === 'in' ? [shape, label, lit, typeLabel] : [typeLabel, label, shape]));
+  return el('div', { class: `pin${opts.diff ? ` pin-${opts.diff}` : ''}`, 'data-pin': key, title: opts.diff ? `${tip} (${DIFF_WORD[opts.diff]})` : tip }, ...(side === 'in' ? [shape, label, lit, typeLabel] : [typeLabel, label, shape]));
 }
 const OPEN_ICON = '<svg width="11" height="11" viewBox="0 0 12 12"><rect x="1" y="3.5" width="7.5" height="7.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4 1h7v7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
 
@@ -189,7 +222,7 @@ class Scene {
     for (const w of this.wires) {
       const pa = w.a.pins[w.ak], pb = w.b.pins[w.bk];
       if (!pa || !pb) continue;
-      const path = svg('path', { d: routedPath(w.a.x + pa.dx, w.a.y + pa.dy, w.b.x + pb.dx, w.b.y + pb.dy, (w.via || []).map((d) => ({ x: d.x, y: d.y + d.pins.d.dy, w: d.w }))), class: `wire ${w.cls || ''}` });
+      const path = svg('path', { d: routedPath(w.a.x + pa.dx, w.a.y + pa.dy, w.b.x + pb.dx, w.b.y + pb.dy, (w.via || []).map((d) => ({ x: d.x, y: d.y + d.pins.d.dy, w: d.w }))), class: `wire ${w.cls || ''}${w.diff ? ` wire-${w.diff}` : ''}` });
       if (!w.cls) path.style.stroke = `var(--t-${w.type ? w.type.cat : 'any'})`;
       w.path = path; this.svg.append(path);
     }
@@ -210,19 +243,20 @@ class Scene {
 
 function nodeEl(n, ctx, connectedIns, connectedOuts) {
   const [hc] = KIND[n.kind] || KIND.ext;
-  const wrap = el('div', { class: `k-${n.kind}` });
+  const state = n.diff || (n.kind !== 'entry' && symbolDiff(n.target) ? 'modified' : null);
+  const wrap = el('div', { class: `k-${n.kind}${state ? ` diff-${state}` : ''}` });
   const box = el('div', { class: 'box' });
   wrap.append(box);
   const openable = n.target && lookup(n.target) && lookup(n.target).kind === 'function' && ['call', 'method', 'ext', 'var'].includes(n.kind);
-  box.append(el('div', { class: 'head', style: `--hc: var(${hc})` },
+  box.append(el('div', { class: 'head', style: `--hc: var(${hc})` }, diffBadge(state),
     el('span', { class: 'title' }, n.kind === 'break' || n.kind === 'make' ? `${n.title.split(' ')[0]} ${plain(n.title.split(' ').slice(1).join(' '))}` : plain(n.title)),
     openable && ctx.openButton ? ctx.openButton(n) : null));
   const left = el('div', { class: 'col in' }), right = el('div', { class: 'col out' });
   if (n.execIn) left.append(pinEl('in', 'exec-in', '', null));
   if (n.execOut) right.append(pinEl('out', 'then', '', null));
   for (const label of n.execOuts || []) right.append(pinEl('out', label, label, null, { raw: true }));
-  for (const p of n.ins) left.append(pinEl('in', `in:${p.name}`, p.name, p.type, { lit: p.lit, connected: connectedIns.has(p.name) || p.lit != null }));
-  for (const o of n.outs) right.append(pinEl('out', `out:${o.name}`, o.name, o.type, { connected: connectedOuts.has(o.name) }));
+  for (const p of n.ins) left.append(pinEl('in', `in:${p.name}`, p.name, p.type, { lit: p.lit, connected: connectedIns.has(p.name) || p.lit != null, diff: p.diff }));
+  for (const o of n.outs) right.append(pinEl('out', `out:${o.name}`, o.name, o.type, { connected: connectedOuts.has(o.name), diff: o.diff }));
   box.append(el('div', { class: 'rows' }, left, right));
   if (n.note) box.append(el('div', { class: 'note' }, n.note));
   box.append(el('div', { class: 'embed-slot' }));
@@ -249,8 +283,8 @@ function buildFunctionScene(fnSym, ctx) {
   scene.measure();
   const { routes, dummies } = layered(g, byId);
   scene.dummies = dummies;
-  for (const e of g.edges) scene.wire(byId.get(e.from), `out:${e.fp}`, byId.get(e.to), `in:${e.tp}`, null, e.type).via = routes.get(`${e.from.id}|out:${e.fp}|${e.to.id}|in:${e.tp}`);
-  for (const e of g.exec) scene.wire(byId.get(e.from), e.fp, byId.get(e.to), 'exec-in', 'exec').via = routes.get(`${e.from.id}|${e.fp}|${e.to.id}|exec-in`);
+  for (const e of g.edges) Object.assign(scene.wire(byId.get(e.from), `out:${e.fp}`, byId.get(e.to), `in:${e.tp}`, null, e.type), { via: routes.get(`${e.from.id}|out:${e.fp}|${e.to.id}|in:${e.tp}`), diff: e.diff });
+  for (const e of g.exec) Object.assign(scene.wire(byId.get(e.from), e.fp, byId.get(e.to), 'exec-in', 'exec'), { via: routes.get(`${e.from.id}|${e.fp}|${e.to.id}|exec-in`), diff: e.diff });
   if (doc) { const entry = byId.get(g.nodes[0]); doc.x = entry.x; doc.y = Math.min(...[...byId.values()].map((v) => v.y)) - doc.h - 20; }
   scene.finish();
   return scene;
@@ -381,6 +415,19 @@ function net() {
       for (const n of m.names) add(`libn:${m.module}.${n}`, 'name', n, modNode);
     }
   }
+  if (DIFF) {
+    const own = (n) => (n.kind === 'module' ? DIFF.status[`mod:${n.path}`] : DIFF.status[n.id]) || null;
+    const settle = (n) => {
+      const kids = n.children.map(settle).filter((k) => k !== undefined);
+      const mine = own(n);
+      if (mine) { n.diff = mine; return mine; }
+      const changed = kids.filter(Boolean);
+      if (!changed.length || n.kind === 'library' || n.kind === 'libmodule') { n.diff = null; return null; }
+      n.diff = n.kind === 'package' && changed.length === n.children.length && changed.every((k) => k === changed[0]) ? changed[0] : 'modified';
+      return n.diff;
+    };
+    settle(root);
+  }
   const list = [];
   const ids = OVERVIEW ? OVERVIEW.edges.ids : [];
   for (const row of OVERVIEW ? OVERVIEW.edges.rows : []) {
@@ -432,7 +479,7 @@ function netBoxEl(n, expanded, ctx) {
         : n.kind === 'member' ? [el('span', {}, n.name), el('span', { class: 'udim' }, ` = ${n.value}`)]
           : n.kind === 'constant' ? [el('span', {}, plain(n.name)), el('span', { class: 'udim' }, ':'), typeText(n.type), el('span', { class: 'udim' }, ` = ${n.value}`)]
             : [el('span', { class: 'uicon' }, /^[a-z_]/.test(n.name) ? 'ƒ' : 'C'), el('span', {}, n.name)];
-    const leaf = el('div', { class: `nb leaf k-${n.kind}${isFn ? ' fnleaf' : ''}`, 'data-id': n.id, style: `--stripe: var(${stripe})`, title: n.sym ? 'Open its dataflow view' : netLabel(n.id) }, kids);
+    const leaf = el('div', { class: `nb leaf k-${n.kind}${isFn ? ' fnleaf' : ''}${n.diff ? ` diff-${n.diff}` : ''}`, 'data-id': n.id, style: `--stripe: var(${stripe})`, title: n.sym ? 'Open its dataflow view' : netLabel(n.id) }, diffBadge(n.diff), kids);
     leaf.addEventListener('click', (e) => { e.stopPropagation(); if (n.sym) ctx.go(refOf(n.sym)); else ctx.select(n.id); });
     return leaf;
   }
@@ -442,10 +489,9 @@ function netBoxEl(n, expanded, ctx) {
     : sym.kind === 'enum' ? '--h-enum' : sym.cat === 'iface' ? '--h-iface' : sym.cat === 'struct' ? '--h-struct' : '--h-break';
   const stereo = n.kind === 'class' ? stereotypeOf(sym) : n.kind === 'module' ? 'module' : n.kind === 'library' ? 'library' : null;
   const title = n.kind === 'package' ? `${n.name}/` : n.name;
-  const box = el('div', { class: `nb k-${n.kind} ${isOpen ? 'open' : ''} ${n.kind === 'module' && !n.mocked ? 'missing' : ''}`, 'data-id': n.id, style: `--hc: var(${hc})` });
-  const head = el('div', { class: 'nhead', title: isOpen ? 'Collapse' : 'Expand' }, el('span', { class: 'chev' }, isOpen ? '▾' : '▸'),
-    stereo ? el('span', { class: 'stereo' }, `«${stereo}»`) : null, el('span', { class: 'ntitle' }, title),
-    n.kind === 'module' && !n.mocked ? el('span', { class: 'stereo' }, 'not in prototype') : null);
+  const box = el('div', { class: `nb k-${n.kind} ${isOpen ? 'open' : ''} ${n.diff ? `diff-${n.diff}` : ''}`, 'data-id': n.id, style: `--hc: var(${hc})` });
+  const head = el('div', { class: 'nhead', title: isOpen ? 'Collapse' : 'Expand' }, el('span', { class: 'chev' }, isOpen ? '▾' : '▸'), diffBadge(n.diff),
+    stereo ? el('span', { class: 'stereo' }, `«${stereo}»`) : null, el('span', { class: 'ntitle' }, title));
   head.addEventListener('click', (e) => { e.stopPropagation(); ctx.select(n.id); ctx.toggle(n.id); });
   box.append(head);
   if (!isOpen) { box.append(el('div', { class: 'nsum' }, summaryOf(n))); return box; }
@@ -715,21 +761,22 @@ function foldedRows(effective, refresh) {
   const rows = [];
   const addItem = (it, path, cls) => {
     const qual = cls ? `${cls}.${it.name}` : it.name;
-    for (const [no, text] of it.decorators || []) rows.push({ no, text });
-    if (it.kind === 'imports') rows.push({ no: it.no, text: it.text, fold: it.count > 1 ? `+${it.count - 1} more imports` : null });
-    else if (it.kind === 'doc') rows.push({ no: it.no, text: it.text, fold: it.multi ? 'docstring' : null });
-    else if (it.kind === 'stmt') rows.push({ no: it.no, text: it.text, fold: it.multi ? '⋯' : null });
-    else if (it.kind === 'def') { const id = cls ? `m:${path}:${qual}` : `fn:${path}:${qual}`; rows.push({ no: it.no, text: it.text, fold: 'body', id: N.nodes.has(id) ? id : null, def: true }); }
+    const diff = it.diff || null;
+    for (const [no, text] of it.decorators || []) rows.push({ no, text, diff });
+    if (it.kind === 'imports') rows.push({ no: it.no, text: it.text, fold: it.count > 1 ? `+${it.count - 1} more imports` : null, diff });
+    else if (it.kind === 'doc') rows.push({ no: it.no, text: it.text, fold: it.multi ? 'docstring' : null, diff });
+    else if (it.kind === 'stmt') rows.push({ no: it.no, text: it.text, fold: it.multi ? '⋯' : null, diff });
+    else if (it.kind === 'def') { const id = cls ? `m:${path}:${qual}` : `fn:${path}:${qual}`; rows.push({ no: it.no, text: it.text, fold: 'body', id: N.nodes.has(id) ? id : null, def: true, diff }); }
     else if (it.kind === 'class') {
       const id = `cls:${path}:${qual}`;
       const open = effective.has(id);
-      rows.push({ no: it.no, text: it.text, fold: open ? null : 'body', id: N.nodes.has(id) ? id : null, cls: true, open });
+      rows.push({ no: it.no, text: it.text, fold: open ? null : 'body', id: N.nodes.has(id) ? id : null, cls: true, open, diff });
       if (open) for (const b of it.body) addItem(b, path, qual);
     }
   };
   const open = [...N.nodes.values()].filter((n) => n.kind === 'module' && effective.has(n.id));
   for (const m of open.slice(0, PANEL_MODULES)) {
-    rows.push({ banner: true, text: m.path, id: m.id });
+    rows.push({ banner: true, text: m.path, id: m.id, diff: fileDiff(m.path) });
     const ol = outlineFor(m.path);
     if (!ol) { rows.push({ text: '    reading…', dim: true }); ensureOutline(m.path).then(() => refreshSoon(refresh), () => {}); continue; }
     for (const it of ol) addItem(it, m.path, null);
@@ -749,6 +796,14 @@ function netPanel(container, selId, ctx, effective) {
     const text = `${netLabel(selId)}. ${n.kind}${moduleOf(selId) ? ` in ${moduleOf(selId)}` : ''}. ${what}.`;
     ex.append(el('div', { class: 'kind' }, n.kind), el('h2', {}, netLabel(selId)), el('p', {}, what));
     ex.append(el('div', { class: 'actions' }, el('button', { class: 'btn small', onclick: () => speak(text) }, '🔊 Read aloud')));
+  } else if (DIFF) {
+    const c = DIFF.counts;
+    const files = Object.entries(DIFF.files);
+    ex.append(el('div', { class: 'kind' }, 'Comparing'), el('h2', {}, DIFF.spec),
+      el('p', {}, `${DIFF.headLabel} against ${DIFF.baseLabel}: ${plural(files.length, 'Python file')} changed (${c.added} added, ${c.removed} removed, ${c.modified} changed).`));
+    const list = el('div', { class: 'diff-files' }, files.slice(0, 60).map(([path, info]) => el('button', { class: `diff-file diff-${info.status}`, title: info.oldPath ? `renamed from ${info.oldPath}` : DIFF_WORD[info.status], onclick: () => ctx.go({ path, sym: null }) }, diffBadge(info.status), el('span', {}, path))));
+    if (files.length > 60) list.append(el('span', { class: 'udim' }, `and ${files.length - 60} more`));
+    ex.append(list);
   } else {
     ex.append(el('div', { class: 'kind' }, 'Code'), el('h2', {}, 'Folded to match the map'));
     ex.append(el('p', {}, 'This is the real code of every open module, folded to the level you have expanded. Click a class line to expand or fold it here and in the map. Click a def line to open its dataflow view.'));
@@ -756,8 +811,9 @@ function netPanel(container, selId, ctx, effective) {
   }
   const cv = el('div', { class: 'code-view folded' });
   for (const r of foldedRows(effective || new Set(), ctx.refresh)) {
-    const row = el('div', { class: `ln ${r.banner ? 'banner' : ''} ${r.id ? 'clickable' : ''} ${r.dim ? 'dimrow' : ''} ${r.id && r.id === selId ? 'hl' : ''}`, 'data-id': r.id || null },
+    const row = el('div', { class: `ln ${r.banner ? 'banner' : ''} ${r.id ? 'clickable' : ''} ${r.dim ? 'dimrow' : ''} ${r.id && r.id === selId ? 'hl' : ''} ${r.diff ? `diff-${r.diff}` : ''}`, 'data-id': r.id || null, title: r.diff ? DIFF_WORD[r.diff] : null },
       el('span', { class: 'no' }, r.banner ? (effective.has(r.id) ? '▾' : '▸') : r.no || ''),
+      DIFF ? el('span', { class: 'sign' }, r.diff ? DIFF_SIGN[r.diff] : '') : null,
       el('span', {}, r.text || ' '),
       r.fold ? el('span', { class: 'fold-chip', title: r.fold === 'body' ? 'Folded' : r.fold }, r.fold === 'body' ? '⋯' : r.fold) : null);
     if (r.id) {
@@ -791,6 +847,7 @@ class Viewport {
     host.addEventListener('pointerup', (e) => this.pointerUp(e));
     host.addEventListener('pointercancel', (e) => this.pointerUp(e, true));
     host.addEventListener('wheel', (e) => this.wheel(e), { passive: false });
+    host.addEventListener('scroll', () => { host.scrollLeft = 0; host.scrollTop = 0; });
     host.addEventListener('gesturestart', (e) => this.safariGesture(e, 'start'));
     host.addEventListener('gesturechange', (e) => this.safariGesture(e, 'change'));
     host.addEventListener('gestureend', (e) => this.safariGesture(e, 'end'));
@@ -944,7 +1001,12 @@ function codePanel(container, sym, node, ctx) {
   if (codeRows) {
     const line = node ? node.line : null;
     const cv = el('div', { class: 'code-view' });
-    codeRows.forEach(([no, ln]) => { cv.append(el('div', { class: `ln ${line && no === line && node.kind !== 'entry' ? 'hl' : ''}` }, el('span', { class: 'no' }, no), el('span', {}, ln || ' '))); });
+    const wanted = node && node.diff === 'removed' ? 'removed' : null;
+    const target = node && node.diff === 'removed' ? node.baseLine : line;
+    codeRows.forEach(([no, ln, change]) => {
+      const hit = target && no === target && node.kind !== 'entry' && (change === 'removed') === (wanted === 'removed');
+      cv.append(el('div', { class: `ln ${hit ? 'hl' : ''} ${change ? `diff-${change}` : ''}`, title: change ? DIFF_WORD[change] : null }, el('span', { class: 'no' }, no), DIFF ? el('span', { class: 'sign' }, change ? DIFF_SIGN[change] : '') : null, el('span', {}, ln || ' ')));
+    });
     panel.append(cv);
     const hl = cv.querySelector('.hl'); if (hl) requestAnimationFrame(() => hl.scrollIntoView({ block: 'nearest' }));
   }
@@ -953,6 +1015,10 @@ function codePanel(container, sym, node, ctx) {
 function legendInto(container) {
   container.append(el('div', { class: 'kind', style: 'font-size:0.72em;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-dim)' }, 'File diagram lines'));
   const line = (kind, dashed, label) => container.append(el('div', { class: 'legend-row legend-line' }, el('span', { html: `<svg viewBox="0 0 46 12"><path d="M2,6 H38" style="stroke:var(--rel-${kind === 'realizes' ? 'inherits' : kind})" stroke-width="2" ${dashed ? 'stroke-dasharray="6 4"' : ''}/>${kind === 'inherits' || kind === 'realizes' ? '<path d="M36,1 L45,6 L36,11 z" style="fill:var(--canvas);stroke:var(--rel-inherits)" stroke-width="1.4"/>' : `<path d="M37,1 L45,6 L37,11" style="fill:none;stroke:var(--rel-${kind})" stroke-width="1.6"/>`}${kind === 'has' ? '<path d="M1,6 L6,2.5 L11,6 L6,9.5 z" style="fill:var(--rel-has)"/>' : ''}</svg>` }), el('span', {}, label)));
+  if (DIFF) {
+    container.append(el('div', { class: 'kind', style: 'font-size:0.72em;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-dim)' }, `Changes in ${DIFF.spec}`));
+    for (const [state, text] of [['added', 'added'], ['removed', 'removed'], ['modified', 'changed, or something inside it changed']]) container.append(el('div', { class: 'legend-row' }, diffBadge(state), el('span', {}, text)));
+  }
   line('inherits', false, 'builds on (inherits)'); line('realizes', true, 'implements a protocol'); line('has', false, 'has a field of that type'); line('creates', true, 'creates one'); line('calls', true, 'calls it'); line('uses', true, 'takes or returns it'); line('reads', true, 'reads a field (inside a class)'); line('writes', true, 'sets a field (inside a class)');
   container.append(el('div', { class: 'kind', style: 'font-size:0.72em;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-dim);margin-top:6px' }, 'Function view'));
   const rows = [['bool', 'bool'], ['int', 'int'], ['float', 'float'], ['str', 'str, Path'], ['enum', 'Enum'], ['struct', 'dataclass / model'], ['object', 'object'], ['map', 'dict, Mapping'], ['list', 'list, tuple'], ['callable', 'callable'], ['time', 'datetime'], ['none', 'None / unknown']];
@@ -1014,6 +1080,36 @@ function openPalette(onPick) {
   render(); document.body.append(pal); input.focus();
 }
 
+function compareButton() {
+  const button = popoverButton(DIFF ? `± ${DIFF.spec}` : '± Compare', 'compare', (pop) => {
+    const input = el('input', { id: 'diff-spec', class: 'path-input', placeholder: 'develop..my-branch', value: DIFF ? DIFF.spec : '', list: 'diff-branches', autocomplete: 'off', spellcheck: 'false' });
+    const branches = el('datalist', { id: 'diff-branches' });
+    const message = el('p', { class: 'error-text', hidden: true });
+    const run = async (spec) => {
+      message.hidden = true;
+      try { await api(`/api/diff?spec=${encodeURIComponent(spec)}`); } catch (error) { message.textContent = error.message; message.hidden = false; return; }
+      pop.remove();
+      waitForProject();
+    };
+    pop.append(el('form', { class: 'compare-form', onsubmit: (e) => { e.preventDefault(); if (input.value.trim()) run(input.value.trim()); } },
+      el('label', { for: 'diff-spec' }, 'Show the changes in a git range'), input, branches,
+      el('p', { class: 'muted small' }, 'A..B compares the tips of A and B. A...B compares B with the point where it branched off A, like a pull request. A on its own compares A with your working copy.'),
+      message,
+      el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'submit' }, 'Compare'), DIFF ? el('button', { class: 'btn', type: 'button', onclick: () => run('') }, 'Stop comparing') : null)));
+    setTimeout(() => input.focus(), 0);
+    let names = [];
+    const refill = () => {
+      const typed = input.value.match(/^(.*?)(\.\.\.?)/);
+      branches.innerHTML = '';
+      for (const name of names.slice(0, 200)) branches.append(el('option', { value: typed ? `${typed[1]}${typed[2]}${name}` : name }));
+    };
+    input.addEventListener('input', refill);
+    api('/api/branches').then((data) => { names = data.branches; refill(); }, () => {});
+  });
+  button.title = 'Compare with a git branch';
+  if (DIFF) button.classList.add('comparing');
+  return button;
+}
 function shell(root, { extraButtons, onPick, onSettings }) {
   const crumbs = el('div', { class: 'crumbs' });
   const left = el('div', { class: 'panel left' });
@@ -1023,6 +1119,7 @@ function shell(root, { extraButtons, onPick, onSettings }) {
     el('button', { class: 'btn phone-only', onclick: () => { left.hidden = !left.hidden; } }, 'Files'),
     ...extraButtons,
     el('button', { class: 'btn', title: 'Find a file or symbol (/)', 'data-find': true, onclick: () => openPalette(onPick) }, '⌕ Find'),
+    compareButton(),
     crumbs, popoverButton('● Key', 'legend', legendInto), settingsButton(onSettings),
     el('button', { class: 'btn', title: 'Show or hide the code panel', onclick: () => { right.hidden = !right.hidden; } }, '⌄ Code')));
   const row = el('div', { class: 'body-row' });
@@ -1062,10 +1159,11 @@ function renderTree(left, currentPath, currentSym, onPick) {
     for (const name of Object.keys(node.dirs).sort()) {
       const full = prefix ? `${prefix}/${name}` : name;
       const isOpen = TREE_OPEN.has(full);
-      box.append(el('button', { class: 'tree-item folder', style: `padding-left:${12 + depth * 14}px`, onclick: () => { if (isOpen) TREE_OPEN.delete(full); else TREE_OPEN.add(full); renderTree(left, currentPath, currentSym, onPick); } }, `${isOpen ? '▾' : '▸'} ${name}/`));
+      const folderState = folderDiff(full);
+      box.append(el('button', { class: `tree-item folder${folderState ? ` diff-${folderState}` : ''}`, style: `padding-left:${12 + depth * 14}px`, onclick: () => { if (isOpen) TREE_OPEN.delete(full); else TREE_OPEN.add(full); renderTree(left, currentPath, currentSym, onPick); } }, `${isOpen ? '▾' : '▸'} ${name}/`, diffBadge(folderState)));
       if (isOpen) draw(node.dirs[name], full, depth + 1);
     }
-    for (const path of node.files.sort()) box.append(el('button', { class: `tree-item ${path === currentPath ? 'active' : ''}`, style: `padding-left:${26 + depth * 14}px`, title: path, onclick: () => onPick({ path, sym: null }) }, baseName(path)));
+    for (const path of node.files.sort()) { const state = fileDiff(path); box.append(el('button', { class: `tree-item ${path === currentPath ? 'active' : ''}${state ? ` diff-${state}` : ''}`, style: `padding-left:${26 + depth * 14}px`, title: state ? `${path} (${DIFF_WORD[state]})` : path, onclick: () => onPick({ path, sym: null }) }, baseName(path), diffBadge(state))); }
   };
   draw(treeRoot, '', 0);
   left.append(box);
@@ -1074,8 +1172,9 @@ function renderTree(left, currentPath, currentSym, onPick) {
   left.append(el('h3', {}, `In ${baseName(currentPath)}`));
   for (const s of f.symbols) {
     const color = s.kind === 'function' ? '--h-call' : s.kind === 'enum' ? '--h-enum' : '--h-make';
-    left.append(el('button', { class: `tree-item ${currentSym === s.qual ? 'active' : ''}`, onclick: () => onPick(refOf(s)) }, el('span', { class: 'dot', style: `background:var(${color})` }), s.name));
-    for (const m of s.methods || []) left.append(el('button', { class: `tree-item ${currentSym === m.qual ? 'active' : ''}`, style: 'padding-left:32px', onclick: () => onPick(refOf(m)) }, el('span', { class: 'dot', style: 'background:var(--h-method)' }), m.name));
+    const state = symbolDiff(refOf(s));
+    left.append(el('button', { class: `tree-item ${currentSym === s.qual ? 'active' : ''}${state ? ` diff-${state}` : ''}`, onclick: () => onPick(refOf(s)) }, el('span', { class: 'dot', style: `background:var(${color})` }), s.name, diffBadge(state)));
+    for (const m of s.methods || []) { const mState = symbolDiff(refOf(m)); left.append(el('button', { class: `tree-item ${currentSym === m.qual ? 'active' : ''}${mState ? ` diff-${mState}` : ''}`, style: 'padding-left:32px', onclick: () => onPick(refOf(m)) }, el('span', { class: 'dot', style: 'background:var(--h-method)' }), m.name, diffBadge(mState))); }
   }
 }
 
@@ -1108,6 +1207,14 @@ const SIDE_PACKAGES = /^(tests?|testing|docs?|examples?|scripts?|benchmarks?|too
 function moduleCount(n) { return n.kind === 'module' ? 1 : n.children.reduce((sum, k) => sum + (k.kind === 'package' || k.kind === 'module' ? moduleCount(k) : 0), 0); }
 function startExpanded() {
   const ex = new Set();
+  if (DIFF) {
+    const changed = Object.keys(DIFF.files);
+    for (const path of changed) {
+      const chain = net().chain(`mod:${path}`);
+      for (const n of chain.slice(1, changed.length <= 12 ? undefined : -1)) if (n.children.length) ex.add(n.id);
+    }
+    if (ex.size) return ex;
+  }
   let n = net().root;
   for (let i = 0; i < 8; i++) {
     const kids = n.children.filter((k) => k.kind === 'package' || k.kind === 'module');
@@ -1121,7 +1228,10 @@ function startExpanded() {
   return ex;
 }
 function Explorer(root) {
-  const start = { view: 'net', expanded: startExpanded(), focus: null, open: new Set() };
+  const expandedAtStart = startExpanded();
+  const firstChange = DIFF && Object.keys(DIFF.files).sort()[0];
+  const startFocus = firstChange ? [...net().chain(`mod:${firstChange}`)].reverse().find((n) => n.id === `mod:${firstChange}` ? net().chain(n.id).slice(1, -1).every((a) => expandedAtStart.has(a.id)) : expandedAtStart.has(n.id)) : null;
+  const start = { view: 'net', expanded: expandedAtStart, focus: startFocus ? startFocus.id : null, open: new Set() };
   const st = { stack: [start], fwd: [], selected: null };
   const cur = () => st.stack[st.stack.length - 1];
   const lastNet = () => [...st.stack].reverse().find((e) => e.view === 'net') || start;
@@ -1231,7 +1341,7 @@ function Explorer(root) {
     currentScene = isNet ? buildNetScene(c.expanded, netCtx) : buildFunctionScene(lookup(c), makeCtx('root'));
     vp.setScene(currentScene, keepView ? 'none' : 'start');
     if (keepView) { Object.assign(vp, keep); vp.apply(); }
-    else if (isNet && c.focus) { const f = currentScene.el.querySelector(`.nb[data-id="${CSS.escape(c.focus)}"]`); vp.fit(); if (f && vp.s < 0.6) { vp.s = 0.85; vp.apply(); const r = f.getBoundingClientRect(), hr = ui.vpHost.getBoundingClientRect(); vp.x += hr.left + 40 - r.left; vp.y += hr.top + 60 - r.top; vp.apply(); } if (f) f.classList.add('flash'); }
+    else if (isNet && c.focus) { const f = currentScene.el.querySelector(`.nb[data-id="${CSS.escape(c.focus)}"]`); const r = currentScene.netRects && currentScene.netRects.get(c.focus); vp.fit(); if (r && vp.s < 0.6) { vp.s = 0.85; vp.x = 40 - r.x * vp.s; vp.y = 60 - r.y * vp.s; vp.apply(); } if (f) f.classList.add('flash'); }
     panel();
     relayouts = keepView === 'relayout' ? relayouts + 1 : 0;
     const sizes = currentScene.sizes || currentScene.nodes.map((n) => ({ el: n.el, w: n.w, h: n.h }));
@@ -1282,10 +1392,14 @@ async function waitForProject() {
     let status;
     try { status = await api('/api/status'); } catch (error) { showWelcome(error.message); return; }
     if (!status.open) { showWelcome(); return; }
-    if (status.error) { screen(el('p', { class: 'error-text' }, 'Reading the project failed.'), el('pre', { class: 'error-detail' }, status.error), el('button', { class: 'btn', onclick: () => showWelcome() }, 'Open another folder')); return; }
+    if (status.error) {
+      const stop = status.diff ? el('button', { class: 'btn', onclick: () => api('/api/diff?spec=').then(() => waitForProject(), (err) => showWelcome(err.message)) }, 'Stop comparing') : null;
+      screen(el('p', { class: 'error-text' }, status.diff ? `Comparing ${status.diff.spec} failed.` : 'Reading the project failed.'), el('pre', { class: 'error-detail' }, status.error), stop, el('button', { class: 'btn', onclick: () => showWelcome() }, 'Open another folder'));
+      return;
+    }
     if (!status.ready) {
       const seconds = Math.round((Date.now() - started) / 1000);
-      const text = `Reading ${status.files.toLocaleString()} Python files in ${status.name}…`;
+      const text = status.diff && status.files && !status.loading ? `Comparing ${status.diff.spec}…` : status.diff ? `Reading ${status.diff.spec}: ${status.files.toLocaleString()} Python files…` : `Reading ${status.files.toLocaleString()} Python files in ${status.name}…`;
       const hint = seconds > 2 ? `${seconds}s — large projects take a little while the first time; after that they open from a cache.` : ' ';
       const shown = document.getElementById('load-text');
       if (shown) { shown.textContent = text; document.getElementById('load-hint').textContent = hint; }
@@ -1294,6 +1408,7 @@ async function waitForProject() {
       return;
     }
     try {
+      DIFF = status.diff ? await api('/api/diff/data') : null;
       loadOverview(await api('/api/project'));
     } catch (error) { showWelcome(error.message); return; }
     mount();

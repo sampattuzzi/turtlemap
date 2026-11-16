@@ -17,9 +17,21 @@ from code_blueprints.analysis.workspace import (
 
 
 class Project:
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        files: list[str] | None = None,
+        name: str | None = None,
+        display_root: Path | None = None,
+    ) -> None:
         self.root = root.resolve()
-        self.workspace = Workspace.discover(self.root)
+        self.name = name or self.root.name
+        self.display_root = display_root or self.root
+        self.workspace = (
+            Workspace.discover(self.root)
+            if files is None
+            else Workspace(self.root, files)
+        )
         self.types = TypeSystem(self.workspace)
         self._lock = threading.RLock()
         self._overview: dict[str, Any] | None = None
@@ -55,6 +67,10 @@ class Project:
             "graph": graph,
         }
 
+    def module_summary(self, path: str) -> dict[str, Any] | None:
+        module = self._module(path)
+        return module_summary(self.types, module) if module is not None else None
+
     def _module(self, path: str) -> ParsedModule | None:
         if not self.workspace.contains(path):
             return None
@@ -76,8 +92,8 @@ class Project:
             except RecursionError as error:
                 failures.append({"path": path, "message": f"RecursionError: {error}"})
         return {
-            "name": self.root.name,
-            "root": str(self.root),
+            "name": self.name,
+            "root": str(self.display_root),
             "modules": modules,
             "failures": failures,
             "libraries": _libraries(modules, collector.external_names),

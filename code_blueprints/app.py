@@ -4,6 +4,7 @@ import threading
 import webbrowser
 from pathlib import Path
 
+from code_blueprints.git import GitError
 from code_blueprints.server import ProjectHost, remember_project, start_server
 
 
@@ -13,6 +14,11 @@ def main(argv: list[str] | None = None) -> int:
         description="Browse a Python codebase as blueprint-style dependency maps and dataflow graphs.",
     )
     parser.add_argument("folder", nargs="?", help="project folder to open")
+    parser.add_argument(
+        "--diff",
+        metavar="RANGE",
+        help="tint what changed in a git range, e.g. develop..my-branch, develop...my-branch, or develop for your working copy",
+    )
     parser.add_argument(
         "--port",
         type=int,
@@ -30,7 +36,10 @@ def main(argv: list[str] | None = None) -> int:
         folder = Path(args.folder).expanduser()
         if not folder.is_dir():
             parser.error(f"not a folder: {folder}")
-        host.open(folder)
+        try:
+            host.open(folder, args.diff)
+        except GitError as error:
+            parser.error(str(error))
         remember_project(folder)
     token = secrets.token_urlsafe(18)
     server = start_server(host, token, args.port)

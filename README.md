@@ -44,6 +44,7 @@ the folder out to pick one, or a recent project, on the start screen.
 | Option | Effect |
 |---|---|
 | `folder` | Project to open |
+| `--diff RANGE` | Tint what changed in a git range (see below) |
 | `--port N` | Serve on a fixed port instead of a free one |
 | `--no-open` | Print the address instead of opening your browser |
 
@@ -58,6 +59,38 @@ Adia monorepo, with about 2,700 modules, takes around 15 seconds. The result is
 cached in `~/.cache/code-blueprints` and reused until a file changes. Press
 **↻ Reload** after editing code. Function blueprints are built on demand when
 you open them.
+
+## Comparing git revisions
+
+Press **± Compare** and type a git range, or start with one:
+
+```bash
+poetry run code-blueprints path/to/project --diff develop...my-branch
+```
+
+| Range | Compares |
+|---|---|
+| `A..B` | the tips of A and B |
+| `A...B` | B with the point where it branched off A, like a pull request |
+| `A` | A with your working copy, including uncommitted and untracked files |
+
+The map, blueprints and code show the newer side (B, or your working copy),
+and anything that only exists on the older side is added back so you can see
+it go. Everything is tinted by what happened to it:
+
+| Tint | Badge | Meaning |
+|---|---|---|
+| Green | `+` | added |
+| Red | `−` | removed |
+| Yellow | `~` | changed, or something inside it changed |
+
+This covers packages, modules, classes, functions, methods and fields on the
+map; files and symbols in the file tree; nodes, pins and execution wires in a
+blueprint (a call turns yellow when the function it calls changed); and lines
+in both code views, where removed lines are shown in place. The panel under the
+map lists every changed file. Each revision is read from git into
+`~/.cache/code-blueprints/trees`, so comparing a large project takes a little
+while the first time.
 
 ## Tests
 
@@ -77,6 +110,8 @@ poetry run pytest tests
 | `analysis/graph.py` | Builds the dataflow and execution graph for one function |
 | `analysis/outline.py` | Builds the folded source outline shown under the map |
 | `analysis/project.py` | Ties the analysis together for the server |
+| `git.py` | Resolves ranges, lists changed files and extracts revisions with `git archive` |
+| `analysis/diff.py` | Compares two revisions: symbol changes, merged outlines, code and blueprints |
 | `server.py` | Local HTTP API, cached overview, folder opening and recent projects |
 | `app.py` | Command line: starts the server and opens the browser |
 | `static/` | The UI: layout, wire routing and rendering, in plain JavaScript |

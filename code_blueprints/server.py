@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from code_blueprints.analysis.diff import ProjectDiff
 from code_blueprints.analysis.project import Project
+from code_blueprints.git import DiffRange, GitError, Repository
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 CACHE_VERSION = "1"
@@ -31,35 +33,157 @@ class ProjectHost:
         self._error: str | None = None
         self._loading = False
         self._cache_dir = cache_dir or cache_directory()
+        self._root: Path | None = None
+        self._diff_spec: str | None = None
+        self._diff: ProjectDiff | None = None
+        self._diff_bytes: bytes | None = None
+        self._diff_error: str | None = None
+        self._generation = 0
 
-    def open(self, root: Path) -> None:
+    def open(self, root: Path, diff: str | None = None) -> None:
         with self._lock:
-            self._project = Project(root)
-            self._overview = None
-            self._overview_bytes = None
-            self._error = None
-            self._loading = True
-        threading.Thread(target=self._load, args=(self._project,), daemon=True).start()
+            self._root = root.resolve()
+            self._clear_diff()
+        if diff:
+            self.open_diff(diff)
+            return
+        with self._lock:
+            project = self._start(Project(root))
+        threading.Thread(target=self._load, args=(project,), daemon=True).start()
+
+    def open_diff(self, spec: str) -> None:
+        with self._lock:
+            root = self._root
+        if root is None:
+            raise GitError("Open a project before comparing revisions")
+        repository = Repository(root)
+        diff_range = repository.resolve_range(spec)
+        with self._lock:
+            self._clear_diff()
+            self._diff_spec = diff_range.spec
+            generation = self._generation
+        threading.Thread(
+            target=self._load_diff,
+            args=(repository, diff_range, generation),
+            daemon=True,
+        ).start()
+
+    def clear_diff(self) -> None:
+        with self._lock:
+            root = self._root
+        if root is not None:
+            self.open(root)
 
     def reload(self) -> None:
         with self._lock:
-            project = self._project
-        if project is not None:
-            project.reload()
-            self.open(project.root)
+            root, spec = self._root, self._diff_spec
+        if root is None:
+            return
+        if spec:
+            self.open_diff(spec)
+        else:
+            self.open(root)
 
     def status(self) -> dict[str, Any]:
         with self._lock:
             project = self._project
+            diff = (
+                {
+                    "spec": self._diff_spec,
+                    "ready": self._diff_bytes is not None,
+                    "error": self._diff_error,
+                }
+                if self._diff_spec
+                else None
+            )
             return {
                 "open": project is not None,
-                "root": str(project.root) if project else None,
-                "name": project.root.name if project else None,
+                "root": str(project.display_root) if project else None,
+                "name": project.name if project else None,
                 "files": len(project.workspace.files) if project else 0,
                 "loading": self._loading,
-                "ready": self._overview_bytes is not None,
-                "error": self._error,
+                "ready": self._overview_bytes is not None
+                and (diff is None or diff["ready"]),
+                "error": self._error or (diff["error"] if diff else None),
+                "diff": diff,
             }
+
+    def diff(self) -> ProjectDiff | None:
+        with self._lock:
+            return self._diff
+
+    def diff_bytes(self) -> bytes | None:
+        with self._lock:
+            return self._diff_bytes
+
+    def branches(self) -> list[str]:
+        with self._lock:
+            root = self._root
+        if root is None:
+            return []
+        try:
+            return Repository(root).branches()
+        except GitError:
+            return []
+
+    def _start(self, project: Project) -> Project:
+        self._generation += 1
+        self._project = project
+        self._overview = None
+        self._overview_bytes = None
+        self._error = None
+        self._loading = True
+        return project
+
+    def _clear_diff(self) -> None:
+        self._diff_spec = None
+        self._diff = None
+        self._diff_bytes = None
+        self._diff_error = None
+
+    def _load_diff(
+        self, repository: Repository, diff_range: DiffRange, generation: int
+    ) -> None:
+        try:
+            trees = self._cache_dir / "trees"
+            folder_key = hashlib.sha1(str(repository.folder).encode()).hexdigest()[:8]
+            assert self._root is not None
+            if diff_range.head is None:
+                head = Project(self._root)
+            else:
+                head_folder = trees / f"{diff_range.head}-{folder_key}"
+                head = Project(
+                    head_folder,
+                    repository.extract(diff_range.head, head_folder),
+                    name=f"{self._root.name} @ {diff_range.head_label}",
+                    display_root=self._root,
+                )
+            with self._lock:
+                if self._generation != generation:
+                    return
+                self._start(head)
+                generation = self._generation
+            self._load(head)
+            base_folder = trees / f"{diff_range.base}-{folder_key}"
+            base = Project(
+                base_folder, repository.extract(diff_range.base, base_folder)
+            )
+            diff = ProjectDiff(base, head, repository.changes(diff_range), diff_range)
+            data = gzip.compress(
+                json.dumps(diff.summary(), separators=(",", ":")).encode(), 6
+            )
+            with self._lock:
+                if self._generation == generation:
+                    self._diff = diff
+                    self._diff_bytes = data
+        except Exception as error:
+            with self._lock:
+                if self._generation == generation:
+                    self._diff_error = (
+                        str(error)
+                        if isinstance(error, GitError)
+                        else traceback.format_exc(limit=5)
+                    )
 
     def overview_bytes(self) -> bytes | None:
         with self._lock:
@@ -156,10 +280,10 @@ def make_handler(host: ProjectHost, token: str) -> type[BaseHTTPRequestHandler]:
                 else:
                     self._send(200, data, "application/json", gzipped=True)
             elif path == "/api/function":
-                project = host.project()
+                source = host.diff() or host.project()
                 result = (
-                    project.function(query.get("path", ""), query.get("qual", ""))
-                    if project
+                    source.function(query.get("path", ""), query.get("qual", ""))
+                    if source
                     else None
                 )
                 if result is None:
@@ -167,14 +291,33 @@ def make_handler(host: ProjectHost, token: str) -> type[BaseHTTPRequestHandler]:
                 else:
                     self._json(result)
             elif path == "/api/outline":
-                project = host.project()
-                outline = project.outline(query.get("path", "")) if project else None
+                source = host.diff() or host.project()
+                outline = source.outline(query.get("path", "")) if source else None
                 if outline is None:
                     self._json({"error": "No such module"}, 404)
                 else:
                     self._json(outline)
             elif path == "/api/open":
                 self._open(query.get("root"))
+            elif path == "/api/diff":
+                spec = (query.get("spec") or "").strip()
+                try:
+                    if spec:
+                        host.open_diff(spec)
+                    else:
+                        host.clear_diff()
+                except GitError as error:
+                    self._json({"error": str(error)}, 400)
+                    return
+                self._json(host.status())
+            elif path == "/api/diff/data":
+                data = host.diff_bytes()
+                if data is None:
+                    self._json({"error": "No comparison is ready"}, 409)
+                else:
+                    self._send(200, data, "application/json", gzipped=True)
+            elif path == "/api/branches":
+                self._json({"branches": host.branches()})
             elif path == "/api/reload":
                 host.reload()
                 self._json(host.status())

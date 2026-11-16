@@ -1,4 +1,5 @@
 import gzip
+import subprocess
 import json
 import time
 from http.server import ThreadingHTTPServer
@@ -127,3 +128,96 @@ def test_reuses_cached_overview_for_unchanged_files(
 
     assert len(cached) == 1
     assert fetch_json(make_server, "/api/project") == first
+
+
+def make_git_project(tmp_path: Path) -> Path:
+    folder = tmp_path / "gitproject"
+    folder.mkdir()
+
+    def git(*arguments: str) -> None:
+        subprocess.run(["git", *arguments], cwd=folder, check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    (folder / "shapes.py").write_text(
+        "def area(side: float) -> float:\n    return side * side\n"
+    )
+    git("add", "-A")
+    git("commit", "-q", "-m", "first")
+    git("checkout", "-q", "-b", "feature")
+    (folder / "shapes.py").write_text(
+        "def area(side: float) -> float:\n    return round(side * side, 2)\n\n\ndef perimeter(side: float) -> float:\n    return 4 * side\n"
+    )
+    git("commit", "-q", "-am", "second")
+    git("checkout", "-q", "main")
+    return folder
+
+
+def make_compared(server: ThreadingHTTPServer, folder: Path, spec: str) -> None:
+    fetch_json(server, f"/api/open?root={folder}")
+    fetch_json(server, f"/api/diff?spec={spec}")
+    deadline = time.monotonic() + 20
+    while not (status := fetch_json(server, "/api/status"))["ready"]:
+        assert status["error"] is None, status["error"]
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+
+
+def test_compares_a_git_range(make_server: ThreadingHTTPServer, tmp_path: Path) -> None:
+    make_compared(make_server, make_git_project(tmp_path), "main..feature")
+
+    data = fetch_json(make_server, "/api/diff/data")
+    assert data["files"] == {"shapes.py": {"status": "modified"}}
+    assert data["status"]["fn:shapes.py:perimeter"] == "added"
+    assert data["status"]["fn:shapes.py:area"] == "modified"
+    assert fetch_json(make_server, "/api/status")["diff"]["spec"] == "main..feature"
+
+
+def test_shows_the_head_revision_while_comparing(
+    make_server: ThreadingHTTPServer, tmp_path: Path
+) -> None:
+    make_compared(make_server, make_git_project(tmp_path), "main..feature")
+
+    overview = fetch_json(make_server, "/api/project")
+    assert [s["qual"] for s in overview["modules"][0]["symbols"]] == [
+        "area",
+        "perimeter",
+    ]
+    payload = fetch_json(make_server, "/api/function?path=shapes.py&qual=area")
+    assert [row[2] for row in payload["code"] if len(row) > 2] == ["removed", "added"]
+
+
+def test_reports_bad_ranges(make_server: ThreadingHTTPServer, tmp_path: Path) -> None:
+    fetch_json(make_server, f"/api/open?root={make_git_project(tmp_path)}")
+
+    status, body = fetch(make_server, "/api/diff?spec=main..missing")
+    assert status == 400
+    assert b"Unknown revision" in body
+
+
+def test_clearing_the_comparison_returns_to_the_working_copy(
+    make_server: ThreadingHTTPServer, tmp_path: Path
+) -> None:
+    folder = make_git_project(tmp_path)
+    make_compared(make_server, folder, "main..feature")
+    fetch_json(make_server, "/api/diff?spec=")
+    deadline = time.monotonic() + 10
+    while not fetch_json(make_server, "/api/status")["ready"]:
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+
+    assert fetch_json(make_server, "/api/status")["diff"] is None
+    assert [
+        s["qual"]
+        for s in fetch_json(make_server, "/api/project")["modules"][0]["symbols"]
+    ] == ["area"]
+
+
+def test_lists_branches(make_server: ThreadingHTTPServer, tmp_path: Path) -> None:
+    fetch_json(make_server, f"/api/open?root={make_git_project(tmp_path)}")
+
+    assert set(fetch_json(make_server, "/api/branches")["branches"]) == {
+        "main",
+        "feature",
+    }

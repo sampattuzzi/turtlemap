@@ -224,7 +224,7 @@ button { cursor: pointer; }
 .loose-anchor { display: none; }
 .pkg.library .pkg-tab { font-style: normal; color: var(--fg-dim); }
 .pkg.library .pkg-body { opacity: 0.9; }
-.rel.faint { stroke: var(--rel-uses) !important; opacity: 0.22; stroke-dasharray: 3 5; }
+.rel.faint { stroke: var(--rel-uses) !important; opacity: 0.22; stroke-dasharray: none; }
 .rel-label.faint { display: none; }
 .rel-label.k-reads:not(.hot), .rel-label.k-writes:not(.hot) { display: none; }
 .scene.has-hot .rel.faint:not(.hot) { opacity: 0.08; }
@@ -341,3 +341,39 @@ button { cursor: pointer; }
 
 .viewport { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: contain; }
 .world.far .rel-label:not(.hot), .world.far .nsum, .world.far .stereo { display: none; }
+:root { --diff-add: #3fb950; --diff-del: #f85149; --diff-mod: #e3b341; --diff-ink: #111214; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --diff-add: #1a7f37; --diff-del: #cf222e; --diff-mod: #9a6700; --diff-ink: #ffffff; } }
+:root[data-theme="light"] { --diff-add: #1a7f37; --diff-del: #cf222e; --diff-mod: #9a6700; --diff-ink: #ffffff; }
+:root[data-theme="dark"] { --diff-add: #3fb950; --diff-del: #f85149; --diff-mod: #e3b341; --diff-ink: #111214; }
+.diff-added { --diff: var(--diff-add); }
+.diff-removed { --diff: var(--diff-del); }
+.diff-modified { --diff: var(--diff-mod); }
+.diff-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 1.4em; height: 1.4em; padding: 0 3px; border-radius: 4px; background: var(--diff); color: var(--diff-ink); font-family: var(--font-pin); font-weight: 700; font-size: 0.85em; line-height: 1; flex: none; }
+.nb.diff-added, .nb.diff-removed, .nb.diff-modified { outline: 2px solid var(--diff); outline-offset: 2px; }
+.nb.leaf.diff-added, .nb.leaf.diff-removed, .nb.leaf.diff-modified { background-image: linear-gradient(color-mix(in srgb, var(--diff) 22%, transparent), color-mix(in srgb, var(--diff) 22%, transparent)); }
+.nb:not(.leaf).diff-added > .nhead, .nb:not(.leaf).diff-removed > .nhead, .nb:not(.leaf).diff-modified > .nhead { background-image: linear-gradient(color-mix(in srgb, var(--diff) 40%, transparent), color-mix(in srgb, var(--diff) 40%, transparent)); }
+.nb:not(.leaf).diff-added, .nb:not(.leaf).diff-removed { background-image: linear-gradient(color-mix(in srgb, var(--diff) 9%, transparent), color-mix(in srgb, var(--diff) 9%, transparent)); }
+.nb .nhead .diff-badge { margin-right: 2px; }
+.node.diff-added > .box, .node.diff-removed > .box, .node.diff-modified > .box { outline: 2px solid var(--diff); outline-offset: 1px; background-image: linear-gradient(color-mix(in srgb, var(--diff) 18%, transparent), color-mix(in srgb, var(--diff) 18%, transparent)); }
+.node .head .diff-badge { margin-right: 6px; }
+.node.diff-removed > .box { opacity: 0.88; }
+.pin.pin-removed .pname { color: var(--diff-del); text-decoration: line-through; }
+.wire.wire-removed { stroke: var(--diff-del) !important; stroke-dasharray: 7 5; }
+.tree-item.diff-added { color: var(--diff-add); }
+.tree-item.diff-removed { color: var(--diff-del); }
+.tree-item.diff-modified { color: var(--diff-mod); }
+.tree-item .diff-badge { margin-left: auto; }
+.code-view .ln .sign { width: 1ch; flex: none; color: var(--diff); font-weight: 700; user-select: none; }
+.code-view .ln.diff-added, .code-view .ln.diff-removed, .code-view .ln.diff-modified { background: color-mix(in srgb, var(--diff) 15%, transparent); }
+.code-view .ln.diff-removed > span:last-child { color: color-mix(in srgb, var(--diff-del) 55%, var(--fg)); }
+.code-view .ln.hl.diff-added, .code-view .ln.hl.diff-removed, .code-view .ln.hl.diff-modified { background: color-mix(in srgb, var(--diff) 32%, transparent); }
+.diff-files { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; max-height: 220px; overflow: auto; }
+.diff-file { display: flex; align-items: center; gap: 8px; text-align: left; border: 0; background: none; padding: 2px 4px; font-family: var(--font-pin); font-size: 0.85em; color: var(--fg); border-radius: 4px; }
+.diff-file:hover { background: var(--chrome-2); }
+.diff-file span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.popover.compare { width: min(420px, calc(100vw - 32px)); }
+.compare-form { display: flex; flex-direction: column; gap: 8px; }
+.compare-form label { font-weight: 600; }
+.compare-form .small { font-size: 0.85em; line-height: 1.45; }
+.compare-form .actions { display: flex; gap: 8px; }
+.btn.comparing { border-color: var(--diff-mod); color: var(--diff-mod); }
