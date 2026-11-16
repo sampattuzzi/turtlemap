@@ -1,0 +1,786 @@
+import textwrap
+from pathlib import Path
+from typing import Any
+
+from code_blueprints.analysis.graph import MAX_NODES, build_function_graph
+from code_blueprints.analysis.types import TypeSystem
+from code_blueprints.analysis.workspace import Workspace
+
+REALISTIC_MODULE = """
+    import dataclasses
+    import logging
+    import time
+    from dataclasses import dataclass, field
+    from typing import Optional
+
+    from shop.pricing import discount_for, Money
+
+    logger = logging.getLogger(__name__)
+    DEFAULT_CURRENCY = "GBP"
+
+
+    @dataclass(frozen=True)
+    class Item:
+        sku: str
+        price: Money
+        quantity: int = 1
+
+
+    @dataclass
+    class Basket:
+        owner: str
+        items: list[Item] = field(default_factory=list)
+        voucher: Optional[str] = None
+
+        def total(self) -> float:
+            subtotal = sum(item.price.amount * item.quantity for item in self.items)
+            if self.voucher is None:
+                return subtotal
+            return subtotal - discount_for(self.voucher, subtotal)
+
+        def add(self, item: Item) -> None:
+            for existing in self.items:
+                if existing.sku == item.sku:
+                    raise ValueError(f"{item.sku} is already in the basket")
+            self.items.append(item)
+            logger.info("added %s", item.sku)
+
+        def describe(self) -> str:
+            lines = [f"{item.quantity} x {item.sku}" for item in self.items]
+            return "\\n".join(lines) if lines else "empty"
+
+
+    class Checkout:
+        def __init__(self, basket: Basket, clock=time.time) -> None:
+            self.basket = basket
+            self.clock = clock
+            self.attempts = 0
+
+        def pay(self, card: str, *, retries: int = 3) -> bool:
+            started = self.clock()
+            while self.attempts < retries:
+                self.attempts += 1
+                try:
+                    receipt = self._charge(card, self.basket.total())
+                except TimeoutError as error:
+                    logger.warning("retrying after %s", error)
+                    continue
+                else:
+                    self._record(receipt, elapsed=self.clock() - started)
+                    return True
+                finally:
+                    logger.debug("attempt %d", self.attempts)
+            return False
+
+        def _charge(self, card: str, amount: float) -> str:
+            with open("/dev/null", "w") as sink:
+                sink.write(f"{card}:{amount}")
+            return card[-4:]
+
+        def _record(self, receipt: str, elapsed: float) -> None:
+            match receipt:
+                case "0000":
+                    logger.error("test card")
+                case str(code) if code.isdigit():
+                    self.basket = dataclasses.replace(self.basket, voucher=None)
+                case _:
+                    pass
+
+        async def refresh(self, client) -> Optional[Basket]:
+            data = await client.fetch(self.basket.owner)
+            if not data:
+                return None
+            items = [Item(sku=row["sku"], price=Money(row["amount"])) for row in data]
+            return Basket(owner=self.basket.owner, items=items)
+
+        @classmethod
+        def empty(cls, owner: str) -> "Checkout":
+            return cls(Basket(owner))
+
+        @staticmethod
+        def currency() -> str:
+            return DEFAULT_CURRENCY
+"""
+
+PRICING_MODULE = """
+    from dataclasses import dataclass
+
+
+    @dataclass(frozen=True)
+    class Money:
+        amount: float
+        currency: str = "GBP"
+
+
+    def discount_for(voucher: str, subtotal: float) -> float:
+        return subtotal * 0.1 if voucher.startswith("TEN") else 0.0
+"""
+
+
+def make_workspace(
+    tmp_path: Path, files: dict[str, str]
+) -> tuple[Workspace, TypeSystem]:
+    for relative, source in files.items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(textwrap.dedent(source))
+    workspace = Workspace.discover(tmp_path)
+    return workspace, TypeSystem(workspace)
+
+
+def make_graph(
+    tmp_path: Path, source: str, function: str, *, others: dict[str, str] | None = None
+) -> dict[str, Any]:
+    workspace, types = make_workspace(
+        tmp_path, {"pkg/main.py": source, **(others or {})}
+    )
+    module = workspace.module("pkg/main.py")
+    assert module is not None
+    graph = build_function_graph(types, module, module.functions[function])
+    expect_well_formed(graph)
+    return graph
+
+
+def nodes_of_kind(graph: dict[str, Any], kind: str) -> list[dict[str, Any]]:
+    return [node for node in graph["nodes"] if node["kind"] == kind]
+
+
+def the_node(graph: dict[str, Any], title: str) -> dict[str, Any]:
+    matches: list[dict[str, Any]] = [
+        node for node in graph["nodes"] if node["title"] == title
+    ]
+    assert (
+        len(matches) == 1
+    ), f"expected one node titled {title!r}, found {[node['title'] for node in graph['nodes']]}"
+    return matches[0]
+
+
+def input_pin(node: dict[str, Any], name: str) -> dict[str, Any]:
+    pins: list[dict[str, Any]] = node["ins"]
+    return next(pin for pin in pins if pin["name"] == name)
+
+
+def source_of(
+    graph: dict[str, Any], node: dict[str, Any], pin: str
+) -> tuple[str, str] | None:
+    edge = next(
+        (
+            edge
+            for edge in graph["edges"]
+            if edge["to"] == node["id"] and edge["tp"] == pin
+        ),
+        None,
+    )
+    return (edge["from"], edge["fp"]) if edge is not None else None
+
+
+def exec_order(graph: dict[str, Any]) -> list[str]:
+    titles = {node["id"]: node["title"] for node in graph["nodes"]}
+    return [
+        f"{titles[edge['from']]} -{edge['fp']}-> {titles[edge['to']]}"
+        for edge in graph["exec"]
+    ]
+
+
+def expect_well_formed(graph: dict[str, Any]) -> None:
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    assert len(nodes) == len(graph["nodes"])
+    assert len(nodes_of_kind(graph, "entry")) == 1
+    for node in graph["nodes"]:
+        assert isinstance(node["line"], int)
+        input_names = [pin["name"] for pin in node["ins"]]
+        output_names = [pin["name"] for pin in node["outs"]]
+        assert len(input_names) == len(set(input_names)), node
+        assert len(output_names) == len(set(output_names)), node
+        if "execOuts" in node:
+            assert len(node["execOuts"]) == len(set(node["execOuts"])), node
+    for edge in graph["edges"]:
+        assert edge["fp"] in [pin["name"] for pin in nodes[edge["from"]]["outs"]], edge
+        assert edge["tp"] in [pin["name"] for pin in nodes[edge["to"]]["ins"]], edge
+    for edge in graph["exec"]:
+        source, target = nodes[edge["from"]], nodes[edge["to"]]
+        assert target.get("execIn") is True, edge
+        if edge["fp"] == "then":
+            assert source.get("execOut") is True, edge
+        else:
+            assert edge["fp"] in source.get("execOuts", []), edge
+    entry = nodes_of_kind(graph, "entry")[0]
+    assert entry.get("execOut", False) == any(
+        edge["from"] == entry["id"] for edge in graph["exec"]
+    )
+
+
+def test_reads_attributes_through_a_single_break_node(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        class Box:
+            width: float
+            height: float
+
+        def area(box: Box) -> float:
+            return box.width * box.height
+    """,
+        "area",
+    )
+
+    breaks = nodes_of_kind(graph, "break")
+    assert len(breaks) == 1
+    assert breaks[0]["title"] == "Break Box"
+    assert [pin["name"] for pin in breaks[0]["outs"]] == ["width", "height"]
+    assert [pin["type"]["label"] for pin in breaks[0]["outs"]] == ["float", "float"]
+    assert breaks[0]["target"] == {"path": "pkg/main.py", "sym": "Box"}
+
+
+def test_collapses_attribute_chains_read_once_into_one_dotted_output(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def deep(request):
+            return request.carryover.persisted.rate
+    """,
+        "deep",
+    )
+
+    assert [pin["name"] for pin in the_node(graph, "Break request")["outs"]] == [
+        "carryover.persisted.rate"
+    ]
+
+
+def test_splits_attribute_chains_where_a_prefix_is_shared(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def shared(request):
+            return request.carryover.a + request.carryover.b
+    """,
+        "shared",
+    )
+
+    assert [pin["name"] for pin in the_node(graph, "Break request")["outs"]] == [
+        "carryover"
+    ]
+    assert [pin["name"] for pin in the_node(graph, "Break carryover")["outs"]] == [
+        "a",
+        "b",
+    ]
+
+
+def test_wires_variables_from_the_pin_that_produced_them(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def double(value: int) -> int:
+            twice = value * 2
+            result = twice
+            return result
+    """,
+        "double",
+    )
+
+    entry, multiply, returned = (
+        nodes_of_kind(graph, "entry")[0],
+        the_node(graph, "*"),
+        the_node(graph, "Return"),
+    )
+    assert len(graph["nodes"]) == 3
+    assert source_of(graph, multiply, "a") == (entry["id"], "value")
+    assert input_pin(multiply, "b")["lit"] == "2"
+    assert source_of(graph, returned, "int") == (multiply["id"], "")
+
+
+def test_turns_if_return_into_select(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def pick(estimate, fallback):
+            current = estimate.value
+            if current is None:
+                return fallback
+            return current
+    """,
+        "pick",
+    )
+
+    select = the_node(graph, "Select")
+    entry = nodes_of_kind(graph, "entry")[0]
+    assert source_of(graph, select, "condition") == (
+        the_node(graph, "is None")["id"],
+        "",
+    )
+    assert source_of(graph, select, "if true") == (entry["id"], "fallback")
+    assert source_of(graph, select, "if false") == (
+        the_node(graph, "Break estimate")["id"],
+        "value",
+    )
+    assert source_of(graph, the_node(graph, "Return"), "value") == (select["id"], "")
+    assert nodes_of_kind(graph, "branch") == []
+
+
+def test_merges_assignments_from_both_branches_into_a_select(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def label(count: int) -> str:
+            if count > 1:
+                text = "many"
+            else:
+                text = "one"
+            return text
+    """,
+        "label",
+    )
+
+    select = the_node(graph, "Select")
+    assert input_pin(select, "if true")["lit"] == '"many"'
+    assert input_pin(select, "if false")["lit"] == '"one"'
+    assert graph["exec"] == []
+
+
+def test_pure_function_has_no_exec_wires(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def choose(a, c, y, z):
+            x = a.b
+            if c:
+                return y
+            return z
+    """,
+        "choose",
+    )
+
+    assert graph["exec"] == []
+    assert not any(node.get("execIn") or node.get("execOut") for node in graph["nodes"])
+
+
+def test_chains_side_effect_calls_on_the_exec_line(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def save(store, record):
+            store.open()
+            key = store.put(record)
+            store.index[key] = record
+            return key
+    """,
+        "save",
+    )
+
+    assert exec_order(graph) == [
+        "save -then-> store.open",
+        "store.open -then-> store.put",
+        "store.put -then-> Set store.index[key]",
+        "Set store.index[key] -then-> Return",
+    ]
+
+
+def test_keeps_pure_builtins_and_methods_off_the_exec_line(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def shout(words: list[str]) -> str:
+            count = len(words)
+            joined = " ".join(words)
+            print(joined)
+            return joined.upper() * count
+    """,
+        "shout",
+    )
+
+    assert not the_node(graph, "len").get("execIn")
+    assert not the_node(graph, "join").get("execIn")
+    assert exec_order(graph) == ["shout -then-> print", "print -then-> Return"]
+
+
+def test_branches_when_an_if_has_side_effects(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def notify(user, message):
+            if user.muted:
+                log(message)
+            else:
+                user.send(message)
+            return None
+
+        def log(message):
+            pass
+    """,
+        "notify",
+    )
+
+    branch = the_node(graph, "Branch")
+    assert branch["execOuts"] == ["True", "False"]
+    assert exec_order(graph) == [
+        "notify -then-> Branch",
+        "Branch -True-> log",
+        "Branch -False-> user.send",
+        "log -then-> Return",
+        "user.send -then-> Return",
+    ]
+
+
+def test_ends_the_exec_path_at_an_early_raise(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def check(value):
+            if value < 0:
+                raise ValueError("negative")
+            record(value)
+
+        def record(value):
+            pass
+    """,
+        "check",
+    )
+
+    raised = the_node(graph, "Raise ValueError")
+    assert input_pin(raised, "message")["lit"] == '"negative"'
+    assert exec_order(graph) == [
+        "check -then-> Branch",
+        "Branch -True-> Raise ValueError",
+        "Branch -False-> record",
+    ]
+
+
+def test_loops_run_the_body_from_the_loop_body_label(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def total(prices: list[float]) -> float:
+            running = 0.0
+            for price in prices:
+                running += price
+            return running
+    """,
+        "total",
+    )
+
+    loop = the_node(graph, "For each price")
+    assert loop["execOuts"] == ["Loop body", "Completed"]
+    assert [pin["type"]["label"] for pin in loop["outs"]] == ["float"]
+    assert exec_order(graph) == [
+        "total -then-> For each price",
+        "For each price -Loop body-> Set running +=",
+        "For each price -Completed-> Return",
+    ]
+    assert source_of(graph, the_node(graph, "Return"), "float") == (
+        the_node(graph, "Set running +=")["id"],
+        "running",
+    )
+
+
+def test_try_routes_handlers_from_labelled_exec_outs(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def load(path):
+            try:
+                data = read(path)
+            except FileNotFoundError:
+                return None
+            except (ValueError, KeyError) as error:
+                report(error)
+                raise
+            return data
+
+        def read(path):
+            pass
+
+        def report(error):
+            pass
+    """,
+        "load",
+    )
+
+    attempt = the_node(graph, "Try")
+    assert attempt["execOuts"] == [
+        "Try",
+        "except FileNotFoundError",
+        "except (ValueError, KeyError)",
+    ]
+    assert [pin["name"] for pin in attempt["outs"]] == ["error"]
+    assert source_of(graph, the_node(graph, "report"), "error") == (
+        attempt["id"],
+        "error",
+    )
+    assert "Try -except FileNotFoundError-> Return" in exec_order(graph)
+
+
+def test_resolves_calls_into_other_modules(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        from pkg import helpers
+        from pkg.helpers import Point, scale
+
+        def run(x: float) -> float:
+            point = Point(x, y=2.0)
+            return helpers.length(scale(point, factor=x))
+    """,
+        "run",
+        others={"pkg/helpers.py": """
+        from dataclasses import dataclass
+
+        @dataclass
+        class Point:
+            x: float
+            y: float
+
+        def scale(point: Point, factor: float) -> Point:
+            return point
+
+        def length(point: Point) -> float:
+            return point.x
+    """},
+    )
+
+    make = the_node(graph, "Make Point")
+    assert make["target"] == {"path": "pkg/helpers.py", "sym": "Point"}
+    assert [pin["name"] for pin in make["ins"]] == ["x", "y"]
+    assert [pin["name"] for pin in make["outs"]] == ["Point"]
+    scale_node = the_node(graph, "scale")
+    assert scale_node["kind"] == "call"
+    assert scale_node["target"] == {"path": "pkg/helpers.py", "sym": "scale"}
+    assert [pin["name"] for pin in scale_node["ins"]] == ["point", "factor"]
+    assert scale_node["outs"][0]["type"]["label"] == "Point"
+    length = the_node(graph, "helpers.length")
+    assert length["target"] == {"path": "pkg/helpers.py", "sym": "length"}
+    assert length["outs"][0]["type"]["label"] == "float"
+
+
+def test_resolves_calls_through_imports_made_inside_the_function(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def run(x: float) -> float:
+            from pkg.helpers import double
+            import pkg.helpers as helpers
+
+            return helpers.halve(double(x))
+    """,
+        "run",
+        others={"pkg/helpers.py": """
+        def double(x: float) -> float:
+            return x * 2
+
+        def halve(x: float) -> float:
+            return x / 2
+    """},
+    )
+
+    assert the_node(graph, "double")["target"] == {
+        "path": "pkg/helpers.py",
+        "sym": "double",
+    }
+    assert the_node(graph, "helpers.halve")["target"] == {
+        "path": "pkg/helpers.py",
+        "sym": "halve",
+    }
+    assert nodes_of_kind(graph, "var") == []
+
+
+def test_targets_methods_through_the_receiver_type(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        class Engine:
+            def start(self, power: int) -> bool:
+                return True
+
+        class Car:
+            engine: Engine
+
+            def drive(self) -> bool:
+                return self.engine.start(5)
+    """,
+        "Car.drive",
+    )
+
+    start = the_node(graph, "engine.start")
+    assert start["kind"] == "method"
+    assert start["target"] == {"path": "pkg/main.py", "sym": "Engine.start"}
+    assert source_of(graph, start, "self") == (
+        the_node(graph, "Break Car")["id"],
+        "engine",
+    )
+    assert input_pin(start, "power")["lit"] == "5"
+    entry = nodes_of_kind(graph, "entry")[0]
+    assert entry["title"] == "drive"
+    assert entry["outs"][0]["type"]["ref"] == {"path": "pkg/main.py", "sym": "Car"}
+
+
+def test_marks_library_calls_as_external(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        import time
+        from dataclasses import replace
+
+        def stamp(record):
+            now = time.time()
+            return replace(record, at=now)
+    """,
+        "stamp",
+    )
+
+    assert the_node(graph, "time.time")["external"] == "time.time"
+    pure_replace = the_node(graph, "replace")
+    assert pure_replace["external"] == "dataclasses.replace"
+    assert not pure_replace.get("execIn")
+    assert exec_order(graph) == ["stamp -then-> time.time", "time.time -then-> Return"]
+
+
+def test_puts_literals_inline_on_input_pins(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def configure(client):
+            client.connect(host="localhost", port=8080, retries=(1, 2), verbose=None)
+    """,
+        "configure",
+    )
+
+    connect = the_node(graph, "client.connect")
+    assert {pin["name"]: pin.get("lit") for pin in connect["ins"]} == {
+        "self": None,
+        "host": '"localhost"',
+        "port": "8080",
+        "retries": "(1, 2)",
+        "verbose": "None",
+    }
+    assert nodes_of_kind(graph, "lit") == []
+
+
+def test_formats_f_strings_into_a_format_text_node(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def greet(name: str, count: int) -> str:
+            return f"hello {name}, you have {count} messages"
+    """,
+        "greet",
+    )
+
+    text = the_node(graph, "Format text")
+    assert [pin["name"] for pin in text["ins"]] == ["name", "count"]
+    assert "hello {name}" in text["note"]
+
+
+def test_notes_awaited_calls(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        async def fetch(client, key):
+            value = await client.get_remote(key)
+            return value
+    """,
+        "fetch",
+    )
+
+    assert the_node(graph, "client.get_remote")["note"] == "awaits"
+
+
+def test_pin_names_are_unique_per_node(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def clash(a, b, f):
+            values = (a, a, a.x, b.x)
+            f(a, a, *b, *b, key=a, **b, **b)
+            return {**a, **a}
+    """,
+        "clash",
+    )
+
+    assert [pin["name"] for pin in the_node(graph, "Make tuple")["ins"]] == [
+        "a",
+        "a 2",
+        "x",
+        "x 2",
+    ]
+    assert [pin["name"] for pin in the_node(graph, "f")["ins"]] == [
+        "f",
+        "a",
+        "a 2",
+        "*b",
+        "*b 2",
+        "key",
+        "**b",
+        "**b 2",
+    ]
+
+
+def test_never_raises_on_odd_syntax(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def odd(x, *args, **kwargs):
+            global COUNTER
+            COUNTER += 1
+            del x[0], kwargs
+            assert x, "x must be set"
+            y = lambda q: q + x
+            z = [i for i in range(10) if i % 2]
+            w = {k: v for k, v in kwargs.items()}
+            (a, *b), c = x
+            x[1:3] = (yield a)
+            yield from b
+            async def inner():
+                pass
+            while (n := len(args)) > 0:
+                args = args[1:]
+                if n == 2:
+                    break
+                continue
+            with open(x) as f, open(y) as (g, h):
+                pass
+            match x:
+                case {"k": v, **rest}:
+                    pass
+                case [first, *others] if first:
+                    pass
+            try:
+                pass
+            except* ValueError:
+                pass
+            return x if y else ~z, -1, not w, 3 ** 2, c[::2], ...
+    """,
+        "odd",
+    )
+
+    assert len(nodes_of_kind(graph, "return")) >= 1
+
+
+def test_stops_at_the_node_limit(tmp_path: Path) -> None:
+    calls = "\n".join(f"    step_{index}(value)" for index in range(MAX_NODES + 20))
+    graph = make_graph(tmp_path, f"def busy(value):\n{calls}\n", "busy")
+
+    assert graph["truncated"] is True
+    assert len(graph["nodes"]) == MAX_NODES + 1
+    assert graph["nodes"][-1]["kind"] == "return"
+
+
+def test_builds_well_formed_graphs_for_every_function_of_a_realistic_module(
+    tmp_path: Path,
+) -> None:
+    workspace, types = make_workspace(
+        tmp_path,
+        {"shop/basket.py": REALISTIC_MODULE, "shop/pricing.py": PRICING_MODULE},
+    )
+
+    for path in workspace.files:
+        module = workspace.module(path)
+        assert module is not None
+        for function in module.functions.values():
+            graph = build_function_graph(types, module, function)
+            expect_well_formed(graph)
+            assert not any(
+                "Not drawn" in node.get("note", "") for node in graph["nodes"]
+            ), function.qualname

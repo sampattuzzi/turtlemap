@@ -1,0 +1,29 @@
+[tool.poetry]
+name = "code-blueprints"
+version = "0.1.0"
+description = "Browse a Python codebase as blueprint-style dependency maps and dataflow graphs"
+authors = ["Adia"]
+readme = "README.md"
+packages = [{ include = "code_blueprints" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.14"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+mypy = "^1.13"
+
+[tool.poetry.scripts]
+code-blueprints = "code_blueprints.app:main"
+
+[tool.mypy]
+strict = true
+explicit_package_bases = true
+namespace_packages = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["poetry-core>=1.8"]
+build-backend = "poetry.core.masonry.api"
