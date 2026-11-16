@@ -33,7 +33,6 @@ network connection the UI uses system fonts.
 ## Running it
 
 ```bash
-cd code_blueprints
 poetry install --with dev
 poetry run code-blueprints path/to/project
 ```
@@ -48,14 +47,14 @@ the folder out to pick one, or a recent project, on the start screen.
 | `--port N` | Serve on a fixed port instead of a free one |
 | `--no-open` | Print the address instead of opening your browser |
 
-To try it on itself, open its own source:
+To try it on itself, open its own source from the repository root:
 
 ```bash
 poetry run code-blueprints .
 ```
 
 The first time you open a large project it takes a while to read; the
-Adia monorepo, with about 2,700 modules, takes around 15 seconds. The result is
+a monorepo of about 2,700 modules takes around 15 seconds. The result is
 cached in `~/.cache/code-blueprints` and reused until a file changes. Press
 **↻ Reload** after editing code. Function blueprints are built on demand when
 you open them.
