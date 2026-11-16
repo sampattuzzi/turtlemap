@@ -147,6 +147,19 @@ function routedPath(ax, ay, bx, by, via, minDx = 36) {
   curveTo(bx, by);
   return d;
 }
+const overlaps = (a, v) => a.x < v.x + v.w && v.x < a.x + a.w && a.y < v.y + v.h && v.y < a.y + a.h;
+function pathBox(path) {
+  const numbers = (path.getAttribute('d') || '').match(/-?\d+(?:\.\d+)?(?:e-?\d+)?/g) || [];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i + 1 < numbers.length; i += 2) { const x = +numbers[i], y = +numbers[i + 1]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (x0 === Infinity) return { x: -1e9, y: -1e9, w: 2e9, h: 2e9 };
+  return { x: x0 - 16, y: y0 - 16, w: x1 - x0 + 32, h: y1 - y0 + 32 };
+}
+function setCulled(element, state, culled) {
+  if (state.culled === culled) return;
+  state.culled = culled;
+  element.style.display = culled ? 'none' : '';
+}
 class Scene {
   constructor(ctx) { this.ctx = ctx; this.nodes = []; this.wires = []; this.el = el('div', { class: 'scene' }); this.svg = svg('svg', { class: 'wires' }); this.layer = el('div', { class: 'layer' }); this.el.append(this.svg, this.layer); document.getElementById('measure').append(this.el); }
   add(element, data = {}) { const v = { el: element, data, x: 0, y: 0 }; element.classList.add('node'); this.layer.append(element); this.nodes.push(v); return v; }
@@ -179,6 +192,14 @@ class Scene {
       const path = svg('path', { d: routedPath(w.a.x + pa.dx, w.a.y + pa.dy, w.b.x + pb.dx, w.b.y + pb.dy, (w.via || []).map((d) => ({ x: d.x, y: d.y + d.pins.d.dy, w: d.w }))), class: `wire ${w.cls || ''}` });
       if (!w.cls) path.style.stroke = `var(--t-${w.type ? w.type.cat : 'any'})`;
       w.path = path; this.svg.append(path);
+    }
+  }
+  cull(view) {
+    for (const n of this.nodes) setCulled(n.el, n, !overlaps(n, view));
+    for (const w of this.wires) {
+      if (!w.path) continue;
+      if (!w.box) w.box = pathBox(w.path);
+      setCulled(w.path, w, !overlaps(w.box, view));
     }
   }
   hover(node, on) {
@@ -589,6 +610,7 @@ function buildNetScene(expanded, ctx) {
   const drawn = [];
   const offsets = new Map();
   const innerOffset = (inner) => { if (offsets.has(inner)) return offsets.get(inner); let ox = 0, oy = 0, cur = inner; while (cur && cur !== rootEl) { ox += cur.offsetLeft; oy += cur.offsetTop; cur = cur.offsetParent; } const o = { x: rootV.x + ox, y: rootV.y + oy }; offsets.set(inner, o); return o; };
+  for (const route of [...NET_ROUTES.values(), ...NET_EXITS.values(), ...NET_ENTRIES.values()]) innerOffset(route.inner);
   const absVia = (route) => { if (!route) return []; const o = innerOffset(route.inner); return route.via.map((d) => ({ x: o.x + d.x, y: o.y + d.y + 3, w: d.w })); };
   const hierarchicalSpans = (aId, bId, y1, y2) => {
     const ca = N.chain(aId), cb = N.chain(bId);
@@ -637,13 +659,16 @@ function buildNetScene(expanded, ctx) {
     const text = svg('text', { x: tail ? (tail.x + tail.w + x2) / 2 : cubic(0.65, x1, c1, c2, x2), y: (tail ? (tail.y + y2) / 2 : cubic(0.65, y1, y1, y2, y2)) - 5, class: `rel-label k-${g.kind}${g.coloured ? '' : ' faint'}`, 'text-anchor': 'middle' });
     text.textContent = label;
     (g.coloured ? overlay : scene.svg).append(path, text);
-    drawn.push({ g, path, text, box: { x: +text.getAttribute('x') - label.length * 3.3, y: +text.getAttribute('y') - 10, w: label.length * 6.6, h: 13 } });
+    drawn.push({ g, path, text, labelBox: { x: +text.getAttribute('x') - label.length * 3.3, y: +text.getAttribute('y') - 10, w: label.length * 6.6, h: 13 } });
   }
-  const placed = [];
+  const CELL = 200;
+  const placed = new Map();
+  const cellsOf = (b) => { const keys = []; for (let cx = Math.floor(b.x / CELL); cx <= Math.floor((b.x + b.w) / CELL); cx++) for (let cy = Math.floor(b.y / CELL); cy <= Math.floor((b.y + b.h) / CELL); cy++) keys.push(`${cx},${cy}`); return keys; };
   for (const d of [...drawn].sort((p, q) => Number(q.g.coloured) - Number(p.g.coloured))) {
-    const b = d.box;
-    if (placed.some((o) => b.x < o.x + o.w && o.x < b.x + b.w && b.y < o.y + o.h && o.y < b.y + b.h)) d.text.classList.add('crowded');
-    else placed.push(b);
+    const b = d.labelBox;
+    const keys = cellsOf(b);
+    if (keys.some((k) => (placed.get(k) || []).some((o) => overlaps(b, o)))) { d.text.classList.add('crowded'); continue; }
+    for (const k of keys) { if (!placed.has(k)) placed.set(k, []); placed.get(k).push(b); }
   }
   const highlight = (id) => {
     overlay.querySelectorAll('.hot-clone').forEach((c) => c.remove());
@@ -662,6 +687,15 @@ function buildNetScene(expanded, ctx) {
   let hovered = null;
   scene.el.addEventListener('mouseover', (e) => { const b = e.target.closest('.nb'); const id = b ? b.dataset.id : null; if (id !== hovered) { hovered = id; highlight(id); } });
   scene.el.addEventListener('mouseleave', () => { hovered = null; highlight(null); });
+  scene.cull = (view) => {
+    for (const r of rects.values()) setCulled(r.el, r, !overlaps(r, view));
+    for (const d of drawn) {
+      if (!d.box) { const a = pathBox(d.path), t = d.labelBox; const x = Math.min(a.x, t.x), y = Math.min(a.y, t.y); d.box = { x, y, w: Math.max(a.x + a.w, t.x + t.w) - x, h: Math.max(a.y + a.h, t.y + t.h) - y }; }
+      const hidden = !overlaps(d.box, view);
+      setCulled(d.path, d, hidden);
+      d.text.style.display = hidden ? 'none' : '';
+    }
+  };
   scene.sizes = sizes;
   scene.netRects = rects;
   scene.depthMax = depthMax;
@@ -741,33 +775,123 @@ function netPanel(container, selId, ctx, effective) {
   const hl = cv.querySelector('.hl'); if (hl) requestAnimationFrame(() => hl.scrollIntoView({ block: 'nearest' }));
 }
 
+const DRAG_THRESHOLD = 4;
+const CULL_MARGIN = 0.75;
 class Viewport {
   constructor(host) {
     this.host = host; this.s = 1; this.x = 0; this.y = 0;
     this.world = el('div', { class: 'world' }); host.append(this.world);
     this.pct = el('span', { class: 'pct' }, '100%');
-    let drag = null;
-    host.addEventListener('pointerdown', (e) => { if (e.target.closest('.node, button, .zoom-ctl')) return; drag = { x: e.clientX, y: e.clientY, ox: this.x, oy: this.y, moved: false }; host.setPointerCapture(e.pointerId); host.classList.add('dragging'); });
-    host.addEventListener('pointermove', (e) => { if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true; this.x = drag.ox + dx; this.y = drag.oy + dy; this.apply(); });
-    host.addEventListener('pointerup', () => { if (drag && !drag.moved && this.onBackground) this.onBackground(); drag = null; host.classList.remove('dragging'); });
-    host.addEventListener('wheel', (e) => { e.preventDefault(); const r = host.getBoundingClientRect(); this.zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015))); }, { passive: false });
+    this.pointers = new Map();
+    this.gesture = null;
+    this.settleTimer = null;
+    this.cullFrame = null;
+    host.addEventListener('pointerdown', (e) => this.pointerDown(e));
+    host.addEventListener('pointermove', (e) => this.pointerMove(e));
+    host.addEventListener('pointerup', (e) => this.pointerUp(e));
+    host.addEventListener('pointercancel', (e) => this.pointerUp(e, true));
+    host.addEventListener('wheel', (e) => this.wheel(e), { passive: false });
+    host.addEventListener('gesturestart', (e) => this.safariGesture(e, 'start'));
+    host.addEventListener('gesturechange', (e) => this.safariGesture(e, 'change'));
+    host.addEventListener('gestureend', (e) => this.safariGesture(e, 'end'));
+    host.addEventListener('click', (e) => { if (this.swallowClick) { e.stopPropagation(); e.preventDefault(); this.swallowClick = false; } }, true);
     host.append(el('div', { class: 'zoom-ctl' }, this.pct,
-      el('button', { class: 'btn small', title: 'Zoom out', onclick: () => this.zoomCentre(1 / 1.2) }, '−'),
-      el('button', { class: 'btn small', title: 'Zoom in', onclick: () => this.zoomCentre(1.2) }, '+'),
+      el('button', { class: 'btn small', title: 'Zoom out (Ctrl or ⌘ + scroll, or pinch)', onclick: () => this.zoomCentre(1 / 1.2) }, '−'),
+      el('button', { class: 'btn small', title: 'Zoom in (Ctrl or ⌘ + scroll, or pinch)', onclick: () => this.zoomCentre(1.2) }, '+'),
       el('button', { class: 'btn small', title: 'Back to 100%', onclick: () => this.start() }, '1:1'),
       el('button', { class: 'btn small', title: 'Fit everything on screen', onclick: () => this.fit() }, 'Fit')));
   }
+  local(e) { const r = this.host.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+  pointerDown(e) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.target.closest('.zoom-ctl, input, select, textarea')) return;
+    this.pointers.set(e.pointerId, { ...this.local(e), startX: e.clientX, startY: e.clientY, target: e.target });
+    this.swallowClick = false;
+    if (this.pointers.size === 1) this.drag = { moved: false, background: !e.target.closest('.nb, .box, button') };
+    if (!this.drag) this.drag = { moved: false, background: false };
+    if (this.pointers.size === 2) { this.drag.moved = true; this.pinch = this.twoFinger(); }
+  }
+  pointerMove(e) {
+    const p = this.pointers.get(e.pointerId);
+    if (!p) return;
+    const now = this.local(e);
+    if (this.pointers.size === 1) {
+      if (!this.drag.moved && Math.hypot(e.clientX - p.startX, e.clientY - p.startY) < DRAG_THRESHOLD) return;
+      if (!this.drag.moved) { this.drag.moved = true; try { this.host.setPointerCapture(e.pointerId); } catch (err) {} this.host.classList.add('dragging'); }
+      this.panBy(now.x - p.x, now.y - p.y);
+      Object.assign(p, now);
+      return;
+    }
+    Object.assign(p, now);
+    if (this.pointers.size === 2 && this.pinch) {
+      const next = this.twoFinger();
+      this.panBy(next.cx - this.pinch.cx, next.cy - this.pinch.cy);
+      if (this.pinch.d > 0) this.zoomAt(next.cx, next.cy, next.d / this.pinch.d);
+      this.pinch = next;
+    }
+  }
+  pointerUp(e, cancelled = false) {
+    if (!this.pointers.has(e.pointerId)) return;
+    this.pointers.delete(e.pointerId);
+    if (this.pointers.size === 1) { const [rest] = this.pointers.values(); this.pinch = null; this.drag.moved = true; Object.assign(rest, { startX: -1e9 }); return; }
+    if (this.pointers.size) return;
+    this.pinch = null;
+    this.host.classList.remove('dragging');
+    if (this.drag && this.drag.moved) this.swallowClick = true;
+    else if (!cancelled && this.drag && this.drag.background && this.onBackground) this.onBackground();
+    this.drag = null;
+  }
+  twoFinger() {
+    const [a, b] = [...this.pointers.values()];
+    return { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) };
+  }
+  wheel(e) {
+    e.preventDefault();
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.host.clientHeight : 1;
+    const p = this.local(e);
+    if (e.ctrlKey || e.metaKey) this.zoomAt(p.x, p.y, Math.exp(-e.deltaY * unit * (e.ctrlKey && !e.metaKey && unit === 1 && Math.abs(e.deltaY) < 50 ? 0.01 : 0.002)));
+    else this.panBy(-e.deltaX * unit, -e.deltaY * unit);
+  }
+  safariGesture(e, phase) {
+    e.preventDefault();
+    if ([...this.pointers.values()].length) return;
+    const p = this.local(e);
+    if (phase === 'start') this.safariScale = 1;
+    else if (phase === 'change' && this.safariScale) { this.zoomAt(p.x, p.y, e.scale / this.safariScale); this.safariScale = e.scale; }
+    else this.safariScale = null;
+  }
+  panBy(dx, dy) { this.x += dx; this.y += dy; this.apply(true); }
   setScene(scene, how = 'start') { this.world.innerHTML = ''; this.scene = scene; this.world.append(scene.el); if (how === 'start') this.start(); else if (how === 'fit') this.fit(); this.apply(); }
-  apply() {
+  apply(moving = false) {
     this.world.style.transform = `translate(${this.x}px, ${this.y}px) scale(${this.s})`;
     const g = 16 * this.s, G2 = g * 8;
     this.host.style.backgroundSize = `${G2}px ${G2}px, ${G2}px ${G2}px, ${g}px ${g}px, ${g}px ${g}px`;
     this.host.style.backgroundPosition = `${this.x}px ${this.y}px`;
     this.pct.textContent = `${Math.round(this.s * 100)}%`;
+    this.world.classList.toggle('far', this.s < 0.4);
+    if (moving) {
+      this.world.style.willChange = 'transform';
+      clearTimeout(this.settleTimer);
+      this.settleTimer = setTimeout(() => { this.cull(); this.world.style.willChange = ''; }, 160);
+      this.scheduleCull();
+    } else {
+      clearTimeout(this.cullFrame);
+      this.cullFrame = null;
+      this.cull();
+    }
   }
-  zoomAt(px, py, f) { const ns = Math.min(2.5, Math.max(0.15, this.s * f)); f = ns / this.s; this.x = px - (px - this.x) * f; this.y = py - (py - this.y) * f; this.s = ns; this.apply(); }
+  scheduleCull() {
+    if (this.cullFrame) return;
+    this.cullFrame = setTimeout(() => { this.cullFrame = null; this.cull(); }, 120);
+  }
+  cull() {
+    if (!this.scene || !this.scene.cull) return;
+    const w = this.host.clientWidth / this.s, h = this.host.clientHeight / this.s;
+    this.scene.cull({ x: -this.x / this.s - w * CULL_MARGIN, y: -this.y / this.s - h * CULL_MARGIN, w: w * (1 + 2 * CULL_MARGIN), h: h * (1 + 2 * CULL_MARGIN) });
+  }
+  zoomAt(px, py, f) { const ns = Math.min(2.5, Math.max(0.05, this.s * f)); f = ns / this.s; this.x = px - (px - this.x) * f; this.y = py - (py - this.y) * f; this.s = ns; this.apply(true); }
   zoomCentre(f) { this.zoomAt(this.host.clientWidth / 2, this.host.clientHeight / 2, f); }
-  fit() { if (!this.scene) return; const W = this.host.clientWidth, H = this.host.clientHeight; this.s = Math.min(1.2, Math.max(0.15, Math.min(W / this.scene.width, (H - 40) / this.scene.height))); this.x = (W - this.scene.width * this.s) / 2; this.y = Math.max(20, (H - this.scene.height * this.s) / 2); this.apply(); }
+  fit() { if (!this.scene) return; const W = this.host.clientWidth, H = this.host.clientHeight; this.s = Math.min(1.2, Math.max(0.05, Math.min(W / this.scene.width, (H - 40) / this.scene.height))); this.x = (W - this.scene.width * this.s) / 2; this.y = Math.max(20, (H - this.scene.height * this.s) / 2); this.apply(); }
   start() { if (!this.scene) return; const W = this.host.clientWidth, H = this.host.clientHeight; const fitS = Math.min(W / this.scene.width, (H - 60) / this.scene.height); this.s = Math.max(0.75, Math.min(1, fitS)); this.x = this.scene.width * this.s <= W ? (W - this.scene.width * this.s) / 2 : 0; this.y = this.scene.height * this.s <= H - 60 ? (H - this.scene.height * this.s) / 2 : 30; this.apply(); }
   centreOn(elm) { const r = elm.getBoundingClientRect(), hr = this.host.getBoundingClientRect(); this.x += hr.left + hr.width / 2 - (r.left + r.width / 2); this.y += hr.top + hr.height / 2 - (r.top + r.height / 2); this.apply(); }
 }
@@ -971,7 +1095,7 @@ function watchSizes(entries, relayout) {
   let pending = false;
   sizeWatcher = new ResizeObserver(() => {
     if (pending) return;
-    if (!entries.some((s) => Math.abs(s.el.offsetWidth - s.w) > 1 || Math.abs(s.el.offsetHeight - s.h) > 1)) return;
+    if (!entries.some((s) => s.el.offsetParent && (Math.abs(s.el.offsetWidth - s.w) > 1 || Math.abs(s.el.offsetHeight - s.h) > 1))) return;
     pending = true; sizeWatcher.disconnect(); requestAnimationFrame(relayout);
   });
   entries.forEach((s) => sizeWatcher.observe(s.el));
