@@ -1,6 +1,6 @@
-import ast
 from typing import Any
 
+from code_blueprints.analysis import model as m
 from code_blueprints.analysis.project import Project
 from code_blueprints.analysis.workspace import ParsedModule
 
@@ -68,7 +68,7 @@ def _locate_id(project: Project, node_id: str) -> dict[str, Any] | None:
 
 
 def _span(module: ParsedModule, kind: str, qual: str) -> tuple[int, int] | None:
-    node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+    node: m.ClassDecl | m.FunctionDecl
     if kind == "cls" and qual in module.classes:
         node = module.classes[qual].node
     elif kind in ("fn", "m") and qual in module.functions:
@@ -79,21 +79,14 @@ def _span(module: ParsedModule, kind: str, qual: str) -> tuple[int, int] | None:
         return _constant_span(module, qual)
     else:
         return None
-    start = min([node.lineno] + [item.lineno for item in node.decorator_list])
-    return start, node.end_lineno or node.lineno
+    return node.start_line or node.line, node.end_line or node.line
 
 
 def _constant_span(module: ParsedModule, name: str) -> tuple[int, int] | None:
-    for statement in module.tree.body:
-        targets = (
-            statement.targets
-            if isinstance(statement, ast.Assign)
-            else [statement.target] if isinstance(statement, ast.AnnAssign) else []
-        )
-        if any(
-            isinstance(target, ast.Name) and target.id == name for target in targets
-        ):
-            return statement.lineno, statement.end_lineno or statement.lineno
+    for statement in module.body:
+        targets = statement.targets if isinstance(statement, m.Assign) else []
+        if any(isinstance(target, m.Name) and target.id == name for target in targets):
+            return statement.line, statement.end_line or statement.line
     return None
 
 
@@ -106,8 +99,8 @@ def _locate_blueprint(anchor: dict[str, Any], project: Project) -> dict[str, Any
     span = {
         "path": path,
         "qual": qual,
-        "start": function.lineno,
-        "end": function.end_lineno or function.lineno,
+        "start": function.line,
+        "end": function.end_line or function.line,
     }
     nodes = [
         {

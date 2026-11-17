@@ -1,12 +1,13 @@
-import ast
 from typing import Any
 
+from code_blueprints.analysis import model as m
 from code_blueprints.analysis.types import (
     PinType,
     TypeResolver,
     TypeSystem,
     UNKNOWN,
     literal_type,
+    native,
 )
 from code_blueprints.analysis.workspace import (
     ExternalRef,
@@ -14,14 +15,9 @@ from code_blueprints.analysis.workspace import (
     ParsedFunction,
     ParsedModule,
     SymbolRef,
-    dotted_name,
-    import_from_base,
     library_of,
 )
 
-_PROPERTY_DECORATORS = frozenset(
-    {"property", "cached_property", "functools.cached_property"}
-)
 _MAX_VALUE = 48
 
 
@@ -38,77 +34,86 @@ def module_summary(types: TypeSystem, module: ParsedModule) -> dict[str, Any]:
                 function_summary(resolver, module, module.functions[qualname])
             )
     symbols.sort(key=lambda s: int(s["line"]))
-    return {
+    summary: dict[str, Any] = {
         "path": module.path,
         "name": module.name,
-        "doc": _first_paragraph(ast.get_docstring(module.tree)),
+        "doc": _first_paragraph(module.code.doc),
         "symbols": symbols,
         "constants": _constants(resolver, module),
         "imports": module_imports(types, module),
     }
+    if module.language.name != "python":
+        summary["lang"] = module.language.name
+    return summary
 
 
 def function_summary(
     resolver: TypeResolver, module: ParsedModule, function: ParsedFunction
 ) -> dict[str, Any]:
     node = function.node
+    profile = module.language.profile
     summary: dict[str, Any] = {
         "kind": "function",
         "name": node.name,
         "qual": function.qualname,
-        "line": node.lineno,
-        "end": node.end_lineno or node.lineno,
+        "line": node.line,
+        "end": node.end_line or node.line,
         "params": parameters(resolver, module, function),
         "returns": (
             resolver.annotation(node.returns).to_json()
             if node.returns is not None
             else (
-                PinType("None", "none").to_json()
-                if node.name == "__init__"
+                PinType(profile.none_text, "none").to_json()
+                if node.is_constructor
                 else UNKNOWN.to_json()
             )
         ),
     }
-    if isinstance(node, ast.AsyncFunctionDef):
+    if node.is_async:
         summary["async"] = True
-    doc = _first_paragraph(ast.get_docstring(node))
+    doc = _first_paragraph(node.doc)
     if doc:
         summary["doc"] = doc
-    decorators = [ast.unparse(d) for d in node.decorator_list]
+    decorators = [module.language.text(d) for d in node.decorators]
     if decorators:
         summary["decorators"] = decorators
+    if node.anonymous:
+        summary["anonymous"] = True
     return summary
 
 
 def parameters(
     resolver: TypeResolver, module: ParsedModule, function: ParsedFunction
 ) -> list[list[Any]]:
-    args = function.node.args
-    positional = [*args.posonlyargs, *args.args]
-    defaults: list[ast.expr | None] = [None] * (
-        len(positional) - len(args.defaults)
-    ) + list(args.defaults)
+    profile = module.language.profile
     out: list[list[Any]] = []
-    for index, (arg, default) in enumerate(zip(positional, defaults)):
-        out.append(_param(resolver, module, function, arg, default, index))
-    if args.vararg is not None:
-        out.append(
-            [
-                f"*{args.vararg.arg}",
-                PinType(
-                    f"tuple[{_label(resolver, args.vararg)}, ...]", "list"
-                ).to_json(),
-            ]
-        )
-    for arg, kw_default in zip(args.kwonlyargs, args.kw_defaults):
-        out.append(_param(resolver, module, function, arg, kw_default, -1))
-    if args.kwarg is not None:
-        out.append(
-            [
-                f"**{args.kwarg.arg}",
-                PinType(f"dict[str, {_label(resolver, args.kwarg)}]", "map").to_json(),
-            ]
-        )
+    index = 0
+    for parameter in function.node.params:
+        if parameter.kind in ("positional_only", "positional"):
+            out.append(_param(resolver, module, function, parameter, index))
+            index += 1
+        elif parameter.kind == "keyword_only":
+            out.append(_param(resolver, module, function, parameter, -1))
+        elif parameter.kind == "variadic":
+            out.append(
+                [
+                    f"{profile.spread_prefix}{parameter.name}",
+                    PinType(
+                        profile.variadic_label.format(_label(resolver, parameter)),
+                        "list",
+                    ).to_json(),
+                ]
+            )
+        else:
+            out.append(
+                [
+                    f"{profile.mapping_spread_prefix}{parameter.name}",
+                    PinType(
+                        profile.keywords_label.format(_label(resolver, parameter)),
+                        "map",
+                    ).to_json(),
+                ]
+            )
     return out
 
 
@@ -122,13 +127,15 @@ def module_imports(types: TypeSystem, module: ParsedModule) -> list[dict[str, An
             entry["names"].append(imported)
 
     for statement in module.import_statements:
-        if isinstance(statement, ast.Import):
+        if statement.whole:
             for alias in statement.names:
                 path = workspace.find_module(alias.name, near=module.path)
-                if path is not None or not workspace.is_package(alias.name):
+                if path is not None or not workspace.is_package(
+                    alias.name, near=module.path
+                ):
                     add(alias.name, path, None)
             continue
-        base = import_from_base(module, statement)
+        base = statement.module
         if base is None:
             continue
         for alias in statement.names:
@@ -143,7 +150,9 @@ def module_imports(types: TypeSystem, module: ParsedModule) -> list[dict[str, An
                 add(f"{base}.{alias.name}", submodule, None)
                 continue
             path = workspace.find_module(base, near=module.path) if base else None
-            if path is None and (statement.level > 0 or workspace.is_package(base)):
+            if path is None and (
+                statement.level > 0 or workspace.is_package(base, near=module.path)
+            ):
                 resolved = workspace.resolve_absolute(
                     f"{base}.{alias.name}", near=module.path
                 )
@@ -188,24 +197,13 @@ def class_fields(
     return fields
 
 
-def module_constants(
-    module: ParsedModule,
-) -> list[tuple[str, ast.AnnAssign | ast.Assign]]:
-    found: list[tuple[str, ast.AnnAssign | ast.Assign]] = []
-    for statement in module.tree.body:
-        if (
-            isinstance(statement, ast.AnnAssign)
-            and isinstance(statement.target, ast.Name)
-            and statement.value is not None
-        ):
-            found.append((statement.target.id, statement))
-        elif (
-            isinstance(statement, ast.Assign)
-            and len(statement.targets) == 1
-            and isinstance(statement.targets[0], ast.Name)
-            and _is_constant_name(statement.targets[0].id)
-        ):
-            found.append((statement.targets[0].id, statement))
+def module_constants(module: ParsedModule) -> list[tuple[str, m.Assign]]:
+    found: list[tuple[str, m.Assign]] = []
+    for statement in module.body:
+        if isinstance(statement, m.Assign) and module.language.is_constant(statement):
+            target = statement.targets[0]
+            assert isinstance(target, m.Name)
+            found.append((target.id, statement))
     return found
 
 
@@ -233,8 +231,8 @@ def _class_summaries(
         "name": parsed.qualname,
         "qual": parsed.qualname,
         "cat": category,
-        "line": parsed.node.lineno,
-        "end": parsed.node.end_lineno or parsed.node.lineno,
+        "line": parsed.node.line,
+        "end": parsed.node.end_line or parsed.node.line,
         "bases": bases,
         "methods": [
             function_summary(resolver, module, module.functions[q])
@@ -252,7 +250,7 @@ def _class_summaries(
         summary["fields"] = []
     else:
         summary["fields"] = [[name, pin.to_json()] for name, pin, _ in fields]
-    doc = _first_paragraph(ast.get_docstring(parsed.node))
+    doc = _first_paragraph(parsed.node.doc)
     if doc:
         summary["doc"] = doc
     nested = [
@@ -276,74 +274,74 @@ def _fields(
 ) -> list[tuple[str, PinType, str | None]]:
     seen: dict[str, tuple[PinType, str | None]] = {}
     own_type = types.class_type(SymbolRef(module.path, parsed.qualname))
+    receiver = module.language.profile.instance_receiver
     for statement in parsed.node.body:
-        if isinstance(statement, ast.AnnAssign) and isinstance(
-            statement.target, ast.Name
+        if (
+            isinstance(statement, m.Assign)
+            and statement.annotation is not None
+            and isinstance(statement.targets[0], m.Name)
         ):
-            name = statement.target.id
+            name = statement.targets[0].id
             seen.setdefault(
                 name,
                 (
                     resolver.annotation(statement.annotation),
-                    _value_text(statement.value),
+                    _value_text(module, statement.value),
                 ),
             )
-        elif isinstance(statement, ast.Assign):
+        elif isinstance(statement, m.Assign) and statement.annotation is None:
             for target in statement.targets:
-                if isinstance(target, ast.Name) and not target.id.startswith("__"):
+                if isinstance(target, m.Name) and not target.id.startswith("__"):
                     if is_enum:
                         seen.setdefault(
-                            target.id, (own_type, _value_text(statement.value))
+                            target.id, (own_type, _value_text(module, statement.value))
                         )
                     elif not target.id.startswith("_") or target.id.isupper():
                         seen.setdefault(
                             target.id,
                             (
                                 _value_type(resolver, statement.value),
-                                _value_text(statement.value),
+                                _value_text(module, statement.value),
                             ),
                         )
-        elif isinstance(
-            statement, (ast.FunctionDef, ast.AsyncFunctionDef)
-        ) and _is_property(statement):
+        elif isinstance(statement, m.FunctionDef) and statement.function.is_property:
             seen.setdefault(
-                statement.name, (resolver.annotation(statement.returns), None)
+                statement.function.name,
+                (resolver.annotation(statement.function.returns), None),
             )
     if is_enum:
         return [(name, pin, value) for name, (pin, value) in seen.items()]
-    methods = [
-        s
-        for s in parsed.node.body
-        if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))
-    ]
-    methods.sort(key=lambda m: 0 if m.name == "__init__" else 1)
+    methods = [s.function for s in parsed.node.body if isinstance(s, m.FunctionDef)]
+    methods.sort(key=lambda method: 0 if method.is_constructor else 1)
     for method in methods:
         param_types = {
-            arg.arg: resolver.annotation(arg.annotation)
-            for arg in [
-                *method.args.posonlyargs,
-                *method.args.args,
-                *method.args.kwonlyargs,
-            ]
-            if arg.annotation is not None
+            parameter.name: resolver.annotation(parameter.annotation)
+            for parameter in method.params
+            if parameter.annotation is not None
+            and parameter.kind in ("positional_only", "positional", "keyword_only")
         }
-        for node in ast.walk(method):
-            if isinstance(node, ast.AnnAssign) and _is_self_attribute(node.target):
-                assert isinstance(node.target, ast.Attribute)
-                seen.setdefault(
-                    node.target.attr, (resolver.annotation(node.annotation), None)
-                )
-            elif isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if _is_self_attribute(target):
-                        assert isinstance(target, ast.Attribute)
-                        value = node.value
-                        pin = (
-                            param_types.get(value.id, UNKNOWN)
-                            if isinstance(value, ast.Name)
-                            else _value_type(resolver, value)
-                        )
-                        seen.setdefault(target.attr, (pin, None))
+        receiver_name = method.implicit_receiver or receiver
+        for node in m.walk(method):
+            if not isinstance(node, m.Assign):
+                continue
+            if node.annotation is not None:
+                target = node.targets[0]
+                if _is_receiver_attribute(target, receiver_name):
+                    assert isinstance(target, m.Member)
+                    seen.setdefault(
+                        target.attr, (resolver.annotation(node.annotation), None)
+                    )
+                continue
+            for target in node.targets:
+                if _is_receiver_attribute(target, receiver_name):
+                    assert isinstance(target, m.Member)
+                    value = node.value
+                    pin = (
+                        param_types.get(value.id, UNKNOWN)
+                        if isinstance(value, m.Name)
+                        else _value_type(resolver, value)
+                    )
+                    seen.setdefault(target.attr, (pin, None))
     return [(name, pin, value) for name, (pin, value) in seen.items()]
 
 
@@ -352,10 +350,10 @@ def _constants(resolver: TypeResolver, module: ParsedModule) -> list[list[Any]]:
     for name, statement in module_constants(module):
         pin = (
             resolver.annotation(statement.annotation)
-            if isinstance(statement, ast.AnnAssign)
+            if statement.annotation is not None
             else _value_type(resolver, statement.value)
         )
-        out.append([name, pin.to_json(), _value_text(statement.value) or ""])
+        out.append([name, pin.to_json(), _value_text(module, statement.value) or ""])
     return out
 
 
@@ -363,62 +361,59 @@ def _param(
     resolver: TypeResolver,
     module: ParsedModule,
     function: ParsedFunction,
-    arg: ast.arg,
-    default: ast.expr | None,
+    parameter: m.Parameter,
     index: int,
 ) -> list[Any]:
+    profile = module.language.profile
     if (
         index == 0
         and function.class_qualname
-        and arg.annotation is None
-        and arg.arg in ("self", "cls")
+        and parameter.annotation is None
+        and parameter.name in profile.receiver_names
     ):
         owner = resolver.system.class_type(
             SymbolRef(module.path, function.class_qualname)
         )
         pin = (
             owner
-            if arg.arg == "self"
+            if parameter.name == profile.instance_receiver
             else PinType(f"type[{owner.label}]", "class", ref=owner.ref)
         )
     else:
-        pin = resolver.annotation(arg.annotation)
-    entry: list[Any] = [arg.arg, pin.to_json()]
-    if default is not None:
-        entry.append(_value_text(default) or "")
+        pin = resolver.annotation(parameter.annotation)
+    entry: list[Any] = [parameter.name, pin.to_json()]
+    if parameter.default is not None:
+        entry.append(_value_text(module, parameter.default) or "")
     return entry
 
 
-def _label(resolver: TypeResolver, arg: ast.arg) -> str:
+def _label(resolver: TypeResolver, parameter: m.Parameter) -> str:
     return (
-        resolver.annotation(arg.annotation).label
-        if arg.annotation is not None
+        resolver.annotation(parameter.annotation).label
+        if parameter.annotation is not None
         else "Any"
     )
 
 
-def _value_type(resolver: TypeResolver, value: ast.expr | None) -> PinType:
+def _value_type(resolver: TypeResolver, value: m.Expr | None) -> PinType:
+    profile = resolver.module.language.profile
     if value is None:
         return UNKNOWN
-    if isinstance(value, ast.Constant):
-        return literal_type(value.value)
-    if isinstance(
-        value,
-        (ast.List, ast.Tuple, ast.Set, ast.ListComp, ast.SetComp, ast.GeneratorExp),
-    ):
-        return PinType(
-            type(value)
-            .__name__.lower()
-            .replace("comp", "")
-            .replace("generatorexp", "generator"),
-            "list",
-        )
-    if isinstance(value, (ast.Dict, ast.DictComp)):
-        return PinType("dict", "map")
-    if isinstance(value, ast.JoinedStr):
+    if isinstance(value, m.Literal):
+        return native(literal_type(value.value), profile.literal_labels)
+    if isinstance(value, m.Sequence) and value.kind in profile.sequence_kinds:
+        label, cat = profile.sequence_kinds[value.kind]
+        return PinType(label, cat)
+    if isinstance(value, m.Comprehension):
+        if value.kind == "dict":
+            return PinType(*profile.mapping_kind)
+        return PinType(value.kind, "list")
+    if isinstance(value, m.Mapping):
+        return PinType(*profile.mapping_kind)
+    if isinstance(value, m.Template):
         return PinType("str", "str")
-    if isinstance(value, ast.Call):
-        name = dotted_name(value.func)
+    if isinstance(value, m.Call):
+        name = m.dotted_name(value.func)
         if name:
             resolved = resolver.named(name)
             if resolved.ref is not None or resolved.cat != "object":
@@ -426,31 +421,22 @@ def _value_type(resolver: TypeResolver, value: ast.expr | None) -> PinType:
     return UNKNOWN
 
 
-def _value_text(value: ast.expr | None) -> str | None:
+def _value_text(module: ParsedModule, value: m.Expr | None) -> str | None:
     if value is None:
         return None
-    text = ast.unparse(value).replace("\n", " ")
+    text = module.language.text(value).replace("\n", " ")
     return text if len(text) <= _MAX_VALUE else text[: _MAX_VALUE - 1] + "…"
 
 
-def _is_self_attribute(node: ast.expr) -> bool:
+def _is_receiver_attribute(node: m.Expr, receiver: str) -> bool:
     return (
-        isinstance(node, ast.Attribute)
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "self"
+        isinstance(node, m.Member)
+        and isinstance(node.value, m.Name)
+        and node.value.id == receiver
     )
-
-
-def _is_property(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    return any(dotted_name(d) in _PROPERTY_DECORATORS for d in node.decorator_list)
 
 
 def _first_paragraph(doc: str | None) -> str | None:
     if not doc:
         return None
     return doc.strip().split("\n\n")[0].replace("\n", " ")[:400]
-
-
-def _is_constant_name(name: str) -> bool:
-    bare = name.lstrip("_")
-    return bool(bare) and bare.isupper()

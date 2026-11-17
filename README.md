@@ -1,6 +1,7 @@
 # Code Blueprints
 
-A local web app for reading a Python codebase as pictures instead of text. It was
+A local web app for reading a Python, JavaScript or TypeScript codebase as
+pictures instead of text. It was
 built to make code easier to follow for people with dyslexia, but it works for
 anyone who wants a map of unfamiliar code.
 
@@ -92,8 +93,9 @@ meeting at node headers.
 
 Press `/` to find any file, class or function.
 
-Nothing leaves your machine. The app reads your code with Python's `ast`
-module and never imports or runs it. It serves the UI from a server on
+Nothing leaves your machine. The app parses your code, with Python's `ast`
+module for Python and tree-sitter for JavaScript and TypeScript, and never
+imports or runs it. It serves the UI from a server on
 `127.0.0.1` that answers only requests carrying a token generated at launch.
 The one outbound request is for web fonts from Google Fonts; without a
 network connection the UI uses system fonts.
@@ -259,8 +261,41 @@ formula:
   inheritance, writing the other's fields, a cycle, or a high score.
 - **Instability** is Ce ÷ (Ca + Ce), with tests left out of Ca.
 
-Only Python is analysed: the numbers say nothing about JavaScript or other
-files.
+Only Python, JavaScript and TypeScript are analysed: the numbers say nothing
+about other files.
+
+## Languages
+
+Each language has a front end that parses its files into one neutral model of
+declarations (functions, classes, interfaces, enums, imports), statements and
+expressions. The map, the blueprints and the structure queries work only on
+that model, so a new language needs a front end and a table of its builtins,
+operators and type names, nothing more.
+
+- **Python** files are read with `ast`.
+- **JavaScript and TypeScript** files (`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`,
+  `.tsx`) are read with tree-sitter; `.d.ts` and minified files are skipped.
+  Imports resolve through relative paths, `index` files, `export *` barrels,
+  `require` and the `paths` in `tsconfig.json`. Plain scripts with no imports
+  or exports, like the ones a page loads with `<script>`, see each other's
+  top-level names when they share a folder.
+
+Functions without names get one from where they appear, never from a line
+number:
+
+| Code | Name |
+|---|---|
+| `const save = async () => {…}` | `save` |
+| `const onClick = useCallback(() => {…}, [])` | `onClick`, wrapped by `useCallback` |
+| `const api = { load() {…} }` | `api.load` |
+| `describe("parsing", () => {…})` | `describe(parsing)` |
+| `items.forEach((item) => {…})` | `forEach(callback)` |
+
+Two in the same scope with the same name get `2`, `3` and so on. Arrow
+functions that are a single expression, like `(x) => x + 1`, stay inline in the
+blueprint, the way a Python `lambda` does. Functions defined inside another
+function show in its blueprint, not as boxes of their own. JSX elements are
+calls, so a component links to the components it renders.
 
 ## Tests
 
@@ -283,7 +318,13 @@ whichever layout the cog menu has selected.
 
 | Part | What it does |
 |---|---|
-| `analysis/workspace.py` | Finds the project's Python files, parses them and resolves imports, including `src/` layouts and relative and re-exported imports |
+| `analysis/model.py` | The neutral code model every language is lowered into: declarations, statements, expressions and type expressions |
+| `languages/language.py` | What a language front end provides: parsing into the model, source text, and its builtins, operators and type names |
+| `languages/python.py` | The Python front end, built on `ast` |
+| `languages/javascript.py` | The JavaScript and TypeScript front end, built on tree-sitter, including how anonymous functions are named |
+| `languages/aliases.py` | Reads the `paths` aliases in `tsconfig.json` and `jsconfig.json` |
+| `languages/registry.py` | The languages in use and which files each one reads |
+| `analysis/workspace.py` | Finds the project's source files, parses them and resolves imports, including `src/` layouts, relative and re-exported imports, and globals shared between plain scripts |
 | `analysis/types.py` | Turns annotations into pin types and colours, and classifies classes as enum, struct (dataclass, model, …), interface or object |
 | `analysis/symbols.py` | Summarises each module: classes, fields (including ones assigned to `self`), methods, functions, constants and imports |
 | `analysis/dependencies.py` | Builds the dependency lines for the map, including field reads, writes and method calls through typed objects, whether held in a variable, a field or the result of a call such as `Thing(...).run()` |
@@ -309,4 +350,4 @@ whichever layout the cog menu has selected.
 | `recent.py` | Remembers recently opened projects |
 | `server.py` | Puts the services on one router and starts the server |
 | `app.py` | Command line: starts the server and opens the browser |
-| `static/` | The UI: layout, wire routing and rendering, in plain JavaScript; `highlight.js` colours Python source, `layout.js` holds the Compact, Straighter and Straightest solvers and `datamodel.js` draws the data model |
+| `static/` | The UI: layout, wire routing and rendering, in plain JavaScript; `highlight.js` colours Python, JavaScript and TypeScript source, `layout.js` holds the Compact, Straighter and Straightest solvers and `datamodel.js` draws the data model |

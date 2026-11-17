@@ -1,6 +1,3 @@
-import ast
-import builtins
-import copy
 import json
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
@@ -14,14 +11,15 @@ from code_blueprints.analysis.types import (
     TypeSystem,
     literal_type,
 )
+from code_blueprints.analysis import model as m
 from code_blueprints.analysis.workspace import (
     ExternalRef,
     ModuleRef,
     ParsedFunction,
     ParsedModule,
     SymbolRef,
-    dotted_name,
 )
+from code_blueprints.languages.language import Language, Profile
 
 MAX_NODES = 250
 
@@ -45,416 +43,33 @@ _CALLABLE = PinType("Callable", "callable")
 _CLASS = PinType("type", "class")
 _NONE = PinType("None", "none")
 
-_BUILTIN_NAMES = frozenset(dir(builtins))
-_PURE_BUILTINS = frozenset(
-    {
-        "len",
-        "isinstance",
-        "issubclass",
-        "str",
-        "int",
-        "float",
-        "bool",
-        "min",
-        "max",
-        "sorted",
-        "abs",
-        "round",
-        "tuple",
-        "list",
-        "dict",
-        "set",
-        "frozenset",
-        "repr",
-        "hash",
-        "type",
-        "getattr",
-        "hasattr",
-        "range",
-        "enumerate",
-        "zip",
-        "reversed",
-        "any",
-        "all",
-        "sum",
-        "map",
-        "filter",
-        "callable",
-        "chr",
-        "ord",
-        "hex",
-        "bin",
-        "oct",
-        "divmod",
-        "pow",
-        "format",
-        "bytes",
-        "slice",
-        "iter",
-        "id",
-        "object",
-        "complex",
-        "ascii",
-        "vars",
-        "dir",
-    }
-)
-_PURE_METHODS = frozenset(
-    {
-        "get",
-        "items",
-        "keys",
-        "values",
-        "lower",
-        "upper",
-        "startswith",
-        "endswith",
-        "split",
-        "rsplit",
-        "join",
-        "format",
-        "copy",
-        "strip",
-        "lstrip",
-        "rstrip",
-        "replace",
-        "encode",
-        "decode",
-        "count",
-        "index",
-        "find",
-        "rfind",
-        "splitlines",
-        "partition",
-        "rpartition",
-        "isdigit",
-        "isalpha",
-        "isalnum",
-        "isnumeric",
-        "isspace",
-        "islower",
-        "isupper",
-        "casefold",
-        "title",
-        "capitalize",
-        "zfill",
-        "ljust",
-        "rjust",
-        "center",
-        "removeprefix",
-        "removesuffix",
-        "total_seconds",
-        "isoformat",
-        "timestamp",
-        "union",
-        "intersection",
-        "difference",
-        "issubset",
-        "issuperset",
-        "symmetric_difference",
-        "most_common",
-        "model_dump",
-        "model_copy",
-        "model_dump_json",
-        "to_json",
-        "as_integer_ratio",
-        "bit_length",
-    }
-)
-_PURE_EXTERNALS = frozenset(
-    {
-        "dataclasses.replace",
-        "dataclasses.asdict",
-        "dataclasses.astuple",
-        "dataclasses.fields",
-        "dataclasses.field",
-        "dataclasses.is_dataclass",
-        "typing.cast",
-        "copy.copy",
-        "copy.deepcopy",
-        "functools.partial",
-        "functools.reduce",
-        "os.path.join",
-        "os.path.basename",
-        "os.path.dirname",
-        "os.path.splitext",
-        "os.path.normpath",
-        "json.dumps",
-        "json.loads",
-        "datetime.timedelta",
-        "datetime.datetime",
-        "datetime.date",
-        "datetime.time",
-        "datetime.timezone",
-        "collections.namedtuple",
-        "collections.defaultdict",
-        "collections.deque",
-        "collections.Counter",
-        "collections.OrderedDict",
-    }
-)
-_PURE_EXTERNAL_MODULES = frozenset(
-    {
-        "math",
-        "cmath",
-        "operator",
-        "itertools",
-        "statistics",
-        "numpy",
-        "re",
-        "string",
-        "textwrap",
-        "fractions",
-        "decimal",
-    }
-)
-_STATIC_DECORATORS = frozenset({"staticmethod"})
-_CLASS_DECORATORS = frozenset({"classmethod"})
-_PROPERTY_DECORATORS = frozenset({"property", "cached_property"})
-_SEQUENCE_ANNOTATIONS = frozenset(
-    {
-        "list",
-        "List",
-        "Sequence",
-        "MutableSequence",
-        "Iterable",
-        "Iterator",
-        "Collection",
-        "set",
-        "Set",
-        "frozenset",
-        "FrozenSet",
-        "AbstractSet",
-        "deque",
-        "Deque",
-        "Generator",
-        "AsyncIterator",
-        "AsyncIterable",
-        "AsyncGenerator",
-        "KeysView",
-        "ValuesView",
-    }
-)
-_MAPPING_ANNOTATIONS = frozenset(
-    {
-        "dict",
-        "Dict",
-        "Mapping",
-        "MutableMapping",
-        "FrozenDict",
-        "defaultdict",
-        "DefaultDict",
-        "OrderedDict",
-    }
-)
-
-_BUILTIN_PARAMETERS: dict[str, tuple[str, ...]] = {
-    "len": ("obj",),
-    "isinstance": ("obj", "type"),
-    "issubclass": ("cls", "type"),
-    "getattr": ("obj", "name", "default"),
-    "hasattr": ("obj", "name"),
-    "setattr": ("obj", "name", "value"),
-    "str": ("value",),
-    "int": ("value",),
-    "float": ("value",),
-    "bool": ("value",),
-    "repr": ("value",),
-    "abs": ("value",),
-    "round": ("number", "ndigits"),
-    "next": ("iterator", "default"),
+_COMPARISONS: dict[str, str] = {
+    "==": "==",
+    "!=": "!=",
+    "<": "<",
+    "<=": "≤",
+    ">": ">",
+    ">=": "≥",
+    "is": "is",
+    "is not": "is not",
+    "in": "in",
+    "not in": "not in",
+    "===": "===",
+    "!==": "!==",
+    "instanceof": "instanceof",
 }
-_BUILTIN_RESULTS: dict[str, PinType] = {
-    "len": _INT,
-    "int": _INT,
-    "round": _INT,
-    "hash": _INT,
-    "id": _INT,
-    "ord": _INT,
-    "float": _FLOAT,
-    "str": _STR,
-    "repr": _STR,
-    "format": _STR,
-    "chr": _STR,
-    "hex": _STR,
-    "bin": _STR,
-    "oct": _STR,
-    "ascii": _STR,
-    "bool": _BOOL,
-    "isinstance": _BOOL,
-    "issubclass": _BOOL,
-    "hasattr": _BOOL,
-    "callable": _BOOL,
-    "any": _BOOL,
-    "all": _BOOL,
-    "list": _LIST,
-    "sorted": _LIST,
-    "tuple": _TUPLE,
-    "set": _SET,
-    "frozenset": _SET,
-    "range": _LIST,
-    "enumerate": _LIST,
-    "zip": _LIST,
-    "reversed": _LIST,
-    "map": _LIST,
-    "filter": _LIST,
-    "dict": _DICT,
-    "bytes": _BYTES,
-    "type": _CLASS,
-}
-_METHOD_RESULTS: dict[str, PinType] = {
-    **{
-        name: _STR
-        for name in (
-            "lower",
-            "upper",
-            "strip",
-            "lstrip",
-            "rstrip",
-            "join",
-            "format",
-            "casefold",
-            "title",
-            "capitalize",
-            "zfill",
-            "ljust",
-            "rjust",
-            "center",
-            "removeprefix",
-            "removesuffix",
-            "isoformat",
-            "decode",
-            "model_dump_json",
-        )
-    },
-    **{
-        name: _BOOL
-        for name in (
-            "startswith",
-            "endswith",
-            "isdigit",
-            "isalpha",
-            "isalnum",
-            "isnumeric",
-            "isspace",
-            "islower",
-            "isupper",
-            "issubset",
-            "issuperset",
-        )
-    },
-    **{
-        name: _LIST
-        for name in (
-            "split",
-            "rsplit",
-            "splitlines",
-            "items",
-            "keys",
-            "values",
-            "partition",
-            "rpartition",
-            "most_common",
-        )
-    },
-    **{name: _INT for name in ("count", "index", "find", "rfind", "bit_length")},
-    "encode": _BYTES,
-    "total_seconds": _FLOAT,
-    "timestamp": _FLOAT,
-    "model_dump": _DICT,
-}
-_SAME_TYPE_METHODS = frozenset(
-    {
-        "copy",
-        "replace",
-        "model_copy",
-        "union",
-        "intersection",
-        "difference",
-        "symmetric_difference",
-    }
-)
-
-_OPERATORS: dict[type[ast.operator], str] = {
-    ast.Add: "+",
-    ast.Sub: "-",
-    ast.Mult: "*",
-    ast.Div: "/",
-    ast.FloorDiv: "//",
-    ast.Mod: "%",
-    ast.Pow: "**",
-    ast.MatMult: "@",
-    ast.LShift: "<<",
-    ast.RShift: ">>",
-    ast.BitOr: "|",
-    ast.BitAnd: "&",
-    ast.BitXor: "^",
-}
-_COMPARISONS: dict[type[ast.cmpop], str] = {
-    ast.Eq: "==",
-    ast.NotEq: "!=",
-    ast.Lt: "<",
-    ast.LtE: "≤",
-    ast.Gt: ">",
-    ast.GtE: "≥",
-    ast.Is: "is",
-    ast.IsNot: "is not",
-    ast.In: "in",
-    ast.NotIn: "not in",
-}
-_UNARY: dict[type[ast.unaryop], str] = {
-    ast.Not: "NOT",
-    ast.USub: "-",
-    ast.UAdd: "+",
-    ast.Invert: "~",
-}
-_PYTHON_OPERATORS: dict[type[ast.AST], tuple[str, int]] = {
-    ast.Or: ("or", 1),
-    ast.And: ("and", 2),
-    ast.BitOr: ("|", 5),
-    ast.BitXor: ("^", 6),
-    ast.BitAnd: ("&", 7),
-    ast.LShift: ("<<", 8),
-    ast.RShift: (">>", 8),
-    ast.Add: ("+", 9),
-    ast.Sub: ("-", 9),
-    ast.Mult: ("*", 10),
-    ast.Div: ("/", 10),
-    ast.FloorDiv: ("//", 10),
-    ast.Mod: ("%", 10),
-    ast.MatMult: ("@", 10),
-    ast.Pow: ("**", 12),
-}
-_PYTHON_COMPARISONS: dict[type[ast.cmpop], str] = {
-    ast.Eq: "==",
-    ast.NotEq: "!=",
-    ast.Lt: "<",
-    ast.LtE: "<=",
-    ast.Gt: ">",
-    ast.GtE: ">=",
-    ast.Is: "is",
-    ast.IsNot: "is not",
-    ast.In: "in",
-    ast.NotIn: "not in",
-}
-_COMPARE_PRECEDENCE = 4
+_UNARY: dict[str, str] = {"not": "NOT", "-": "-", "+": "+", "~": "~"}
+_LOGICAL: dict[str, str] = {"and": "AND", "or": "OR", "??": "??"}
 _COMPUTATIONS = (
-    ast.BoolOp,
-    ast.BinOp,
-    ast.UnaryOp,
-    ast.Compare,
-    ast.IfExp,
-    ast.Call,
-    ast.Subscript,
+    m.Logical,
+    m.Binary,
+    m.Unary,
+    m.Compare,
+    m.Conditional,
+    m.Call,
+    m.Subscript,
 )
-_OPERATIONS = (ast.BoolOp, ast.BinOp, ast.UnaryOp, ast.Compare)
-_NUMERIC_MODULES = frozenset({"math", "numpy", "cmath", "statistics"})
-_COMPREHENSIONS: dict[type[ast.expr], tuple[str, PinType]] = {
-    ast.ListComp: ("List comprehension", _LIST),
-    ast.SetComp: ("Set comprehension", _SET),
-    ast.DictComp: ("Dict comprehension", _DICT),
-    ast.GeneratorExp: ("Generator", _LIST),
-}
+_OPERATIONS = (m.Logical, m.Binary, m.Unary, m.Compare)
 
 
 def build_function_graph(
@@ -469,7 +84,7 @@ class _Value:
     node: str | None = None
     pin: str | None = None
     literal: str | None = None
-    annotation: tuple[ast.expr, ParsedModule] | None = field(
+    annotation: tuple[m.TypeExpr, ParsedModule] | None = field(
         default=None, compare=False
     )
 
@@ -639,7 +254,7 @@ class _Graph:
         node: _Node,
         name: str,
         pin_type: PinType,
-        annotation: tuple[ast.expr, ParsedModule] | None = None,
+        annotation: tuple[m.TypeExpr, ParsedModule] | None = None,
     ) -> _Value:
         unique = _unique(name, {pin.name for pin in node.outs})
         node.outs.append(_Pin(unique, pin_type))
@@ -681,7 +296,7 @@ class _Callee:
     target: SymbolRef | None = None
     external: str | None = None
     receiver: _Value | None = None
-    receiver_name: str = "self"
+    receiver_name: str = ""
     parameters: tuple[str, ...] = ()
     vararg: str | None = None
     parameter_types: dict[str, PinType] = field(default_factory=dict)
@@ -696,7 +311,7 @@ class _Outcome:
 
 @dataclass(frozen=True)
 class _Member:
-    annotation: ast.expr | None
+    annotation: m.TypeExpr | None
     module: ParsedModule
     is_method: bool = False
 
@@ -718,6 +333,8 @@ class _FunctionGraphBuilder:
         self._types = types
         self._workspace = types.workspace
         self._module = module
+        self._language: Language = module.language
+        self._profile: Profile = module.language.profile
         self._function = function
         self._graph = _Graph(MAX_NODES)
         self._resolvers: dict[str, TypeResolver] = {}
@@ -730,14 +347,15 @@ class _FunctionGraphBuilder:
         self._loop_exits: list[list[_Tail]] = []
         self._declared_globals: set[str] = set()
         self._local_functions: set[str] = set()
-        self._local_names = _local_names(function.node)
+        self._local_names = m.bound_names(function.node)
         self._parameter_annotations = {
-            argument.arg: argument.annotation
-            for argument in _all_arguments(function.node.args)
-            if argument.annotation is not None
+            parameter.name: parameter.annotation
+            for parameter in function.node.params
+            if parameter.annotation is not None
         }
         self._attribute_counts = _attribute_counts(function.node)
         self._module_variables = _module_variables(module)
+        self._printer = _Printer(module.language)
         self._members: dict[SymbolRef, dict[str, _Member]] = {}
         self._return_type = (
             self._resolver(module).annotation(function.node.returns)
@@ -755,40 +373,55 @@ class _FunctionGraphBuilder:
             self._mark_truncated()
         self._graph.strip_exec_when_only_returns()
         graph = self._graph.to_json()
+        self._native_labels(graph)
         if self._truncated:
             graph["truncated"] = True
         return graph
 
     def _entry(self) -> _Node:
-        node = self._graph.add(
-            "entry", self._function.node.name, self._function.node.lineno
-        )
-        arguments = self._function.node.args
-        positional = [*arguments.posonlyargs, *arguments.args]
-        for index, argument in enumerate(positional):
-            self._bind_parameter(
-                node, argument.arg, argument.arg, self._parameter_type(argument, index)
+        function = self._function.node
+        node = self._graph.add("entry", function.name, function.line)
+        owner = self._owner_ref()
+        if function.implicit_receiver is not None and owner is not None:
+            self._env[function.implicit_receiver] = self._graph.output(
+                node, function.implicit_receiver, self._types.class_type(owner)
             )
-        if arguments.vararg is not None:
-            inner = self._annotation_type(arguments.vararg.annotation)
-            self._bind_parameter(
-                node,
-                arguments.vararg.arg,
-                f"*{arguments.vararg.arg}",
-                PinType(f"tuple[{inner.label}, ...]", "list"),
-            )
-        for argument in arguments.kwonlyargs:
-            self._bind_parameter(
-                node, argument.arg, argument.arg, self._parameter_type(argument, -1)
-            )
-        if arguments.kwarg is not None:
-            inner = self._annotation_type(arguments.kwarg.annotation)
-            self._bind_parameter(
-                node,
-                arguments.kwarg.arg,
-                f"**{arguments.kwarg.arg}",
-                PinType(f"dict[str, {inner.label}]", "map"),
-            )
+        index = 0
+        for parameter in function.params:
+            if parameter.kind in ("positional_only", "positional"):
+                self._bind_parameter(
+                    node,
+                    parameter.name,
+                    parameter.name,
+                    self._parameter_type(parameter, index),
+                )
+                index += 1
+        for parameter in function.params:
+            if parameter.kind == "variadic":
+                inner = self._annotation_type(parameter.annotation)
+                self._bind_parameter(
+                    node,
+                    parameter.name,
+                    f"{self._profile.spread_prefix}{parameter.name}",
+                    PinType(self._profile.variadic_label.format(inner.label), "list"),
+                )
+        for parameter in function.params:
+            if parameter.kind == "keyword_only":
+                self._bind_parameter(
+                    node,
+                    parameter.name,
+                    parameter.name,
+                    self._parameter_type(parameter, -1),
+                )
+        for parameter in function.params:
+            if parameter.kind == "variadic_keyword":
+                inner = self._annotation_type(parameter.annotation)
+                self._bind_parameter(
+                    node,
+                    parameter.name,
+                    f"{self._profile.mapping_spread_prefix}{parameter.name}",
+                    PinType(self._profile.keywords_label.format(inner.label), "map"),
+                )
         return node
 
     def _bind_parameter(
@@ -802,19 +435,24 @@ class _FunctionGraphBuilder:
             (annotation, self._module) if annotation is not None else None,
         )
 
-    def _parameter_type(self, argument: ast.arg, index: int) -> PinType:
+    def _parameter_type(self, parameter: m.Parameter, index: int) -> PinType:
         owner = self._owner_ref()
-        if index == 0 and owner is not None and argument.annotation is None:
-            decorators = _decorator_names(self._function.node)
-            if decorators & _STATIC_DECORATORS:
+        function = self._function.node
+        if (
+            index == 0
+            and owner is not None
+            and parameter.annotation is None
+            and function.implicit_receiver is None
+        ):
+            if function.binding == "static":
                 return UNKNOWN
             owner_type = self._types.class_type(owner)
-            if decorators & _CLASS_DECORATORS:
+            if function.binding == "class":
                 return replace(
                     owner_type, cat="class", label=f"type[{owner_type.label}]"
                 )
             return owner_type
-        return self._annotation_type(argument.annotation)
+        return self._annotation_type(parameter.annotation)
 
     def _owner_ref(self) -> SymbolRef | None:
         qualname = self._function.class_qualname
@@ -825,7 +463,7 @@ class _FunctionGraphBuilder:
         last_line = (
             self._graph.nodes[-1].line
             if self._graph.nodes
-            else self._function.node.lineno
+            else self._function.node.line
         )
         marker = self._graph.add_unbounded(
             "return",
@@ -836,19 +474,17 @@ class _FunctionGraphBuilder:
         if any(node.exec_in or node.exec_out for node in self._graph.nodes):
             self._step(marker)
 
-    def _run_block(
-        self, statements: Sequence[ast.stmt], *, function_level: bool
-    ) -> None:
+    def _run_block(self, statements: Sequence[m.Stmt], *, function_level: bool) -> None:
         for index, statement in enumerate(statements):
             rest = statements[index:]
-            if isinstance(statement, ast.If) and self._starts_return_region(
+            if isinstance(statement, m.If) and self._starts_return_region(
                 rest, function_level=function_level
             ):
                 self._return_region(rest)
                 return
             self._statement(statement)
 
-    def _statement(self, statement: ast.stmt) -> None:
+    def _statement(self, statement: m.Stmt) -> None:
         try:
             self._dispatch_statement(statement)
         except _GraphFull:
@@ -856,65 +492,61 @@ class _FunctionGraphBuilder:
         except Exception as error:
             node = self._graph.add(
                 "ext",
-                _source_title(statement),
-                statement.lineno,
+                self._source_title(statement),
+                statement.line,
                 note=f"Not drawn: {type(error).__name__}",
             )
             self._step(node)
 
-    def _dispatch_statement(self, statement: ast.stmt) -> None:
-        if isinstance(statement, ast.Expr):
+    def _dispatch_statement(self, statement: m.Stmt) -> None:
+        if isinstance(statement, m.ExprStmt):
             self._expression_statement(statement.value)
-        elif isinstance(statement, (ast.Assign, ast.AnnAssign)):
+        elif isinstance(statement, m.Assign):
             self._assign(statement, exec_candidate=True)
-        elif isinstance(statement, ast.AugAssign):
+        elif isinstance(statement, m.AugAssign):
             self._augmented_assign(statement)
-        elif isinstance(statement, ast.Return):
+        elif isinstance(statement, m.Return):
             value = (
                 self._expr(statement.value, exec_candidate=True)
                 if statement.value is not None
                 else None
             )
-            self._emit_return(value, statement.lineno)
-        elif isinstance(statement, ast.If):
+            self._emit_return(value, statement.line)
+        elif isinstance(statement, m.If):
             self._if(statement)
-        elif isinstance(statement, (ast.For, ast.AsyncFor)):
+        elif isinstance(statement, m.For):
             self._for(statement)
-        elif isinstance(statement, ast.While):
+        elif isinstance(statement, m.While):
             self._while(statement)
-        elif isinstance(statement, (ast.With, ast.AsyncWith)):
+        elif isinstance(statement, m.With):
             self._with(statement)
-        elif isinstance(statement, (ast.Try, ast.TryStar)):
+        elif isinstance(statement, m.Try):
             self._try(statement)
-        elif isinstance(statement, ast.Raise):
+        elif isinstance(statement, m.Raise):
             self._raise(statement)
-        elif isinstance(statement, ast.Match):
+        elif isinstance(statement, m.Match):
             self._match(statement)
-        elif isinstance(statement, ast.Assert):
+        elif isinstance(statement, m.Assert):
             self._assert(statement)
-        elif isinstance(statement, ast.Delete):
+        elif isinstance(statement, m.Delete):
             self._delete(statement)
-        elif isinstance(statement, ast.Break):
+        elif isinstance(statement, m.Break):
             if self._loop_exits:
                 self._loop_exits[-1].extend(self._tails)
             self._tails = []
-        elif isinstance(statement, ast.Continue):
+        elif isinstance(statement, m.Continue):
             self._tails = []
-        elif isinstance(statement, (ast.Global, ast.Nonlocal)):
+        elif isinstance(statement, m.Global):
             self._declared_globals.update(statement.names)
-        elif isinstance(
-            statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-        ):
-            self._local_functions.add(statement.name)
-            self._env.pop(statement.name, None)
-        elif (
-            isinstance(statement, (ast.Pass, ast.Import, ast.ImportFrom))
-            or type(statement).__name__ == "TypeAlias"
-        ):
+        elif isinstance(statement, (m.FunctionDef, m.ClassDef)):
+            name = _definition_name(statement)
+            self._local_functions.add(name)
+            self._env.pop(name, None)
+        elif isinstance(statement, (m.Pass, m.Import)):
             return
         else:
             self._step(
-                self._graph.add("ext", _source_title(statement), statement.lineno)
+                self._graph.add("ext", self._source_title(statement), statement.line)
             )
 
     def _step(self, node: _Node) -> None:
@@ -922,72 +554,68 @@ class _FunctionGraphBuilder:
             self._graph.link(source, label, node)
         self._tails = [(node, "then")]
 
-    def _expression_statement(self, value: ast.expr) -> None:
-        if isinstance(value, ast.Constant):
+    def _expression_statement(self, value: m.Expr) -> None:
+        if isinstance(value, m.Literal):
             return
-        if isinstance(value, ast.Call):
+        if isinstance(value, m.Call):
             self._call(value, exec_candidate=True, out_names=())
-        elif isinstance(value, ast.Await) and isinstance(value.value, ast.Call):
+        elif isinstance(value, m.Await) and isinstance(value.value, m.Call):
             self._call(value.value, exec_candidate=True, out_names=(), awaited=True)
-        elif isinstance(value, (ast.Yield, ast.YieldFrom)):
+        elif isinstance(value, m.Yield):
             self._yield(value, discard=True)
         else:
             self._expr(value)
 
-    def _assign(
-        self, statement: ast.Assign | ast.AnnAssign, *, exec_candidate: bool
-    ) -> None:
+    def _assign(self, statement: m.Assign, *, exec_candidate: bool) -> None:
         if statement.value is None:
             return
-        targets = (
-            statement.targets
-            if isinstance(statement, ast.Assign)
-            else [statement.target]
-        )
+        targets = statement.targets
         names = _assigned_names(targets[0]) if len(targets) == 1 else None
         call, awaited = _unwrap_call(statement.value)
         if (
             call is not None
             and names is not None
             and len(names) > 1
-            and isinstance(targets[0], (ast.Tuple, ast.List))
+            and isinstance(targets[0], m.Sequence)
         ):
             outputs = self._call(
                 call, exec_candidate=exec_candidate, out_names=names, awaited=awaited
             )
             for target, output in zip(_flat_targets(targets[0]), outputs):
-                self._bind(target, output, statement.lineno)
+                self._bind(target, output, statement.line)
             return
         out_name = names[0] if names is not None and len(names) == 1 else ""
         value = self._expr(
             statement.value, exec_candidate=exec_candidate, out_name=out_name
         )
-        if isinstance(statement, ast.AnnAssign):
+        if statement.annotation is not None:
             value = replace(
                 value,
                 type=self._annotation_type(statement.annotation),
                 annotation=(statement.annotation, self._module),
             )
         for target in targets:
-            self._bind(target, value, statement.lineno)
+            self._bind(target, value, statement.line)
 
-    def _bind(self, target: ast.expr, value: _Value, line: int) -> None:
-        if isinstance(target, ast.Name):
+    def _bind(self, target: m.Expr, value: _Value, line: int) -> None:
+        if isinstance(target, m.Name):
             self._bind_name(target.id, value, line)
-        elif isinstance(target, ast.Starred):
+        elif isinstance(target, m.Spread):
             self._bind(target.value, value, line)
-        elif isinstance(target, (ast.Tuple, ast.List)):
-            for element, part in zip(target.elts, self._unpack(value, target, line)):
+        elif isinstance(target, m.Sequence):
+            for element, part in zip(
+                target.elements, self._unpack(value, target, line)
+            ):
                 self._bind(element, part, line)
-        elif isinstance(target, ast.Attribute):
-            node = self._graph.add("set", f"Set {ast.unparse(target)}", line)
+        elif isinstance(target, m.Member):
+            node = self._graph.add("set", f"Set {self._text(target)}", line)
             self._graph.connect(node, _pin_name(target.value), self._expr(target.value))
             self._graph.connect(node, "value", value)
             self._step(node)
-        elif isinstance(target, ast.Subscript):
+        elif isinstance(target, m.Subscript):
             container = self._expr(target.value)
-            key = self._expr(target.slice)
-            node = self._graph.add("set", f"Set {ast.unparse(target)}", line)
+            key = self._expr(target.index)
+            node = self._graph.add("set", f"Set {self._text(target)}", line)
             self._graph.connect(node, _pin_name(target.value), container)
             self._graph.connect(node, "key", key)
             self._graph.connect(node, "value", value)
@@ -1001,25 +629,21 @@ class _FunctionGraphBuilder:
             value = self._graph.output(node, name, value.type, value.annotation)
         self._env[name] = value
 
-    def _unpack(
-        self, value: _Value, target: ast.Tuple | ast.List, line: int
-    ) -> list[_Value]:
+    def _unpack(self, value: _Value, target: m.Sequence, line: int) -> list[_Value]:
         node = self._graph.add("op", "Unpack", line)
         self._graph.connect(node, "value", value)
         return [
-            self._graph.output(node, _target_label(element), UNKNOWN)
-            for element in target.elts
+            self._graph.output(node, self._target_label(element), UNKNOWN)
+            for element in target.elements
         ]
 
-    def _augmented_assign(self, statement: ast.AugAssign) -> None:
-        symbol = _OPERATORS.get(type(statement.op), "?")
+    def _augmented_assign(self, statement: m.AugAssign) -> None:
+        symbol = statement.op
         target = statement.target
         value = self._expr(statement.value)
-        if isinstance(target, ast.Name):
-            current = self._name_value(target.id, statement.lineno)
-            node = self._graph.add(
-                "set", f"Set {target.id} {symbol}=", statement.lineno
-            )
+        if isinstance(target, m.Name):
+            current = self._name_value(target.id, statement.line)
+            node = self._graph.add("set", f"Set {target.id} {symbol}=", statement.line)
             self._graph.connect(node, target.id, current)
             self._graph.connect(node, "value", value)
             self._step(node)
@@ -1027,15 +651,11 @@ class _FunctionGraphBuilder:
                 node, target.id, current.type, current.annotation
             )
             return
-        base = (
-            target.value
-            if isinstance(target, (ast.Attribute, ast.Subscript))
-            else target
-        )
+        base = target.value if isinstance(target, (m.Member, m.Subscript)) else target
         container = self._expr(base)
-        key = self._expr(target.slice) if isinstance(target, ast.Subscript) else None
+        key = self._expr(target.index) if isinstance(target, m.Subscript) else None
         node = self._graph.add(
-            "set", f"Set {ast.unparse(target)} {symbol}=", statement.lineno
+            "set", f"Set {self._text(target)} {symbol}=", statement.line
         )
         self._graph.connect(node, _pin_name(base), container)
         if key is not None:
@@ -1061,34 +681,34 @@ class _FunctionGraphBuilder:
         self._step(node)
         self._tails = []
 
-    def _if(self, statement: ast.If) -> None:
+    def _if(self, statement: m.If) -> None:
         if self._is_data_block([statement]) and not _contains_return([statement]):
             self._merge_if(statement)
         else:
             self._branch_if(statement)
 
-    def _merge_if(self, statement: ast.If) -> None:
+    def _merge_if(self, statement: m.If) -> None:
         condition = self._expr(statement.test)
         saved = dict(self._env)
         self._data_block(statement.body)
         true_env = self._env
         self._env = dict(saved)
         self._data_block(statement.orelse)
-        self._env = self._merge(condition, true_env, self._env, statement.lineno)
+        self._env = self._merge(condition, true_env, self._env, statement.line)
 
-    def _branch_if(self, statement: ast.If) -> None:
+    def _branch_if(self, statement: m.If) -> None:
         condition: _Value | None = None
         if self._folds(statement.test, named=True):
             node = self._inline_condition(
                 statement.test,
                 lambda: self._graph.add(
-                    "branch", "Branch", statement.lineno, exec_outs=["True", "False"]
+                    "branch", "Branch", statement.line, exec_outs=["True", "False"]
                 ),
             )
         else:
             condition = self._expr(statement.test, exec_candidate=True)
             node = self._graph.add(
-                "branch", "Branch", statement.lineno, exec_outs=["True", "False"]
+                "branch", "Branch", statement.line, exec_outs=["True", "False"]
             )
             self._graph.connect(node, "condition", condition, _BOOL)
         self._step(node)
@@ -1112,7 +732,7 @@ class _FunctionGraphBuilder:
                     if _differ(true_env, false_env)
                     else _Value(_BOOL)
                 )
-            self._env = self._merge(condition, true_env, false_env, statement.lineno)
+            self._env = self._merge(condition, true_env, false_env, statement.line)
 
     def _merge(
         self,
@@ -1175,39 +795,39 @@ class _FunctionGraphBuilder:
         return self._graph.output(node, "", _select_type(when_true, when_false))
 
     def _starts_return_region(
-        self, statements: Sequence[ast.stmt], *, function_level: bool
+        self, statements: Sequence[m.Stmt], *, function_level: bool
     ) -> bool:
         if not _contains_return(statements[:1]) or not self._is_data_block(statements):
             return False
         return function_level or _always_terminates(statements)
 
-    def _return_region(self, statements: Sequence[ast.stmt]) -> None:
+    def _return_region(self, statements: Sequence[m.Stmt]) -> None:
         outcome = self._data_block(statements)
         value = (
             outcome.value
             if outcome.terminated and outcome.value is not None
-            else _none_literal()
+            else self._none_literal()
         )
-        self._emit_return(value, statements[-1].lineno)
+        self._emit_return(value, statements[-1].line)
 
-    def _data_block(self, statements: Sequence[ast.stmt]) -> _Outcome:
+    def _data_block(self, statements: Sequence[m.Stmt]) -> _Outcome:
         for index, statement in enumerate(statements):
-            if isinstance(statement, ast.Return):
+            if isinstance(statement, m.Return):
                 value = (
                     self._expr(statement.value)
                     if statement.value is not None
-                    else _none_literal()
+                    else self._none_literal()
                 )
                 return _Outcome(value, True)
-            if isinstance(statement, ast.If):
+            if isinstance(statement, m.If):
                 outcome = self._data_if(statement, statements[index + 1 :])
                 if outcome is not None:
                     return outcome
-            elif isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            elif isinstance(statement, m.Assign):
                 self._assign(statement, exec_candidate=False)
         return _Outcome(None, False)
 
-    def _data_if(self, statement: ast.If, rest: Sequence[ast.stmt]) -> _Outcome | None:
+    def _data_if(self, statement: m.If, rest: Sequence[m.Stmt]) -> _Outcome | None:
         condition: _Value | _Folded = (
             self._fold(statement.test)
             if self._folds(statement.test, named=True)
@@ -1222,57 +842,54 @@ class _FunctionGraphBuilder:
             return _Outcome(
                 self._select_on(
                     condition,
-                    _returned(when_true),
-                    _returned(when_false),
-                    statement.lineno,
+                    self._returned(when_true),
+                    self._returned(when_false),
+                    statement.line,
                 ),
                 True,
             )
         if not when_true.terminated and not when_false.terminated:
             if isinstance(condition, _Folded):
-                condition = self._expression_node(condition, "Check", statement.lineno)
-            self._env = self._merge(condition, true_env, self._env, statement.lineno)
+                condition = self._expression_node(condition, "Check", statement.line)
+            self._env = self._merge(condition, true_env, self._env, statement.line)
             return None
         if when_false.terminated:
             self._env = true_env
         continuation = self._data_block(rest)
-        later = _returned(continuation)
+        later = self._returned(continuation)
         if when_true.terminated:
             return _Outcome(
                 self._select_on(
-                    condition, _returned(when_true), later, statement.lineno
+                    condition, self._returned(when_true), later, statement.line
                 ),
                 True,
             )
         return _Outcome(
-            self._select_on(condition, later, _returned(when_false), statement.lineno),
+            self._select_on(
+                condition, later, self._returned(when_false), statement.line
+            ),
             True,
         )
 
-    def _is_data_block(self, statements: Sequence[ast.stmt]) -> bool:
+    def _is_data_block(self, statements: Sequence[m.Stmt]) -> bool:
         return all(self._is_data_statement(statement) for statement in statements)
 
-    def _is_data_statement(self, statement: ast.stmt) -> bool:
-        if isinstance(statement, ast.Pass) or (
-            isinstance(statement, ast.Expr)
-            and isinstance(statement.value, ast.Constant)
+    def _is_data_statement(self, statement: m.Stmt) -> bool:
+        if isinstance(statement, m.Pass) or (
+            isinstance(statement, m.ExprStmt) and isinstance(statement.value, m.Literal)
         ):
             return True
-        if isinstance(statement, ast.Return):
+        if isinstance(statement, m.Return):
             return statement.value is None or not _suspends(statement.value)
-        if isinstance(statement, (ast.Assign, ast.AnnAssign)):
-            targets = (
-                statement.targets
-                if isinstance(statement, ast.Assign)
-                else [statement.target]
-            )
+        if isinstance(statement, m.Assign):
             names = [
                 name
-                for target in targets
+                for target in statement.targets
                 for name in (_assigned_names(target) or ["."])
             ]
             if any(
-                not name.isidentifier()
+                name.startswith("*")
+                or name == "."
                 or name in self._carried
                 or name in self._declared_globals
                 for name in names
@@ -1282,7 +899,7 @@ class _FunctionGraphBuilder:
             return value is None or (
                 not _suspends(value) and not self._is_effectful_call(value)
             )
-        if isinstance(statement, ast.If):
+        if isinstance(statement, m.If):
             return (
                 not _suspends(statement.test)
                 and self._is_data_block(statement.body)
@@ -1290,42 +907,42 @@ class _FunctionGraphBuilder:
             )
         return False
 
-    def _is_effectful_call(self, value: ast.expr) -> bool:
-        return isinstance(value, ast.Call) and not self._call_is_pure(value)
+    def _is_effectful_call(self, value: m.Expr) -> bool:
+        return isinstance(value, m.Call) and not self._call_is_pure(value)
 
-    def _for(self, statement: ast.For | ast.AsyncFor) -> None:
+    def _for(self, statement: m.For) -> None:
         items = self._expr(statement.iter, exec_candidate=True)
         targets = _flat_targets(statement.target)
-        title = ", ".join(_target_label(target) for target in targets)
+        title = ", ".join(self._target_label(target) for target in targets)
         node = self._graph.add(
             "loop",
             f"For each {title}",
-            statement.lineno,
+            statement.line,
             exec_outs=["Loop body", "Completed"],
-            note="async for" if isinstance(statement, ast.AsyncFor) else None,
+            note="async for" if statement.is_async else None,
         )
         self._graph.connect(node, "items", items)
         element = self._element_type(items) if len(targets) == 1 else UNKNOWN
         outputs = [
-            self._graph.output(node, _target_label(target), element)
+            self._graph.output(node, self._target_label(target), element)
             for target in targets
         ]
         self._step(node)
         for target, output in zip(targets, outputs):
-            if isinstance(target, ast.Name):
+            if isinstance(target, m.Name):
                 self._env[target.id] = output
             else:
-                self._bind(target, output, statement.lineno)
+                self._bind(target, output, statement.line)
         self._loop_body(node, statement.body, statement.orelse)
 
-    def _while(self, statement: ast.While) -> None:
+    def _while(self, statement: m.While) -> None:
         if self._folds(statement.test, named=True):
             node = self._inline_condition(
                 statement.test,
                 lambda: self._graph.add(
                     "loop",
                     "While",
-                    statement.lineno,
+                    statement.line,
                     exec_outs=["Loop body", "Completed"],
                 ),
             )
@@ -1333,8 +950,8 @@ class _FunctionGraphBuilder:
             condition = self._expr(statement.test)
             node = self._graph.add(
                 "loop",
-                f"While {ast.unparse(statement.test)}",
-                statement.lineno,
+                f"While {self._text(statement.test)}",
+                statement.line,
                 exec_outs=["Loop body", "Completed"],
             )
             self._graph.connect(node, "condition", condition, _BOOL)
@@ -1342,7 +959,7 @@ class _FunctionGraphBuilder:
         self._loop_body(node, statement.body, statement.orelse)
 
     def _loop_body(
-        self, node: _Node, body: Sequence[ast.stmt], orelse: Sequence[ast.stmt]
+        self, node: _Node, body: Sequence[m.Stmt], orelse: Sequence[m.Stmt]
     ) -> None:
         carried = self._carried
         self._carried = carried | frozenset(self._env)
@@ -1357,45 +974,41 @@ class _FunctionGraphBuilder:
         self._run_block(orelse, function_level=False)
         self._tails = self._tails + exits
 
-    def _with(self, statement: ast.With | ast.AsyncWith) -> None:
-        contexts = [self._expr(item.context_expr) for item in statement.items]
-        title = ", ".join(ast.unparse(item.context_expr) for item in statement.items)
+    def _with(self, statement: m.With) -> None:
+        contexts = [self._expr(item.context) for item in statement.items]
+        title = ", ".join(self._text(item.context) for item in statement.items)
         node = self._graph.add(
             "ext",
             f"With {title}",
-            statement.lineno,
-            note="async with" if isinstance(statement, ast.AsyncWith) else None,
+            statement.line,
+            note="async with" if statement.is_async else None,
         )
-        bindings: list[tuple[ast.expr, _Value]] = []
+        bindings: list[tuple[m.Expr, _Value]] = []
         for item, context in zip(statement.items, contexts):
             self._graph.connect(node, "context", context)
-            if item.optional_vars is not None:
-                entered = (
-                    context.type
-                    if isinstance(item.optional_vars, ast.Name)
-                    else UNKNOWN
-                )
+            if item.target is not None:
+                entered = context.type if isinstance(item.target, m.Name) else UNKNOWN
                 bindings.append(
                     (
-                        item.optional_vars,
+                        item.target,
                         self._graph.output(
-                            node, _target_label(item.optional_vars), entered
+                            node, self._target_label(item.target), entered
                         ),
                     )
                 )
         self._step(node)
         for target, value in bindings:
-            self._bind(target, value, statement.lineno)
+            self._bind(target, value, statement.line)
         self._run_block(statement.body, function_level=False)
 
-    def _try(self, statement: ast.Try | ast.TryStar) -> None:
+    def _try(self, statement: m.Try) -> None:
         labels = [
             "Try",
             *(
                 (
-                    f"except {ast.unparse(handler.type)}"
+                    f"{self._profile.handler_word} {self._text(handler.type)}"
                     if handler.type is not None
-                    else "except"
+                    else self._profile.handler_word
                 )
                 for handler in statement.handlers
             ),
@@ -1403,7 +1016,7 @@ class _FunctionGraphBuilder:
         node = self._graph.add(
             "branch",
             "Try",
-            statement.lineno,
+            statement.line,
             exec_outs=labels,
             note="finally runs afterwards" if statement.finalbody else None,
         )
@@ -1433,23 +1046,31 @@ class _FunctionGraphBuilder:
             return
         self._run_block(statement.finalbody, function_level=False)
 
-    def _exception_type(self, annotation: ast.expr | None) -> PinType:
-        if isinstance(annotation, (ast.Name, ast.Attribute)):
-            return self._annotation_type(annotation)
-        return PinType("Exception", "object")
+    def _exception_type(self, annotation: m.Expr | None) -> PinType:
+        dotted = m.dotted_name(annotation) if annotation is not None else None
+        if annotation is not None and dotted is not None:
+            return self._annotation_type(
+                m.TypeName(
+                    annotation.line,
+                    annotation.end_line,
+                    dotted,
+                    origin=annotation.origin,
+                )
+            )
+        return PinType(self._profile.default_exception, "object")
 
-    def _raise(self, statement: ast.Raise) -> None:
+    def _raise(self, statement: m.Raise) -> None:
         exception = statement.exc
         if exception is None:
-            node = self._graph.add("raise", "Re-raise", statement.lineno)
-        elif isinstance(exception, ast.Call) and self._raises_class(exception):
+            node = self._graph.add("raise", "Re-raise", statement.line)
+        elif isinstance(exception, m.Call) and self._raises_class(exception):
             callee = self._resolve_callee(exception)
             arguments = self._arguments(exception, callee, first_fallback="message")
             name = _short_name(callee.title.removeprefix("Make "))
             node = self._graph.add(
                 "raise",
                 f"Raise {name}",
-                statement.lineno,
+                statement.line,
                 target=callee.target,
                 external=callee.external,
             )
@@ -1457,14 +1078,14 @@ class _FunctionGraphBuilder:
         else:
             value = self._expr(exception)
             title = (
-                f"Raise {_short_name(ast.unparse(exception))}"
+                f"Raise {_short_name(self._text(exception))}"
                 if value.literal is not None
                 else "Raise"
             )
             node = self._graph.add(
                 "raise",
                 title,
-                statement.lineno,
+                statement.line,
                 target=value.type.ref if value.literal is not None else None,
             )
             if value.literal is None:
@@ -1474,34 +1095,30 @@ class _FunctionGraphBuilder:
         self._step(node)
         self._tails = []
 
-    def _raises_class(self, call: ast.Call) -> bool:
-        name = dotted_name(call.func)
+    def _raises_class(self, call: m.Call) -> bool:
+        name = m.dotted_name(call.func)
         if name is None or self._is_local(name.split(".")[0]):
             return False
         last = name.rsplit(".", 1)[-1]
         return last[:1].isupper()
 
-    def _match(self, statement: ast.Match) -> None:
+    def _match(self, statement: m.Match) -> None:
         subject = self._expr(statement.subject, exec_candidate=True)
         labels = [
             _shorten(
-                "case "
-                + ast.unparse(case.pattern)
-                + (f" if {ast.unparse(case.guard)}" if case.guard else ""),
+                self._language.case_label(case.pattern)
+                + (f" if {self._text(case.guard)}" if case.guard else ""),
                 _LABEL_LIMIT,
             )
             for case in statement.cases
         ]
         exhaustive = any(
-            isinstance(case.pattern, ast.MatchAs)
-            and case.pattern.pattern is None
-            and case.guard is None
-            for case in statement.cases
+            case.pattern.catch_all and case.guard is None for case in statement.cases
         )
         node = self._graph.add(
             "branch",
-            f"Match {ast.unparse(statement.subject)}",
-            statement.lineno,
+            f"{self._profile.match_title} {self._text(statement.subject)}",
+            statement.line,
             exec_outs=labels if exhaustive else [*labels, "No match"],
         )
         unique_labels = node.exec_outs or labels
@@ -1512,7 +1129,7 @@ class _FunctionGraphBuilder:
         env: _Environment = dict(saved)
         for case, label in zip(statement.cases, unique_labels):
             self._env = dict(saved)
-            for name in _pattern_captures(case.pattern):
+            for name in case.pattern.captures:
                 self._env[name] = self._graph.output(node, name, UNKNOWN)
             if case.guard is not None:
                 self._expr(case.guard)
@@ -1522,114 +1139,118 @@ class _FunctionGraphBuilder:
             env.update(self._env)
         self._tails, self._env = tails, env
 
-    def _assert(self, statement: ast.Assert) -> None:
+    def _assert(self, statement: m.Assert) -> None:
         condition = self._expr(statement.test)
-        node = self._graph.add("raise", "Assert", statement.lineno)
+        node = self._graph.add("raise", "Assert", statement.line)
         self._graph.connect(node, "condition", condition, _BOOL)
         if statement.msg is not None:
             self._graph.connect(node, "message", self._expr(statement.msg))
         self._step(node)
 
-    def _delete(self, statement: ast.Delete) -> None:
+    def _delete(self, statement: m.Delete) -> None:
         for target in statement.targets:
-            if isinstance(target, ast.Name):
+            if isinstance(target, m.Name):
                 self._env.pop(target.id, None)
                 continue
             base = (
-                target.value
-                if isinstance(target, (ast.Attribute, ast.Subscript))
-                else target
+                target.value if isinstance(target, (m.Member, m.Subscript)) else target
             )
             container = self._expr(base)
-            key = (
-                self._expr(target.slice) if isinstance(target, ast.Subscript) else None
-            )
+            key = self._expr(target.index) if isinstance(target, m.Subscript) else None
             node = self._graph.add(
-                "set", f"Delete {ast.unparse(target)}", statement.lineno
+                "set", f"Delete {self._text(target)}", statement.line
             )
             self._graph.connect(node, _pin_name(base), container)
             if key is not None:
                 self._graph.connect(node, "key", key)
             self._step(node)
 
-    def _yield(self, expression: ast.Yield | ast.YieldFrom, *, discard: bool) -> _Value:
+    def _yield(self, expression: m.Yield, *, discard: bool) -> _Value:
         value = self._expr(expression.value) if expression.value is not None else None
         node = self._graph.add(
             "return",
-            "Yield from" if isinstance(expression, ast.YieldFrom) else "Yield",
-            expression.lineno,
+            "Yield from" if expression.delegate else "Yield",
+            expression.line,
         )
         if value is not None:
             self._graph.connect(node, "value", value)
         self._step(node)
         if discard:
-            return _none_literal()
+            return self._none_literal()
         return self._graph.output(node, "sent", UNKNOWN)
 
     def _expr(
-        self, expression: ast.expr, *, exec_candidate: bool = False, out_name: str = ""
+        self, expression: m.Expr, *, exec_candidate: bool = False, out_name: str = ""
     ) -> _Value:
-        literal = _literal(expression)
+        literal = self._literal(expression)
         if literal is not None:
             return literal
-        if isinstance(expression, ast.Name):
-            return self._name_value(expression.id, expression.lineno)
+        if isinstance(expression, m.Name):
+            return self._name_value(expression.id, expression.line)
         if self._folds(expression, named=bool(out_name)):
             return self._expression(expression, out_name)
-        if isinstance(expression, ast.Attribute):
+        if isinstance(expression, m.Member):
             return self._attribute(expression)
-        if isinstance(expression, ast.Call):
-            if _is_super_call(expression) and not self._is_local("super"):
+        if isinstance(expression, m.Call):
+            if self._is_super_call(expression) and not self._is_local(
+                self._profile.super_name
+            ):
                 return self._super_value()
             return self._call(
                 expression, exec_candidate=exec_candidate, out_names=(out_name,)
             )[0]
-        if isinstance(expression, ast.Await):
+        if isinstance(expression, m.Await):
             return self._await(
                 expression, exec_candidate=exec_candidate, out_name=out_name
             )
-        if isinstance(expression, ast.BoolOp):
+        if isinstance(expression, m.Logical):
             return self._bool_op(expression)
-        if isinstance(expression, ast.BinOp):
+        if isinstance(expression, m.Binary):
             return self._binary(expression)
-        if isinstance(expression, ast.UnaryOp):
+        if isinstance(expression, m.Unary):
             return self._unary(expression)
-        if isinstance(expression, ast.Compare):
+        if isinstance(expression, m.Compare):
             return self._compare(expression)
-        if isinstance(expression, ast.IfExp):
+        if isinstance(expression, m.Conditional):
             condition = self._expr(expression.test)
             return self._select(
                 condition,
                 self._expr(expression.body),
                 self._expr(expression.orelse),
-                expression.lineno,
+                expression.line,
             )
-        if isinstance(expression, ast.Subscript):
+        if isinstance(expression, m.Subscript):
             return self._subscript(expression)
-        if isinstance(expression, ast.JoinedStr):
+        if isinstance(expression, m.Template):
             return self._format_text(expression)
-        if isinstance(expression, (ast.Tuple, ast.List, ast.Set, ast.Dict)):
+        if isinstance(expression, (m.Sequence, m.Mapping)):
             return self._collection(expression)
-        if isinstance(
-            expression, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
-        ):
-            title, result = _COMPREHENSIONS[type(expression)]
-            return self._opaque(expression, title, result, code=ast.unparse(expression))
-        if isinstance(expression, ast.Lambda):
+        if isinstance(expression, m.Comprehension):
+            title, label, cat = self._profile.comprehensions[expression.kind]
             return self._opaque(
-                expression, "Lambda", _CALLABLE, code=ast.unparse(expression)
+                expression, title, PinType(label, cat), code=self._text(expression)
             )
-        if isinstance(expression, ast.NamedExpr):
+        if isinstance(expression, m.Function):
+            return self._function_value(expression)
+        if isinstance(expression, m.AssignExpr):
             value = self._expr(expression.value, out_name=expression.target.id)
             self._env[expression.target.id] = value
             return value
-        if isinstance(expression, ast.Starred):
+        if isinstance(expression, m.Spread):
             return self._expr(expression.value)
-        if isinstance(expression, (ast.Yield, ast.YieldFrom)):
+        if isinstance(expression, m.Yield):
             return self._yield(expression, discard=False)
-        if isinstance(expression, ast.FormattedValue):
+        if isinstance(expression, m.Interpolation):
             return self._expr(expression.value)
-        return self._opaque(expression, ast.unparse(expression), UNKNOWN, code=None)
+        return self._opaque(expression, self._text(expression), UNKNOWN, code=None)
+
+    def _function_value(self, expression: m.Function) -> _Value:
+        return self._opaque(
+            expression,
+            expression.name or self._profile.function_title,
+            _CALLABLE,
+            code=self._text(expression),
+        )
 
     def _name_value(self, name: str, line: int) -> _Value:
         if name in self._env:
@@ -1659,14 +1280,17 @@ class _FunctionGraphBuilder:
     def _global_value(self, dotted: str, line: int) -> _Value:
         head = dotted.split(".")[0]
         if (
-            head in _BUILTIN_NAMES
+            head in self._profile.builtin_names
             and head not in self._module.imports
             and head not in self._module.top_level
             and head not in self._module_variables
         ):
-            builtin = getattr(builtins, head, None)
             return _Value(
-                PinType(head, "class") if isinstance(builtin, type) else _CALLABLE,
+                (
+                    PinType(head, "class")
+                    if head in self._profile.builtin_classes
+                    else _CALLABLE
+                ),
                 literal=dotted,
             )
         if head in self._module_variables and "." not in dotted:
@@ -1704,7 +1328,7 @@ class _FunctionGraphBuilder:
         return (
             self._annotation_type(annotation)
             if annotation is not None
-            else _literal_type_of(value)
+            else self._literal_type_of(value)
         )
 
     def _project_symbol_value(self, dotted: str, ref: SymbolRef, line: int) -> _Value:
@@ -1744,18 +1368,18 @@ class _FunctionGraphBuilder:
                     return _Value(self._types.class_type(base), literal="super()")
         return _Value(UNKNOWN, literal="super()")
 
-    def _attribute(self, expression: ast.Attribute) -> _Value:
+    def _attribute(self, expression: m.Member) -> _Value:
         attributes, base = _split_attribute(expression)
         if (
-            isinstance(base, ast.Name)
+            isinstance(base, m.Name)
             and not self._is_local(base.id)
             and base.id not in self._module_variables
         ):
             return self._global_value(
-                f"{base.id}.{'.'.join(attributes)}", expression.lineno
+                f"{base.id}.{'.'.join(attributes)}", expression.line
             )
         current = self._expr(base)
-        prefix = base.id if isinstance(base, ast.Name) else None
+        prefix = base.id if isinstance(base, m.Name) else None
         pin_name = _pin_name(base)
         index = 0
         while index < len(attributes):
@@ -1765,7 +1389,7 @@ class _FunctionGraphBuilder:
                 current, attributes[index : end + 1]
             )
             current = self._break_read(
-                current, pin_name, name, pin_type, annotation, expression.lineno
+                current, pin_name, name, pin_type, annotation, expression.line
             )
             pin_name = attributes[end]
             prefix = f"{prefix}.{name}" if prefix is not None else None
@@ -1793,7 +1417,7 @@ class _FunctionGraphBuilder:
         pin_name: str,
         attribute: str,
         pin_type: PinType,
-        annotation: tuple[ast.expr, ParsedModule] | None,
+        annotation: tuple[m.TypeExpr, ParsedModule] | None,
         line: int,
     ) -> _Value:
         key = (base.node, base.pin, base.literal)
@@ -1812,9 +1436,9 @@ class _FunctionGraphBuilder:
 
     def _attribute_chain_type(
         self, base: _Value, attributes: Sequence[str]
-    ) -> tuple[PinType, tuple[ast.expr, ParsedModule] | None]:
+    ) -> tuple[PinType, tuple[m.TypeExpr, ParsedModule] | None]:
         current = base.type
-        annotation: tuple[ast.expr, ParsedModule] | None = None
+        annotation: tuple[m.TypeExpr, ParsedModule] | None = None
         for attribute in attributes:
             member = self._member(current, attribute)
             if member is None:
@@ -1859,46 +1483,39 @@ class _FunctionGraphBuilder:
         if value.annotation is None:
             return UNKNOWN
         annotation, module = value.annotation
-        if isinstance(annotation, ast.Subscript):
-            base = (dotted_name(annotation.value) or "").rsplit(".", 1)[-1]
-            arguments = (
-                annotation.slice.elts
-                if isinstance(annotation.slice, ast.Tuple)
-                else [annotation.slice]
-            )
+        if isinstance(annotation, m.TypeName) and annotation.args:
+            names = module.language.profile.types
+            base = annotation.dotted.rsplit(".", 1)[-1]
             if (
-                base in _SEQUENCE_ANNOTATIONS
-                or base in _MAPPING_ANNOTATIONS
-                or base in ("tuple", "Tuple")
+                base in names.sequences
+                or base in names.mappings
+                or base in names.tuples
             ):
-                return self._resolver(module).annotation(arguments[0])
+                return self._resolver(module).annotation(annotation.args[0])
         return UNKNOWN
 
-    def _item_type(self, container: _Value, key: ast.expr) -> PinType:
+    def _item_type(self, container: _Value, key: m.Expr) -> PinType:
         if container.annotation is None:
             return UNKNOWN
         annotation, module = container.annotation
-        if not isinstance(annotation, ast.Subscript):
+        if not isinstance(annotation, m.TypeName) or not annotation.args:
             return UNKNOWN
-        base = (dotted_name(annotation.value) or "").rsplit(".", 1)[-1]
-        arguments = (
-            annotation.slice.elts
-            if isinstance(annotation.slice, ast.Tuple)
-            else [annotation.slice]
-        )
-        if base in _MAPPING_ANNOTATIONS and len(arguments) == 2:
+        names = module.language.profile.types
+        base = annotation.dotted.rsplit(".", 1)[-1]
+        arguments = annotation.args
+        if base in names.mappings and len(arguments) == 2:
             return self._resolver(module).annotation(arguments[1])
-        if base in _SEQUENCE_ANNOTATIONS and not isinstance(key, ast.Slice):
+        if base in names.sequences and not isinstance(key, m.Slice):
             return self._resolver(module).annotation(arguments[0])
         if (
-            base in ("tuple", "Tuple")
-            and isinstance(key, ast.Constant)
+            base in names.tuples
+            and isinstance(key, m.Literal)
             and isinstance(key.value, int)
             and -len(arguments) <= key.value < len(arguments)
         ):
             chosen = (
                 arguments[0]
-                if len(arguments) == 2 and isinstance(arguments[1], ast.Constant)
+                if len(arguments) == 2 and isinstance(arguments[1], m.TypeLiteral)
                 else arguments[key.value]
             )
             return self._resolver(module).annotation(chosen)
@@ -1906,7 +1523,7 @@ class _FunctionGraphBuilder:
 
     def _call(
         self,
-        call: ast.Call,
+        call: m.Call,
         *,
         exec_candidate: bool,
         out_names: Sequence[str],
@@ -1917,7 +1534,7 @@ class _FunctionGraphBuilder:
         node = self._graph.add(
             callee.kind,
             callee.title,
-            call.lineno,
+            call.line,
             target=callee.target,
             external=callee.external,
             note=callee.note,
@@ -1925,7 +1542,11 @@ class _FunctionGraphBuilder:
         if awaited:
             node.notes.append("awaits")
         if callee.receiver is not None:
-            self._graph.connect(node, callee.receiver_name, callee.receiver)
+            self._graph.connect(
+                node,
+                callee.receiver_name or self._profile.instance_receiver,
+                callee.receiver,
+            )
         self._connect_arguments(node, arguments)
         if exec_candidate and not callee.pure:
             self._step(node)
@@ -1942,16 +1563,18 @@ class _FunctionGraphBuilder:
         return [self._graph.output(node, name, UNKNOWN) for name in out_names]
 
     def _arguments(
-        self, call: ast.Call, callee: _Callee, first_fallback: str | None = None
+        self, call: m.Call, callee: _Callee, first_fallback: str | None = None
     ) -> list[_Argument]:
         arguments: list[_Argument] = []
         for index, argument in enumerate(call.args):
-            if isinstance(argument, ast.Starred):
-                name = f"*{_pin_name(argument.value, 'args')}"
+            if isinstance(argument, m.Spread):
+                name = (
+                    f"{self._profile.spread_prefix}{_pin_name(argument.value, 'args')}"
+                )
             elif index < len(callee.parameters):
                 name = callee.parameters[index]
             elif callee.vararg is not None:
-                name = f"*{callee.vararg}"
+                name = f"{self._profile.spread_prefix}{callee.vararg}"
             elif index == 0 and first_fallback is not None:
                 name = first_fallback
             else:
@@ -1961,12 +1584,13 @@ class _FunctionGraphBuilder:
             name = (
                 keyword.arg
                 if keyword.arg is not None
-                else f"**{_pin_name(keyword.value, 'kwargs')}"
+                else f"{self._profile.mapping_spread_prefix}"
+                f"{_pin_name(keyword.value, 'kwargs')}"
             )
             arguments.append(self._argument(name, keyword.value, callee))
         return arguments
 
-    def _argument(self, name: str, expression: ast.expr, callee: _Callee) -> _Argument:
+    def _argument(self, name: str, expression: m.Expr, callee: _Callee) -> _Argument:
         value = self._expr(expression)
         declared = callee.parameter_types.get(name)
         return _Argument(
@@ -1979,24 +1603,24 @@ class _FunctionGraphBuilder:
         for argument in arguments:
             self._graph.connect(node, argument.name, argument.value, argument.pin_type)
 
-    def _resolve_callee(self, call: ast.Call) -> _Callee:
+    def _resolve_callee(self, call: m.Call) -> _Callee:
         function = call.func
-        if isinstance(function, ast.Name):
+        if isinstance(function, m.Name):
             if function.id in self._local_functions:
                 return _Callee("ext", function.id, pure=False, note="Local function")
             if self._is_local(function.id):
                 return self._local_callee(
-                    function.id, self._name_value(function.id, call.lineno)
+                    function.id, self._name_value(function.id, call.line)
                 )
-            return self._global_callee(function.id, call.lineno)
-        if isinstance(function, ast.Attribute):
-            dotted = dotted_name(function)
+            return self._global_callee(function.id, call.line)
+        if isinstance(function, m.Member):
+            dotted = m.dotted_name(function)
             if dotted is not None and not self._is_local(dotted.split(".")[0]):
-                return self._global_callee(dotted, call.lineno)
+                return self._global_callee(dotted, call.line)
             return self._method_callee(function, self._expr(function.value))
         return _Callee(
             "ext",
-            ast.unparse(function),
+            self._text(function),
             pure=False,
             receiver=self._expr(function),
             receiver_name="callable",
@@ -2011,9 +1635,9 @@ class _FunctionGraphBuilder:
             return self._make_callee(value.type.ref)
         return _Callee("ext", name, pure=False, receiver=value, receiver_name=name)
 
-    def _call_is_pure(self, call: ast.Call) -> bool:
+    def _call_is_pure(self, call: m.Call) -> bool:
         function = call.func
-        if isinstance(function, ast.Name):
+        if isinstance(function, m.Name):
             if function.id in self._local_functions:
                 return False
             if self._is_local(function.id):
@@ -2024,30 +1648,30 @@ class _FunctionGraphBuilder:
                     and binding.type.ref is not None
                 )
             return self._global_is_pure(function.id)
-        if isinstance(function, ast.Attribute):
-            dotted = dotted_name(function)
+        if isinstance(function, m.Member):
+            dotted = m.dotted_name(function)
             if dotted is not None and not self._is_local(dotted.split(".")[0]):
                 return self._global_is_pure(dotted)
-            return function.attr in _PURE_METHODS
+            return function.attr in self._profile.pure_methods
         return False
 
     def _global_is_pure(self, dotted: str) -> bool:
         head, _, rest = dotted.partition(".")
         if head in self._module_variables and rest:
-            return dotted.rsplit(".", 1)[-1] in _PURE_METHODS
+            return dotted.rsplit(".", 1)[-1] in self._profile.pure_methods
         resolved = self._workspace.resolve(self._module, dotted)
         if isinstance(resolved, SymbolRef):
             return self._workspace.parsed_class(resolved) is not None and _same_last(
                 dotted, resolved.sym
             )
         if isinstance(resolved, ExternalRef):
-            return _external_is_pure(_external_name(resolved))
+            return _external_is_pure(self._profile, _external_name(resolved))
         if (
             resolved is None
-            and dotted in _BUILTIN_NAMES
+            and dotted in self._profile.builtin_names
             and dotted not in self._module.imports
         ):
-            return dotted in _PURE_BUILTINS or dotted[:1].isupper()
+            return dotted in self._profile.pure_builtins or dotted[:1].isupper()
         return False
 
     def _global_callee(self, dotted: str, line: int) -> _Callee:
@@ -2059,7 +1683,7 @@ class _FunctionGraphBuilder:
                 self._module_variable_type(head) if receiver_text == head else UNKNOWN
             )
             return self._method_callee_named(
-                _receiver_title(dotted),
+                self._receiver_title(dotted),
                 method,
                 _Value(receiver_type, literal=receiver_text),
                 pure=pure,
@@ -2077,20 +1701,26 @@ class _FunctionGraphBuilder:
                 )
         if isinstance(resolved, ExternalRef):
             return _Callee("ext", dotted, pure=pure, external=_external_name(resolved))
-        if resolved is None and dotted in _BUILTIN_NAMES:
+        if resolved is None and dotted in self._profile.builtin_names:
             return _Callee(
                 "ext",
                 dotted,
                 pure=pure,
-                parameters=_BUILTIN_PARAMETERS.get(dotted, ()),
-                result=_BUILTIN_RESULTS.get(dotted, UNKNOWN),
+                parameters=self._profile.builtin_parameters.get(dotted, ()),
+                result=self._profile_type(self._profile.builtin_results.get(dotted)),
             )
         return _Callee("ext", dotted, pure=pure)
 
     def _make_callee(self, ref: SymbolRef) -> _Callee:
         name = ref.sym.rsplit(".", 1)[-1]
         result = self._types.class_type(ref)
-        initializer = self._workspace.find_method(ref, "__init__")
+        owner_module = self._workspace.module(ref.path)
+        constructor = (
+            owner_module.language.profile.constructor_name
+            if owner_module is not None
+            else self._profile.constructor_name
+        )
+        initializer = self._workspace.find_method(ref, constructor)
         if initializer is not None:
             function = self._workspace.parsed_function(initializer)
             module = self._workspace.module(initializer.path)
@@ -2128,11 +1758,12 @@ class _FunctionGraphBuilder:
                 continue
             for statement in parsed.node.body:
                 if (
-                    isinstance(statement, ast.AnnAssign)
-                    and isinstance(statement.target, ast.Name)
-                    and not _is_class_variable(statement.annotation)
+                    isinstance(statement, m.Assign)
+                    and statement.annotation is not None
+                    and isinstance(statement.targets[0], m.Name)
+                    and not _is_class_variable(module, statement.annotation)
                 ):
-                    fields[statement.target.id] = self._resolver(module).annotation(
+                    fields[statement.targets[0].id] = self._resolver(module).annotation(
                         statement.annotation
                     )
         return fields
@@ -2151,11 +1782,10 @@ class _FunctionGraphBuilder:
         module = self._workspace.module(ref.path)
         if module is None:
             return _Callee(kind, title, pure=pure, target=ref, receiver=receiver)
-        decorators = _decorator_names(function.node)
         is_method = (
-            function.class_qualname is not None and not decorators & _STATIC_DECORATORS
+            function.class_qualname is not None and function.node.binding != "static"
         )
-        skip_first = is_method and (bound or bool(decorators & _CLASS_DECORATORS))
+        skip_first = is_method and (bound or function.node.binding == "class")
         positional, vararg, parameter_types = self._signature(
             function.node, module, skip_first=skip_first
         )
@@ -2178,28 +1808,37 @@ class _FunctionGraphBuilder:
 
     def _signature(
         self,
-        definition: ast.FunctionDef | ast.AsyncFunctionDef,
+        definition: m.FunctionDecl,
         module: ParsedModule,
         *,
         skip_first: bool,
     ) -> tuple[tuple[str, ...], str | None, dict[str, PinType]]:
-        arguments = definition.args
-        positional = [*arguments.posonlyargs, *arguments.args][1 if skip_first else 0 :]
+        positional = [
+            parameter
+            for parameter in definition.params
+            if parameter.kind in ("positional_only", "positional")
+        ]
+        if skip_first and definition.implicit_receiver is None:
+            positional = positional[1:]
         resolver = self._resolver(module)
         parameter_types = {
-            argument.arg: resolver.annotation(argument.annotation)
-            for argument in _all_arguments(arguments)
-            if argument.annotation is not None
+            parameter.name: resolver.annotation(parameter.annotation)
+            for parameter in definition.params
+            if parameter.annotation is not None
         }
-        vararg = arguments.vararg.arg if arguments.vararg is not None else None
-        return tuple(argument.arg for argument in positional), vararg, parameter_types
+        vararg = next((p.name for p in definition.params if p.kind == "variadic"), None)
+        return (
+            tuple(parameter.name for parameter in positional),
+            vararg,
+            parameter_types,
+        )
 
-    def _method_callee(self, function: ast.Attribute, receiver: _Value) -> _Callee:
+    def _method_callee(self, function: m.Member, receiver: _Value) -> _Callee:
         return self._method_callee_named(
-            _receiver_title(ast.unparse(function), function.value),
+            self._receiver_title(self._text(function), function.value),
             function.attr,
             receiver,
-            pure=function.attr in _PURE_METHODS,
+            pure=function.attr in self._profile.pure_methods,
         )
 
     def _method_callee_named(
@@ -2224,15 +1863,15 @@ class _FunctionGraphBuilder:
             )
         result = (
             receiver.type
-            if method in _SAME_TYPE_METHODS and receiver.type.cat != "any"
-            else _METHOD_RESULTS.get(method, UNKNOWN)
+            if method in self._profile.same_type_methods and receiver.type.cat != "any"
+            else self._profile_type(self._profile.method_results.get(method))
         )
         return _Callee("method", title, pure=pure, result=result, receiver=receiver)
 
     def _await(
-        self, expression: ast.Await, *, exec_candidate: bool, out_name: str
+        self, expression: m.Await, *, exec_candidate: bool, out_name: str
     ) -> _Value:
-        if isinstance(expression.value, ast.Call):
+        if isinstance(expression.value, m.Call):
             return self._call(
                 expression.value,
                 exec_candidate=exec_candidate,
@@ -2240,22 +1879,22 @@ class _FunctionGraphBuilder:
                 awaited=True,
             )[0]
         value = self._expr(expression.value)
-        node = self._graph.add("ext", "await", expression.lineno, note="awaits")
+        node = self._graph.add("ext", "await", expression.line, note="awaits")
         self._graph.connect(node, "awaitable", value)
         if exec_candidate:
             self._step(node)
         return self._graph.output(node, out_name, UNKNOWN)
 
-    def _folds(self, expression: ast.expr, *, named: bool) -> bool:
-        if isinstance(expression, ast.Name) or _is_literal_expression(expression):
+    def _folds(self, expression: m.Expr, *, named: bool) -> bool:
+        if isinstance(expression, m.Name) or _is_literal_expression(expression):
             return False
         if self._folded_parts(expression) is None:
             return False
         computations, operations = self._fold_counts(expression)
         return computations >= 2 or (named and operations >= 1)
 
-    def _expression(self, expression: ast.expr, name: str) -> _Value:
-        return self._expression_node(self._fold(expression), name, expression.lineno)
+    def _expression(self, expression: m.Expr, name: str) -> _Value:
+        return self._expression_node(self._fold(expression), name, expression.line)
 
     def _expression_node(self, folded: _Folded, name: str, line: int) -> _Value:
         title = name or ("Check" if folded.result.cat == "bool" else "Calculate")
@@ -2264,7 +1903,7 @@ class _FunctionGraphBuilder:
         return self._graph.output(node, "", folded.result)
 
     def _inline_condition(
-        self, expression: ast.expr, create: Callable[[], _Node]
+        self, expression: m.Expr, create: Callable[[], _Node]
     ) -> _Node:
         folded = self._fold(expression)
         node = create()
@@ -2276,34 +1915,34 @@ class _FunctionGraphBuilder:
         for pin, value in folded.inputs:
             self._graph.connect(node, pin, value)
 
-    def _fold(self, expression: ast.expr) -> _Folded:
+    def _fold(self, expression: m.Expr) -> _Folded:
         inputs: dict[str, _Value] = {}
         values: dict[int, _Value] = {}
         types: dict[int, PinType] = {}
-        leaves: dict[int, str] = {}
+        leaves: dict[m.Node, str] = {}
         self._fold_walk(expression, inputs, values, types, leaves)
         return _Folded(
             list(inputs.items()),
             types.get(id(expression), UNKNOWN),
-            _expression_lines(_name_leaves(expression, leaves), _EXPRESSION_WIDTH),
+            self._printer.lines(expression, leaves, _EXPRESSION_WIDTH),
         )
 
     def _fold_walk(
         self,
-        expression: ast.expr,
+        expression: m.Expr,
         inputs: dict[str, _Value],
         values: dict[int, _Value],
         types: dict[int, PinType],
-        leaves: dict[int, str],
+        leaves: dict[m.Node, str],
     ) -> None:
-        literal = _literal(expression)
+        literal = self._literal(expression)
         if literal is not None:
             types[id(expression)] = literal.type
             return
-        if isinstance(expression, ast.Name):
+        if isinstance(expression, m.Name):
             if self._is_local(expression.id):
                 value = inputs.get(expression.id) or self._name_value(
-                    expression.id, expression.lineno
+                    expression.id, expression.line
                 )
                 inputs[expression.id] = value
                 values[id(expression)] = value
@@ -2316,10 +1955,10 @@ class _FunctionGraphBuilder:
             value = self._expr(expression)
             if value.node is not None:
                 name = _unique(
-                    _shorten(ast.unparse(expression), _INPUT_NAME_LIMIT), set(inputs)
+                    _shorten(self._text(expression), _INPUT_NAME_LIMIT), set(inputs)
                 )
                 inputs[name] = value
-                leaves[id(expression)] = name
+                leaves[expression] = name
             values[id(expression)] = value
             types[id(expression)] = value.type
             return
@@ -2327,46 +1966,46 @@ class _FunctionGraphBuilder:
             self._fold_walk(part, inputs, values, types, leaves)
         types[id(expression)] = self._folded_type(expression, types, values)
 
-    def _on_project_object(self, expression: ast.expr) -> bool:
+    def _on_project_object(self, expression: m.Expr) -> bool:
         root = expression
-        while isinstance(root, (ast.Attribute, ast.Subscript)):
+        while isinstance(root, (m.Member, m.Subscript)):
             root = root.value
-        if not isinstance(root, ast.Name) or not self._is_local(root.id):
+        if not isinstance(root, m.Name) or not self._is_local(root.id):
             return False
         binding = self._env.get(root.id)
         return isinstance(binding, _Value) and binding.type.ref is not None
 
-    def _folded_parts(self, expression: ast.expr) -> list[ast.expr] | None:
-        if isinstance(expression, ast.BoolOp):
+    def _folded_parts(self, expression: m.Expr) -> list[m.Expr] | None:
+        if isinstance(expression, m.Logical):
             return list(expression.values)
-        if isinstance(expression, ast.BinOp):
+        if isinstance(expression, m.Binary):
             return [expression.left, expression.right]
-        if isinstance(expression, ast.UnaryOp):
+        if isinstance(expression, m.Unary):
             return [expression.operand]
-        if isinstance(expression, ast.Compare):
+        if isinstance(expression, m.Compare):
             return [expression.left, *expression.comparators]
-        if isinstance(expression, ast.IfExp):
+        if isinstance(expression, m.Conditional):
             return [expression.test, expression.body, expression.orelse]
-        if isinstance(expression, ast.Attribute):
-            dotted = dotted_name(expression)
+        if isinstance(expression, m.Member):
+            dotted = m.dotted_name(expression)
             if dotted is not None and not self._is_local(dotted.split(".")[0]):
                 return []
             if self._on_project_object(expression):
                 return None
             return [expression.value]
-        if isinstance(expression, ast.Subscript):
-            return [expression.value, expression.slice]
-        if isinstance(expression, ast.Slice):
+        if isinstance(expression, m.Subscript):
+            return [expression.value, expression.index]
+        if isinstance(expression, m.Slice):
             return [
                 part
                 for part in (expression.lower, expression.upper, expression.step)
                 if part is not None
             ]
-        if isinstance(expression, (ast.Tuple, ast.List, ast.Set)):
-            if any(isinstance(element, ast.Starred) for element in expression.elts):
+        if isinstance(expression, m.Sequence):
+            if any(isinstance(element, m.Spread) for element in expression.elements):
                 return None
-            return list(expression.elts)
-        if isinstance(expression, ast.Call) and self._folds_call(expression):
+            return list(expression.elements)
+        if isinstance(expression, m.Call) and self._folds_call(expression):
             return [
                 *self._method_receiver(expression.func),
                 *expression.args,
@@ -2374,28 +2013,29 @@ class _FunctionGraphBuilder:
             ]
         return None
 
-    def _method_receiver(self, function: ast.expr) -> list[ast.expr]:
-        if not isinstance(function, ast.Attribute):
+    def _method_receiver(self, function: m.Expr) -> list[m.Expr]:
+        if not isinstance(function, m.Member):
             return []
-        dotted = dotted_name(function)
+        dotted = m.dotted_name(function)
         if dotted is not None and not self._is_local(dotted.split(".")[0]):
             return []
         return [function.value]
 
-    def _folds_call(self, call: ast.Call) -> bool:
-        if any(isinstance(argument, ast.Starred) for argument in call.args) or any(
+    def _folds_call(self, call: m.Call) -> bool:
+        if any(isinstance(argument, m.Spread) for argument in call.args) or any(
             keyword.arg is None for keyword in call.keywords
         ):
             return False
         function = call.func
-        if isinstance(function, ast.Name):
+        if isinstance(function, m.Name):
             return not self._is_local(function.id) and self._global_folds(function.id)
-        if isinstance(function, ast.Attribute):
-            dotted = dotted_name(function)
+        if isinstance(function, m.Member):
+            dotted = m.dotted_name(function)
             if dotted is not None and not self._is_local(dotted.split(".")[0]):
                 return self._global_folds(dotted)
-            return function.attr in _PURE_METHODS and not self._on_project_object(
-                function.value
+            return (
+                function.attr in self._profile.pure_methods
+                and not self._on_project_object(function.value)
             )
         return False
 
@@ -2406,8 +2046,8 @@ class _FunctionGraphBuilder:
             return False
         return self._global_is_pure(dotted)
 
-    def _fold_counts(self, expression: ast.expr) -> tuple[int, int]:
-        if isinstance(expression, ast.Name) or _is_literal_expression(expression):
+    def _fold_counts(self, expression: m.Expr) -> tuple[int, int]:
+        if isinstance(expression, m.Name) or _is_literal_expression(expression):
             return 0, 0
         parts = self._folded_parts(expression)
         if parts is None:
@@ -2422,51 +2062,49 @@ class _FunctionGraphBuilder:
 
     def _folded_type(
         self,
-        expression: ast.expr,
+        expression: m.Expr,
         types: dict[int, PinType],
         values: dict[int, _Value],
     ) -> PinType:
-        def of(part: ast.expr) -> PinType:
+        def of(part: m.Expr) -> PinType:
             return types.get(id(part), UNKNOWN)
 
-        if isinstance(expression, ast.Compare):
+        if isinstance(expression, m.Compare):
             return _BOOL
-        if isinstance(expression, ast.BoolOp):
+        if isinstance(expression, m.Logical):
             parts = [of(value) for value in expression.values]
             return _BOOL if all(part.cat == "bool" for part in parts) else parts[0]
-        if isinstance(expression, ast.UnaryOp):
-            return (
-                _BOOL if isinstance(expression.op, ast.Not) else of(expression.operand)
-            )
-        if isinstance(expression, ast.BinOp):
+        if isinstance(expression, m.Unary):
+            return _BOOL if expression.op == "not" else of(expression.operand)
+        if isinstance(expression, m.Binary):
             left, right = of(expression.left), of(expression.right)
             if left.cat != "any" and left.cat == right.cat:
                 return left
             if {left.cat, right.cat} == {"int", "float"}:
                 return _FLOAT
             return left if left.cat == "str" else UNKNOWN
-        if isinstance(expression, ast.IfExp):
+        if isinstance(expression, m.Conditional):
             body, orelse = of(expression.body), of(expression.orelse)
             return body if body.cat == orelse.cat else UNKNOWN
-        if isinstance(expression, ast.Call):
+        if isinstance(expression, m.Call):
             return self._folded_call_type(expression, types)
-        if isinstance(expression, ast.Subscript):
+        if isinstance(expression, m.Subscript):
             container = values.get(id(expression.value))
             return (
-                self._item_type(container, expression.slice)
+                self._item_type(container, expression.index)
                 if container is not None
                 else UNKNOWN
             )
         return UNKNOWN
 
-    def _folded_call_type(self, call: ast.Call, types: dict[int, PinType]) -> PinType:
-        dotted = dotted_name(call.func) or ""
-        if dotted in _BUILTIN_RESULTS:
-            return _BUILTIN_RESULTS[dotted]
+    def _folded_call_type(self, call: m.Call, types: dict[int, PinType]) -> PinType:
+        dotted = m.dotted_name(call.func) or ""
+        if dotted in self._profile.builtin_results:
+            return self._profile_type(self._profile.builtin_results[dotted])
         resolved = self._workspace.resolve(self._module, dotted) if dotted else None
         if (
             isinstance(resolved, ExternalRef)
-            and _external_name(resolved).split(".")[0] in _NUMERIC_MODULES
+            and _external_name(resolved).split(".")[0] in self._profile.numeric_modules
             and call.args
         ):
             first = types.get(id(call.args[0]), UNKNOWN)
@@ -2485,22 +2123,22 @@ class _FunctionGraphBuilder:
             self._graph.connect(node, name, value)
         return self._graph.output(node, "", result)
 
-    def _bool_op(self, expression: ast.BoolOp) -> _Value:
+    def _bool_op(self, expression: m.Logical) -> _Value:
         values = [self._expr(value) for value in expression.values]
         result = (
             _BOOL
             if all(value.type.cat == "bool" for value in values)
             else values[0].type
         )
-        title = "AND" if isinstance(expression.op, ast.And) else "OR"
+        title = _LOGICAL.get(expression.op, expression.op)
         return self._operation(
             title,
-            expression.lineno,
+            expression.line,
             [(_letter(index), value) for index, value in enumerate(values)],
             result,
         )
 
-    def _binary(self, expression: ast.BinOp) -> _Value:
+    def _binary(self, expression: m.Binary) -> _Value:
         left = self._expr(expression.left)
         right = self._expr(expression.right)
         result = (
@@ -2509,34 +2147,32 @@ class _FunctionGraphBuilder:
             else (left.type if left.type.cat == "str" else UNKNOWN)
         )
         return self._operation(
-            _OPERATORS.get(type(expression.op), "?"),
-            expression.lineno,
+            expression.op,
+            expression.line,
             [("a", left), ("b", right)],
             result,
         )
 
-    def _unary(self, expression: ast.UnaryOp) -> _Value:
+    def _unary(self, expression: m.Unary) -> _Value:
         operand = self._expr(expression.operand)
-        result = _BOOL if isinstance(expression.op, ast.Not) else operand.type
+        result = _BOOL if expression.op == "not" else operand.type
         return self._operation(
-            _UNARY.get(type(expression.op), "?"),
-            expression.lineno,
+            _UNARY.get(expression.op, expression.op),
+            expression.line,
             [("value", operand)],
             result,
         )
 
-    def _compare(self, expression: ast.Compare) -> _Value:
+    def _compare(self, expression: m.Compare) -> _Value:
         if (
             len(expression.ops) == 1
-            and isinstance(expression.ops[0], (ast.Is, ast.IsNot))
+            and expression.ops[0] in ("is", "is not")
             and _is_none(expression.comparators[0])
         ):
-            title = (
-                "is None" if isinstance(expression.ops[0], ast.Is) else "is not None"
-            )
+            title = "is None" if expression.ops[0] == "is" else "is not None"
             return self._operation(
                 title,
-                expression.lineno,
+                expression.line,
                 [("value", self._expr(expression.left))],
                 _BOOL,
             )
@@ -2544,7 +2180,7 @@ class _FunctionGraphBuilder:
             self._expr(expression.left),
             *(self._expr(comparator) for comparator in expression.comparators),
         ]
-        symbols = [_COMPARISONS.get(type(op), "?") for op in expression.ops]
+        symbols = [_COMPARISONS.get(op, op) for op in expression.ops]
         if len(symbols) == 1:
             title = symbols[0]
         else:
@@ -2558,17 +2194,17 @@ class _FunctionGraphBuilder:
             )
         return self._operation(
             title,
-            expression.lineno,
+            expression.line,
             [(_letter(index), value) for index, value in enumerate(operands)],
             _BOOL,
         )
 
-    def _subscript(self, expression: ast.Subscript) -> _Value:
+    def _subscript(self, expression: m.Subscript) -> _Value:
         container = self._expr(expression.value)
         container_name = _pin_name(expression.value)
-        result = self._item_type(container, expression.slice)
-        key = expression.slice
-        if isinstance(key, ast.Slice):
+        result = self._item_type(container, expression.index)
+        key = expression.index
+        if isinstance(key, m.Slice):
             parts = [
                 (name, part)
                 for name, part in (
@@ -2583,8 +2219,8 @@ class _FunctionGraphBuilder:
                 *((name, self._expr(part)) for name, part in parts),
             ]
             return self._operation(
-                f"[{ast.unparse(key)}]",
-                expression.lineno,
+                f"[{self._text(key)}]",
+                expression.line,
                 inputs,
                 container.type if result is UNKNOWN else result,
             )
@@ -2592,83 +2228,88 @@ class _FunctionGraphBuilder:
         if key_value.literal is not None and len(key_value.literal) <= 20:
             return self._operation(
                 f"[{key_value.literal}]",
-                expression.lineno,
+                expression.line,
                 [(container_name, container)],
                 result,
             )
         return self._operation(
             "[ ]",
-            expression.lineno,
+            expression.line,
             [(container_name, container), ("key", key_value)],
             result,
         )
 
-    def _format_text(self, expression: ast.JoinedStr) -> _Value:
+    def _format_text(self, expression: m.Template) -> _Value:
         pieces: dict[str, _Value] = {}
-        for part in expression.values:
-            if isinstance(part, ast.FormattedValue):
-                text = _shorten(ast.unparse(part.value), 30)
+        for part in expression.parts:
+            if isinstance(part, m.Interpolation):
+                text = _shorten(self._text(part.value), 30)
                 if text not in pieces:
                     pieces[text] = self._expr(part.value)
         node = self._graph.add(
-            "make", "Format text", expression.lineno, code=ast.unparse(expression)
+            "make", "Format text", expression.line, code=self._text(expression)
         )
         for name, value in pieces.items():
             self._graph.connect(node, name, value)
         return self._graph.output(node, "", _STR)
 
-    def _collection(
-        self, expression: ast.Tuple | ast.List | ast.Set | ast.Dict
-    ) -> _Value:
-        if isinstance(expression, ast.Dict):
+    def _collection(self, expression: m.Sequence | m.Mapping) -> _Value:
+        if isinstance(expression, m.Mapping):
             return self._dictionary(expression)
-        kind_name, result = {
-            ast.Tuple: ("tuple", _TUPLE),
-            ast.List: ("list", _LIST),
-            ast.Set: ("set", _SET),
-        }[type(expression)]
+        kind_name, cat = self._profile.sequence_kinds.get(
+            expression.kind, (expression.kind, "list")
+        )
+        result = PinType(kind_name, cat)
+        spread = self._profile.spread_prefix
         inputs: list[tuple[str, _Value]] = []
-        for index, element in enumerate(expression.elts):
-            if isinstance(element, ast.Starred):
+        for index, element in enumerate(expression.elements):
+            if isinstance(element, m.Spread):
                 inputs.append(
-                    (f"*{_pin_name(element.value, 'items')}", self._expr(element.value))
+                    (
+                        f"{spread}{_pin_name(element.value, 'items')}",
+                        self._expr(element.value),
+                    )
                 )
             else:
                 inputs.append((_element_name(element, index), self._expr(element)))
-        node = self._graph.add("make", f"Make {kind_name}", expression.lineno)
+        node = self._graph.add("make", f"Make {kind_name}", expression.line)
         for name, value in inputs:
             self._graph.connect(node, name, value)
         return self._graph.output(node, kind_name, result)
 
-    def _dictionary(self, expression: ast.Dict) -> _Value:
+    def _dictionary(self, expression: m.Mapping) -> _Value:
         inputs: list[tuple[str, _Value]] = []
+        spread = self._profile.mapping_spread_prefix
         for index, (key, value) in enumerate(zip(expression.keys, expression.values)):
             if key is None:
-                inputs.append((f"**{_pin_name(value, 'mapping')}", self._expr(value)))
-            elif isinstance(key, ast.Constant) and isinstance(key.value, str):
+                inputs.append(
+                    (f"{spread}{_pin_name(value, 'mapping')}", self._expr(value))
+                )
+            elif isinstance(key, m.Literal) and isinstance(key.value, str):
                 inputs.append((key.value or '""', self._expr(value)))
             else:
                 inputs.append((f"key {index + 1}", self._expr(key)))
                 inputs.append((f"value {index + 1}", self._expr(value)))
-        node = self._graph.add("make", "Make dict", expression.lineno)
+        label, cat = self._profile.mapping_kind
+        node = self._graph.add("make", f"Make {label}", expression.line)
         for name, entry in inputs:
             self._graph.connect(node, name, entry)
-        return self._graph.output(node, "dict", _DICT)
+        return self._graph.output(node, label, PinType(label, cat))
 
     def _opaque(
-        self, expression: ast.expr, title: str, result: PinType, *, code: str | None
+        self, expression: m.Expr, title: str, result: PinType, *, code: str | None
     ) -> _Value:
         inputs = [
-            (name, self._name_value(name, expression.lineno))
+            (name, self._name_value(name, expression.line))
             for name in _free_names(expression)
             if name in self._env or name in self._module_variables
         ]
-        node = self._graph.add("ext", title, expression.lineno, code=code)
+        node = self._graph.add("ext", title, expression.line, code=code)
         for name, value in inputs:
             self._graph.connect(node, name, value)
         return self._graph.output(node, "", result)
 
-    def _annotation_type(self, annotation: ast.expr | None) -> PinType:
+    def _annotation_type(self, annotation: m.TypeExpr | None) -> PinType:
         return (
             self._resolver(self._module).annotation(annotation)
             if annotation is not None
@@ -2682,17 +2323,97 @@ class _FunctionGraphBuilder:
             self._resolvers[module.path] = resolver
         return resolver
 
+    def _text(self, node: m.Node) -> str:
+        return self._language.text(node)
 
-def _returned(outcome: _Outcome) -> _Value:
-    return (
-        outcome.value
-        if outcome.terminated and outcome.value is not None
-        else _none_literal()
-    )
+    def _native_labels(self, graph: dict[str, Any]) -> None:
+        labels = self._profile.literal_labels
+        if not labels:
+            return
+        for node in graph.get("nodes", []):
+            for pin in [*node.get("ins", []), *node.get("outs", [])]:
+                kind = pin.get("type")
+                if isinstance(kind, dict) and kind.get("label") in labels:
+                    kind["label"] = labels[kind["label"]]
 
+    def _profile_type(self, entry: tuple[str, str] | None) -> PinType:
+        return PinType(*entry) if entry is not None else UNKNOWN
 
-def _none_literal() -> _Value:
-    return _Value(_NONE, literal="None")
+    def _none_type(self) -> PinType:
+        return PinType(self._profile.none_text, "none")
+
+    def _none_literal(self) -> _Value:
+        return _Value(self._none_type(), literal=self._profile.none_text)
+
+    def _returned(self, outcome: _Outcome) -> _Value:
+        return (
+            outcome.value
+            if outcome.terminated and outcome.value is not None
+            else self._none_literal()
+        )
+
+    def _literal(self, expression: m.Expr) -> _Value | None:
+        if not _is_literal_expression(expression):
+            return None
+        if isinstance(expression, m.Literal):
+            if isinstance(expression.value, str):
+                return _Value(
+                    _STR,
+                    literal=_shorten(
+                        json.dumps(expression.value, ensure_ascii=False),
+                        _LITERAL_LIMIT,
+                    ),
+                )
+            if expression.value is Ellipsis:
+                return _Value(UNKNOWN, literal="...")
+            literal = _shorten(self._text(expression), _LITERAL_LIMIT)
+            if expression.value is None:
+                return _Value(self._none_type(), literal=literal)
+            return _Value(literal_type(expression.value), literal=literal)
+        text = self._text(expression)
+        if len(text) > _LITERAL_LIMIT:
+            return None
+        if isinstance(expression, m.Unary) and isinstance(
+            expression.operand, m.Literal
+        ):
+            return _Value(literal_type(expression.operand.value), literal=text)
+        if isinstance(expression, m.Sequence):
+            entry = self._profile.sequence_kinds.get(expression.kind)
+            return _Value(self._profile_type(entry), literal=text)
+        if isinstance(expression, m.Mapping):
+            return _Value(PinType(*self._profile.mapping_kind), literal=text)
+        return _Value(UNKNOWN, literal=text)
+
+    def _literal_type_of(self, value: m.Expr | None) -> PinType:
+        literal = self._literal(value) if value is not None else None
+        return literal.type if literal is not None else UNKNOWN
+
+    def _is_super_call(self, expression: m.Expr) -> bool:
+        if isinstance(expression, m.Call):
+            expression = expression.func
+        return (
+            isinstance(expression, m.Name) and expression.id == self._profile.super_name
+        )
+
+    def _receiver_title(self, text: str, receiver: m.Expr | None = None) -> str:
+        if receiver is not None and self._is_super_call(receiver):
+            call = "()" if isinstance(receiver, m.Call) else ""
+            return f"{self._profile.super_name}{call}.{text.rsplit('.', 1)[-1]}"
+        if receiver is not None and m.dotted_name(receiver) is None:
+            return text.rsplit(".", 1)[-1]
+        parts = text.split(".")
+        return ".".join(parts[-2:])
+
+    def _source_title(self, statement: m.Stmt) -> str:
+        text = self._text(statement)
+        return text.splitlines()[0] if text else type(statement).__name__
+
+    def _target_label(self, target: m.Expr) -> str:
+        if isinstance(target, m.Name):
+            return target.id
+        if isinstance(target, m.Spread):
+            return f"{self._profile.spread_prefix}{self._target_label(target.value)}"
+        return _shorten(self._text(target), _LABEL_LIMIT)
 
 
 def _differ(true_env: _Environment, false_env: _Environment) -> bool:
@@ -2701,167 +2422,183 @@ def _differ(true_env: _Environment, false_env: _Environment) -> bool:
     )
 
 
-def _name_leaves(expression: ast.expr, leaves: dict[int, str]) -> ast.expr:
-    memo: dict[int, Any] = {}
-    copied = copy.deepcopy(expression, memo)
-    named = {id(memo[key]): name for key, name in leaves.items() if key in memo}
-    renamed: ast.expr = _LeafNamer(named).visit(copied)
-    return renamed
+class _Printer:
+    def __init__(self, language: Language) -> None:
+        self._language = language
+        self._syntax = language.syntax
+        self._names: dict[m.Node, str] = {}
 
+    def lines(
+        self, expression: m.Expr, leaves: dict[m.Node, str], width: int
+    ) -> list[str]:
+        self._names = dict(leaves)
+        for node in m.walk(expression):
+            if (
+                isinstance(node, m.Literal)
+                and isinstance(node.value, str)
+                and len(node.value) > _LITERAL_LIMIT
+            ):
+                self._names.setdefault(
+                    node,
+                    _shorten(
+                        json.dumps(node.value, ensure_ascii=False), _LITERAL_LIMIT
+                    ),
+                )
+        return self._lines(expression, width)
 
-class _LeafNamer(ast.NodeTransformer):
-    def __init__(self, names: dict[int, str]) -> None:
-        self.names = names
+    def _lines(self, expression: m.Expr, width: int) -> list[str]:
+        named = self._names.get(expression)
+        if named is not None:
+            return [named]
+        text = self._text(expression)
+        if len(text) <= width:
+            return [text]
+        if isinstance(expression, m.Call):
+            return self._call_lines(expression, width)
+        if isinstance(expression, m.Sequence):
+            return self._collection_lines(expression, width)
+        if isinstance(expression, m.Unary):
+            prefix = self._unary_prefix(expression)
+            inner = self._lines(expression.operand, max(16, width - len(prefix)))
+            if self._precedence(expression.operand) < self._precedence(expression):
+                inner = _parenthesised(inner)
+            return [
+                prefix + inner[0],
+                *(" " * len(prefix) + line for line in inner[1:]),
+            ]
+        pieces = self._pieces(expression)
+        if pieces is None:
+            return [text]
+        lines: list[str] = []
+        for prefix, piece, minimum in pieces:
+            inner = self._lines(piece, max(16, width - len(prefix) - 1))
+            if self._precedence(piece) < minimum:
+                inner = _parenthesised(inner)
+            lines.append(prefix + inner[0])
+            lines += [" " * len(prefix) + line for line in inner[1:]]
+        return lines
 
-    def visit(self, node: ast.AST) -> Any:
-        name = self.names.get(id(node))
-        return ast.Name(name) if name is not None else super().visit(node)
-
-    def visit_Constant(self, node: ast.Constant) -> Any:
-        if isinstance(node.value, str) and len(node.value) > _LITERAL_LIMIT:
-            return ast.Name(
-                _shorten(json.dumps(node.value, ensure_ascii=False), _LITERAL_LIMIT)
-            )
-        return node
-
-
-def _expression_lines(expression: ast.expr, width: int) -> list[str]:
-    text = _expression_text(expression)
-    if len(text) > width and isinstance(expression, ast.Call):
-        return _call_lines(expression, width)
-    if len(text) > width and isinstance(expression, (ast.Tuple, ast.List, ast.Set)):
-        return _collection_lines(expression, width)
-    if len(text) > width and isinstance(expression, ast.UnaryOp):
-        prefix = _unary_prefix(expression)
-        inner = _expression_lines(expression.operand, max(16, width - len(prefix)))
-        if _precedence(expression.operand) < _precedence(expression):
-            inner = _parenthesised(inner)
-        return [prefix + inner[0], *(" " * len(prefix) + line for line in inner[1:])]
-    pieces = _expression_pieces(expression) if len(text) > width else None
-    if pieces is None:
-        return [text]
-    lines: list[str] = []
-    for prefix, piece, minimum in pieces:
-        inner = _expression_lines(piece, max(16, width - len(prefix) - 1))
-        if _precedence(piece) < minimum:
-            inner = _parenthesised(inner)
-        lines.append(prefix + inner[0])
-        lines += [" " * len(prefix) + line for line in inner[1:]]
-    return lines
-
-
-def _call_lines(call: ast.Call, width: int) -> list[str]:
-    lines = [f"{_expression_text(call.func)}("]
-    arguments = [("", argument) for argument in call.args] + [
-        (f"{keyword.arg}=", keyword.value) for keyword in call.keywords
-    ]
-    for prefix, argument in arguments:
-        inner = _expression_lines(argument, max(16, width - 4 - len(prefix)))
-        lines.append(f"    {prefix}{inner[0]}")
-        lines += [f"    {' ' * len(prefix)}{line}" for line in inner[1:]]
-        lines[-1] += ","
-    lines.append(")")
-    return lines
-
-
-def _collection_lines(
-    collection: ast.Tuple | ast.List | ast.Set, width: int
-) -> list[str]:
-    brackets = {ast.List: ("[", "]"), ast.Set: ("{", "}")}
-    opening, closing = brackets.get(type(collection), ("(", ")"))
-    lines = [opening]
-    for element in collection.elts:
-        inner = _expression_lines(element, max(16, width - 4))
-        lines += [f"    {line}" for line in inner]
-        lines[-1] += ","
-    lines.append(closing)
-    return lines
-
-
-def _expression_text(expression: ast.expr) -> str:
-    if isinstance(expression, ast.Call) and not any(
-        isinstance(argument, ast.Starred) for argument in expression.args
-    ):
-        arguments = [_expression_text(argument) for argument in expression.args] + [
-            (
-                f"{keyword.arg}={_expression_text(keyword.value)}"
-                if keyword.arg is not None
-                else f"**{_expression_text(keyword.value)}"
-            )
-            for keyword in expression.keywords
+    def _call_lines(self, call: m.Call, width: int) -> list[str]:
+        lines = [f"{self._text(call.func)}("]
+        arguments = [("", argument) for argument in call.args] + [
+            (self._keyword_prefix(keyword), keyword.value) for keyword in call.keywords
         ]
-        return f"{_expression_text(expression.func)}({', '.join(arguments)})"
-    if isinstance(expression, ast.UnaryOp) and not _is_literal_expression(expression):
-        operand = _expression_text(expression.operand)
-        if _precedence(expression.operand) < _precedence(expression):
-            operand = f"({operand})"
-        return _unary_prefix(expression) + operand
-    pieces = _expression_pieces(expression)
-    if pieces is None:
-        return ast.unparse(expression)
-    return " ".join(
-        prefix
-        + (
-            f"({_expression_text(piece)})"
-            if _precedence(piece) < minimum
-            else _expression_text(piece)
+        for prefix, argument in arguments:
+            inner = self._lines(argument, max(16, width - 4 - len(prefix)))
+            lines.append(f"    {prefix}{inner[0]}")
+            lines += [f"    {' ' * len(prefix)}{line}" for line in inner[1:]]
+            lines[-1] += ","
+        lines.append(")")
+        return lines
+
+    def _collection_lines(self, collection: m.Sequence, width: int) -> list[str]:
+        opening, closing = self._syntax.brackets.get(collection.kind, ("(", ")"))
+        lines = [opening]
+        for element in collection.elements:
+            inner = self._lines(element, max(16, width - 4))
+            lines += [f"    {line}" for line in inner]
+            lines[-1] += ","
+        lines.append(closing)
+        return lines
+
+    def _text(self, expression: m.Expr) -> str:
+        named = self._names.get(expression)
+        if named is not None:
+            return named
+        if isinstance(expression, m.Call) and not any(
+            isinstance(argument, m.Spread) for argument in expression.args
+        ):
+            arguments = [self._text(argument) for argument in expression.args] + [
+                self._keyword_prefix(keyword) + self._text(keyword.value)
+                for keyword in expression.keywords
+            ]
+            return f"{self._text(expression.func)}({', '.join(arguments)})"
+        if isinstance(expression, m.Unary) and not _is_literal_expression(expression):
+            operand = self._text(expression.operand)
+            if self._precedence(expression.operand) < self._precedence(expression):
+                operand = f"({operand})"
+            return self._unary_prefix(expression) + operand
+        pieces = self._pieces(expression)
+        if pieces is None:
+            if not self._names:
+                return self._language.text(expression)
+            return self._language.text_with(expression, self._names)
+        return " ".join(
+            prefix
+            + (
+                f"({self._text(piece)})"
+                if self._precedence(piece) < minimum
+                else self._text(piece)
+            )
+            for prefix, piece, minimum in pieces
         )
-        for prefix, piece, minimum in pieces
-    )
 
+    def _keyword_prefix(self, keyword: m.Keyword) -> str:
+        if keyword.arg is None:
+            return self._language.profile.mapping_spread_prefix
+        return f"{keyword.arg}{self._syntax.keyword_separator}"
 
-def _expression_pieces(
-    expression: ast.expr,
-) -> list[tuple[str, ast.expr, int]] | None:
-    if isinstance(expression, ast.BoolOp):
-        word, level = _PYTHON_OPERATORS[type(expression.op)]
-        return [
-            ("" if index == 0 else f"{word} ", value, level + 1)
-            for index, value in enumerate(expression.values)
-        ]
-    if isinstance(expression, ast.BinOp) and not isinstance(expression.op, ast.Pow):
-        level = _precedence(expression)
-        terms: list[tuple[str, ast.expr]] = []
-        current: ast.expr = expression
-        while isinstance(current, ast.BinOp) and _precedence(current) == level:
-            terms.append((f"{_PYTHON_OPERATORS[type(current.op)][0]} ", current.right))
-            current = current.left
-        terms.reverse()
-        return [("", current, level)] + [
-            (prefix, term, level + 1) for prefix, term in terms
-        ]
-    if isinstance(expression, ast.IfExp):
-        return [
-            ("", expression.body, 1),
-            ("if ", expression.test, 1),
-            ("else ", expression.orelse, 0),
-        ]
-    if isinstance(expression, ast.Compare):
-        return [("", expression.left, _COMPARE_PRECEDENCE + 1)] + [
-            (f"{_PYTHON_COMPARISONS[type(op)]} ", comparator, _COMPARE_PRECEDENCE + 1)
-            for op, comparator in zip(expression.ops, expression.comparators)
-        ]
-    return None
+    def _pieces(self, expression: m.Expr) -> list[tuple[str, m.Expr, int]] | None:
+        operators = self._syntax.operators
+        if isinstance(expression, m.Logical):
+            word, level = operators[expression.op]
+            return [
+                ("" if index == 0 else f"{word} ", value, level + 1)
+                for index, value in enumerate(expression.values)
+            ]
+        if (
+            isinstance(expression, m.Binary)
+            and expression.op not in self._syntax.unchained_operators
+        ):
+            level = self._precedence(expression)
+            terms: list[tuple[str, m.Expr]] = []
+            current: m.Expr = expression
+            while (
+                isinstance(current, m.Binary)
+                and current not in self._names
+                and self._precedence(current) == level
+            ):
+                terms.append((f"{operators[current.op][0]} ", current.right))
+                current = current.left
+            terms.reverse()
+            return [("", current, level)] + [
+                (prefix, term, level + 1) for prefix, term in terms
+            ]
+        if isinstance(expression, m.Conditional):
+            if self._syntax.conditional_first:
+                return [
+                    ("", expression.test, 1),
+                    ("? ", expression.body, 0),
+                    (": ", expression.orelse, 0),
+                ]
+            return [
+                ("", expression.body, 1),
+                ("if ", expression.test, 1),
+                ("else ", expression.orelse, 0),
+            ]
+        if isinstance(expression, m.Compare):
+            level = self._syntax.compare_precedence + 1
+            return [("", expression.left, level)] + [
+                (f"{self._syntax.comparisons.get(op, op)} ", comparator, level)
+                for op, comparator in zip(expression.ops, expression.comparators)
+            ]
+        return None
 
+    def _unary_prefix(self, expression: m.Unary) -> str:
+        return self._syntax.unary_prefixes.get(expression.op, expression.op)
 
-def _unary_prefix(expression: ast.UnaryOp) -> str:
-    return (
-        "not "
-        if isinstance(expression.op, ast.Not)
-        else ast.unparse(ast.UnaryOp(expression.op, ast.Name("x"))).removesuffix("x")
-    )
-
-
-def _precedence(expression: ast.expr) -> int:
-    if isinstance(expression, (ast.BoolOp, ast.BinOp)):
-        return _PYTHON_OPERATORS[type(expression.op)][1]
-    if isinstance(expression, ast.Compare):
-        return _COMPARE_PRECEDENCE
-    if isinstance(expression, ast.UnaryOp):
-        return 3 if isinstance(expression.op, ast.Not) else 11
-    if isinstance(expression, (ast.IfExp, ast.Lambda, ast.NamedExpr)):
-        return 0
-    return 13
+    def _precedence(self, expression: m.Expr) -> int:
+        if expression in self._names:
+            return 13
+        if isinstance(expression, (m.Logical, m.Binary)):
+            return self._syntax.operators[expression.op][1]
+        if isinstance(expression, m.Compare):
+            return self._syntax.compare_precedence
+        if isinstance(expression, m.Unary):
+            return self._syntax.unary_precedence.get(expression.op, 11)
+        if isinstance(expression, (m.Conditional, m.Function, m.AssignExpr)):
+            return 0
+        return 13
 
 
 def _parenthesised(lines: list[str]) -> list[str]:
@@ -2878,65 +2615,25 @@ def _select_type(when_true: _Value, when_false: _Value) -> PinType:
     return when_true.type if when_true.type.cat != "any" else when_false.type
 
 
-def _literal(expression: ast.expr) -> _Value | None:
-    if not _is_literal_expression(expression):
-        return None
-    if isinstance(expression, ast.Constant):
-        if isinstance(expression.value, str):
-            return _Value(
-                _STR,
-                literal=_shorten(
-                    json.dumps(expression.value, ensure_ascii=False), _LITERAL_LIMIT
-                ),
-            )
-        if expression.value is Ellipsis:
-            return _Value(UNKNOWN, literal="...")
-        return _Value(
-            literal_type(expression.value),
-            literal=_shorten(ast.unparse(expression), _LITERAL_LIMIT),
-        )
-    text = ast.unparse(expression)
-    if len(text) > _LITERAL_LIMIT:
-        return None
-    if isinstance(expression, ast.UnaryOp) and isinstance(
-        expression.operand, ast.Constant
-    ):
-        return _Value(literal_type(expression.operand.value), literal=text)
-    container_types: dict[type[ast.expr], PinType] = {
-        ast.Tuple: _TUPLE,
-        ast.List: _LIST,
-        ast.Set: _SET,
-        ast.Dict: _DICT,
-    }
-    return _Value(container_types.get(type(expression), UNKNOWN), literal=text)
-
-
-def _is_literal_expression(expression: ast.expr | None) -> bool:
-    if isinstance(expression, ast.Constant):
+def _is_literal_expression(expression: m.Expr | None) -> bool:
+    if isinstance(expression, m.Literal):
         return True
-    if isinstance(expression, ast.UnaryOp) and isinstance(
-        expression.op, (ast.USub, ast.UAdd)
-    ):
-        return isinstance(expression.operand, ast.Constant) and isinstance(
+    if isinstance(expression, m.Unary) and expression.op in ("-", "+"):
+        return isinstance(expression.operand, m.Literal) and isinstance(
             expression.operand.value, (int, float, complex)
         )
-    if isinstance(expression, (ast.Tuple, ast.List, ast.Set)):
-        return all(_is_literal_expression(element) for element in expression.elts)
-    if isinstance(expression, ast.Slice):
+    if isinstance(expression, m.Sequence):
+        return all(_is_literal_expression(element) for element in expression.elements)
+    if isinstance(expression, m.Slice):
         return all(
             part is None or _is_literal_expression(part)
             for part in (expression.lower, expression.upper, expression.step)
         )
-    if isinstance(expression, ast.Dict):
+    if isinstance(expression, m.Mapping):
         return all(
             key is not None and _is_literal_expression(key) for key in expression.keys
         ) and all(_is_literal_expression(value) for value in expression.values)
     return False
-
-
-def _literal_type_of(value: ast.expr | None) -> PinType:
-    literal = _literal(value) if value is not None else None
-    return literal.type if literal is not None else UNKNOWN
 
 
 def _shorten(text: str, limit: int) -> str:
@@ -2964,59 +2661,39 @@ def _letter(index: int) -> str:
     return chr(ord("a") + index) if index < 26 else f"v{index + 1}"
 
 
-def _source_title(statement: ast.stmt) -> str:
-    try:
-        text = ast.unparse(statement)
-    except Exception:
-        text = type(statement).__name__
-    return text.splitlines()[0] if text else type(statement).__name__
-
-
-def _pin_name(expression: ast.expr, fallback: str = "value") -> str:
-    if isinstance(expression, ast.Name):
+def _pin_name(expression: m.Expr, fallback: str = "value") -> str:
+    if isinstance(expression, m.Name):
         return expression.id
-    if isinstance(expression, ast.Attribute):
+    if isinstance(expression, m.Member):
         return expression.attr
     return fallback
 
 
-def _argument_name(argument: ast.expr, index: int) -> str:
-    if isinstance(argument, (ast.Name, ast.Attribute)):
+def _argument_name(argument: m.Expr, index: int) -> str:
+    if isinstance(argument, (m.Name, m.Member)):
         return _pin_name(argument)
     return f"arg{index + 1}"
 
 
-def _element_name(element: ast.expr, index: int) -> str:
-    return (
-        _pin_name(element)
-        if isinstance(element, (ast.Name, ast.Attribute))
-        else str(index)
-    )
+def _element_name(element: m.Expr, index: int) -> str:
+    return _pin_name(element) if isinstance(element, (m.Name, m.Member)) else str(index)
 
 
-def _target_label(target: ast.expr) -> str:
-    if isinstance(target, ast.Name):
-        return target.id
-    if isinstance(target, ast.Starred):
-        return f"*{_target_label(target.value)}"
-    return _shorten(ast.unparse(target), _LABEL_LIMIT)
-
-
-def _flat_targets(target: ast.expr) -> list[ast.expr]:
-    if isinstance(target, (ast.Tuple, ast.List)):
-        return [leaf for element in target.elts for leaf in _flat_targets(element)]
+def _flat_targets(target: m.Expr) -> list[m.Expr]:
+    if isinstance(target, m.Sequence):
+        return [leaf for element in target.elements for leaf in _flat_targets(element)]
     return [target]
 
 
-def _assigned_names(target: ast.expr) -> list[str] | None:
-    if isinstance(target, ast.Name):
+def _assigned_names(target: m.Expr) -> list[str] | None:
+    if isinstance(target, m.Name):
         return [target.id]
-    if isinstance(target, ast.Starred):
+    if isinstance(target, m.Spread):
         names = _assigned_names(target.value)
         return [f"*{name}" for name in names] if names is not None else None
-    if isinstance(target, (ast.Tuple, ast.List)):
+    if isinstance(target, m.Sequence):
         collected: list[str] = []
-        for element in target.elts:
+        for element in target.elements:
             names = _assigned_names(element)
             if names is None:
                 return None
@@ -3025,42 +2702,25 @@ def _assigned_names(target: ast.expr) -> list[str] | None:
     return None
 
 
-def _unwrap_call(value: ast.expr) -> tuple[ast.Call | None, bool]:
-    if isinstance(value, ast.Call):
+def _unwrap_call(value: m.Expr) -> tuple[m.Call | None, bool]:
+    if isinstance(value, m.Call):
         return value, False
-    if isinstance(value, ast.Await) and isinstance(value.value, ast.Call):
+    if isinstance(value, m.Await) and isinstance(value.value, m.Call):
         return value.value, True
     return None, False
 
 
-def _split_attribute(expression: ast.Attribute) -> tuple[list[str], ast.expr]:
+def _split_attribute(expression: m.Member) -> tuple[list[str], m.Expr]:
     attributes: list[str] = []
-    current: ast.expr = expression
-    while isinstance(current, ast.Attribute):
+    current: m.Expr = expression
+    while isinstance(current, m.Member):
         attributes.insert(0, current.attr)
         current = current.value
     return attributes, current
 
 
-def _receiver_title(text: str, receiver: ast.expr | None = None) -> str:
-    if receiver is not None and _is_super_call(receiver):
-        return f"super().{text.rsplit('.', 1)[-1]}"
-    if receiver is not None and dotted_name(receiver) is None:
-        return text.rsplit(".", 1)[-1]
-    parts = text.split(".")
-    return ".".join(parts[-2:])
-
-
-def _is_super_call(expression: ast.expr) -> bool:
-    return (
-        isinstance(expression, ast.Call)
-        and isinstance(expression.func, ast.Name)
-        and expression.func.id == "super"
-    )
-
-
-def _is_none(expression: ast.expr) -> bool:
-    return isinstance(expression, ast.Constant) and expression.value is None
+def _is_none(expression: m.Expr) -> bool:
+    return isinstance(expression, m.Literal) and expression.value is None
 
 
 def _same_last(dotted: str, sym: str) -> bool:
@@ -3089,114 +2749,115 @@ def _external_name(resolved: ExternalRef) -> str:
     return f"{resolved.module}.{resolved.name}" if resolved.name else resolved.module
 
 
-def _external_is_pure(external: str) -> bool:
+def _external_is_pure(profile: Profile, external: str) -> bool:
     return (
-        external in _PURE_EXTERNALS
-        or external.split(".")[0] in _PURE_EXTERNAL_MODULES
+        external in profile.pure_externals
+        or external.split(".")[0] in profile.pure_external_modules
         or external.rsplit(".", 1)[-1][:1].isupper()
     )
 
 
-def _is_class_variable(annotation: ast.expr) -> bool:
-    target = annotation.value if isinstance(annotation, ast.Subscript) else annotation
-    return (dotted_name(target) or "").rsplit(".", 1)[-1] == "ClassVar"
+def _is_class_variable(module: ParsedModule, annotation: m.TypeExpr) -> bool:
+    return (
+        isinstance(annotation, m.TypeName)
+        and annotation.dotted.rsplit(".", 1)[-1]
+        in module.language.profile.types.class_variable
+    )
 
 
-def _decorator_names(definition: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    names: set[str] = set()
-    for decorator in definition.decorator_list:
-        target = decorator.func if isinstance(decorator, ast.Call) else decorator
-        name = dotted_name(target)
-        if name is not None:
-            names.add(name.rsplit(".", 1)[-1])
-    return names
+def _definition_name(statement: m.FunctionDef | m.ClassDef) -> str:
+    if isinstance(statement, m.FunctionDef):
+        return statement.function.name
+    return statement.cls.name
 
 
-def _all_arguments(arguments: ast.arguments) -> list[ast.arg]:
-    collected = [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs]
-    if arguments.vararg is not None:
-        collected.append(arguments.vararg)
-    if arguments.kwarg is not None:
-        collected.append(arguments.kwarg)
-    return collected
-
-
-def _members_of(node: ast.ClassDef, module: ParsedModule) -> dict[str, _Member]:
+def _members_of(cls: m.ClassDecl, module: ParsedModule) -> dict[str, _Member]:
     members: dict[str, _Member] = {}
-    for statement in node.body:
-        if isinstance(statement, ast.AnnAssign) and isinstance(
-            statement.target, ast.Name
+    for statement in cls.body:
+        if (
+            isinstance(statement, m.Assign)
+            and statement.annotation is not None
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], m.Name)
         ):
             members.setdefault(
-                statement.target.id, _Member(statement.annotation, module)
+                statement.targets[0].id, _Member(statement.annotation, module)
             )
-        elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if _decorator_names(statement) & _PROPERTY_DECORATORS:
-                members.setdefault(statement.name, _Member(statement.returns, module))
+        elif isinstance(statement, m.FunctionDef):
+            function = statement.function
+            if function.is_property:
+                members.setdefault(function.name, _Member(function.returns, module))
             else:
-                members.setdefault(
-                    statement.name, _Member(None, module, is_method=True)
-                )
+                members.setdefault(function.name, _Member(None, module, is_method=True))
     initializer = next(
         (
-            statement
-            for statement in node.body
-            if isinstance(statement, ast.FunctionDef) and statement.name == "__init__"
+            statement.function
+            for statement in cls.body
+            if isinstance(statement, m.FunctionDef)
+            and statement.function.is_constructor
+            and not statement.function.is_async
         ),
         None,
     )
     if initializer is not None:
-        for name, annotation in _initializer_assignments(initializer):
+        for name, annotation in _initializer_assignments(initializer, module):
             members.setdefault(name, _Member(annotation, module))
     return members
 
 
 def _initializer_assignments(
-    initializer: ast.FunctionDef,
-) -> Iterator[tuple[str, ast.expr | None]]:
+    initializer: m.FunctionDecl, module: ParsedModule
+) -> Iterator[tuple[str, m.TypeExpr | None]]:
+    receiver = (
+        initializer.implicit_receiver or module.language.profile.instance_receiver
+    )
     parameters = {
-        argument.arg: argument.annotation
-        for argument in _all_arguments(initializer.args)
+        parameter.name: parameter.annotation for parameter in initializer.params
     }
-    for statement in ast.walk(initializer):
-        if (
-            isinstance(statement, ast.AnnAssign)
-            and isinstance(statement.target, ast.Attribute)
-            and _is_self(statement.target.value)
-        ):
-            yield statement.target.attr, statement.annotation
-        elif isinstance(statement, ast.Assign):
-            for target in statement.targets:
-                if isinstance(target, ast.Attribute) and _is_self(target.value):
-                    yield target.attr, (
-                        parameters.get(statement.value.id)
-                        if isinstance(statement.value, ast.Name)
-                        else None
-                    )
-
-
-def _is_self(expression: ast.expr) -> bool:
-    return isinstance(expression, ast.Name) and expression.id == "self"
+    for node in m.walk(initializer):
+        if not isinstance(node, m.Assign):
+            continue
+        for target in node.targets:
+            if not (
+                isinstance(target, m.Member)
+                and isinstance(target.value, m.Name)
+                and target.value.id == receiver
+            ):
+                continue
+            if node.annotation is not None:
+                yield target.attr, node.annotation
+            else:
+                yield target.attr, (
+                    parameters.get(node.value.id)
+                    if isinstance(node.value, m.Name)
+                    else None
+                )
 
 
 def _module_variables(
     module: ParsedModule,
-) -> dict[str, tuple[ast.expr | None, ast.expr | None]]:
-    variables: dict[str, tuple[ast.expr | None, ast.expr | None]] = {}
-    pending: list[ast.stmt] = list(module.tree.body)
+) -> dict[str, tuple[m.TypeExpr | None, m.Expr | None]]:
+    variables: dict[str, tuple[m.TypeExpr | None, m.Expr | None]] = {}
+    pending: list[m.Stmt] = list(module.body)
     while pending:
         statement = pending.pop(0)
-        if isinstance(statement, ast.Assign):
+        if isinstance(statement, m.Assign):
+            if (
+                statement.annotation is not None
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], m.Name)
+            ):
+                variables[statement.targets[0].id] = (
+                    statement.annotation,
+                    statement.value,
+                )
+                continue
             for target in statement.targets:
                 for name in _assigned_names(target) or []:
                     variables.setdefault(name.lstrip("*"), (None, statement.value))
-        elif isinstance(statement, ast.AnnAssign) and isinstance(
-            statement.target, ast.Name
-        ):
-            variables[statement.target.id] = (statement.annotation, statement.value)
-        elif isinstance(statement, ast.If):
+        elif isinstance(statement, m.If):
             pending.extend([*statement.body, *statement.orelse])
-        elif isinstance(statement, ast.Try):
+        elif isinstance(statement, m.Try):
             pending.extend(
                 [
                     *statement.body,
@@ -3210,61 +2871,30 @@ def _module_variables(
     return variables
 
 
-def _local_names(definition: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
-    names = {argument.arg for argument in _all_arguments(definition.args)}
-    pending: list[ast.AST] = list(definition.body)
-    while pending:
-        node = pending.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(node.name)
-            continue
-        if isinstance(
-            node,
-            (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp),
-        ):
-            continue
-        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            names.add(node.id)
-        elif isinstance(node, ast.ExceptHandler) and node.name:
-            names.add(node.name)
-        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
-            names.add(node.name)
-        elif isinstance(node, ast.MatchMapping) and node.rest:
-            names.add(node.rest)
-        pending.extend(ast.iter_child_nodes(node))
-    return frozenset(names)
-
-
-def _attribute_counts(
-    definition: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> Counter[str]:
+def _attribute_counts(definition: m.FunctionDecl) -> Counter[str]:
     counts: Counter[str] = Counter()
-    for node in ast.walk(definition):
-        if isinstance(node, ast.Attribute):
-            name = dotted_name(node)
+    for node in m.walk(definition):
+        if isinstance(node, m.Member):
+            name = m.dotted_name(node)
             if name is not None:
                 counts[name] += 1
     return counts
 
 
-def _free_names(expression: ast.expr) -> list[str]:
+def _free_names(expression: m.Expr) -> list[str]:
     bound: set[str] = set()
-    for node in ast.walk(expression):
-        if isinstance(node, ast.comprehension):
-            bound.update(
-                child.id
-                for child in ast.walk(node.target)
-                if isinstance(child, ast.Name)
-            )
-        elif isinstance(node, ast.Lambda):
-            bound.update(argument.arg for argument in _all_arguments(node.args))
-        elif isinstance(node, ast.NamedExpr):
+    for node in m.walk(expression):
+        if isinstance(node, m.Comprehension):
+            bound.update(node.bound)
+        elif isinstance(node, m.Function):
+            bound.update(parameter.name for parameter in node.params)
+        elif isinstance(node, m.AssignExpr):
             bound.add(node.target.id)
     names: list[str] = []
-    for node in ast.walk(expression):
+    for node in m.walk(expression):
         if (
-            isinstance(node, ast.Name)
-            and isinstance(node.ctx, ast.Load)
+            isinstance(node, m.Name)
+            and not node.store
             and node.id not in bound
             and node.id not in names
         ):
@@ -3272,51 +2902,33 @@ def _free_names(expression: ast.expr) -> list[str]:
     return names
 
 
-def _pattern_captures(pattern: ast.pattern) -> list[str]:
-    names: list[str] = []
-    for node in ast.walk(pattern):
-        if (
-            isinstance(node, (ast.MatchAs, ast.MatchStar))
-            and node.name
-            and node.name not in names
-        ):
-            names.append(node.name)
-        elif (
-            isinstance(node, ast.MatchMapping) and node.rest and node.rest not in names
-        ):
-            names.append(node.rest)
-    return names
-
-
-def _suspends(expression: ast.expr) -> bool:
+def _suspends(expression: m.Expr) -> bool:
     return any(
-        isinstance(node, (ast.Await, ast.Yield, ast.YieldFrom, ast.NamedExpr))
-        for node in ast.walk(expression)
+        isinstance(node, (m.Await, m.Yield, m.AssignExpr))
+        for node in m.walk(expression)
     )
 
 
-def _contains_return(statements: Sequence[ast.stmt]) -> bool:
-    pending: list[ast.AST] = list(statements)
+def _contains_return(statements: Sequence[m.Stmt]) -> bool:
+    pending: list[m.Node] = list(statements)
     while pending:
         node = pending.pop()
-        if isinstance(node, ast.Return):
+        if isinstance(node, m.Return):
             return True
-        if isinstance(
-            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
-        ):
+        if isinstance(node, (m.FunctionDef, m.ClassDef, m.Function)):
             continue
-        pending.extend(ast.iter_child_nodes(node))
+        pending.extend(m.children(node))
     return False
 
 
-def _always_terminates(statements: Sequence[ast.stmt]) -> bool:
+def _always_terminates(statements: Sequence[m.Stmt]) -> bool:
     return any(_terminates(statement) for statement in statements)
 
 
-def _terminates(statement: ast.stmt) -> bool:
-    if isinstance(statement, (ast.Return, ast.Raise)):
+def _terminates(statement: m.Stmt) -> bool:
+    if isinstance(statement, (m.Return, m.Raise)):
         return True
-    if isinstance(statement, ast.If):
+    if isinstance(statement, m.If):
         return _always_terminates(statement.body) and _always_terminates(
             statement.orelse
         )

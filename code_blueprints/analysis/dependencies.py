@@ -1,7 +1,8 @@
-import ast
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from code_blueprints.analysis import model as m
 from code_blueprints.analysis.symbols import class_fields, module_constants
 from code_blueprints.analysis.types import PinType, TypeResolver, TypeSystem
 from code_blueprints.analysis.workspace import (
@@ -10,10 +11,7 @@ from code_blueprints.analysis.workspace import (
     ParsedModule,
     Resolved,
     SymbolRef,
-    dotted_name,
 )
-
-_PROTOCOL_NAMES = frozenset({"Protocol", "ABC"})
 
 
 @dataclass
@@ -120,6 +118,11 @@ class DependencyCollector:
             return f"c:{module.path}:{head}"
         binding = module.imports.get(head)
         if binding is None:
+            if rest:
+                return None
+            for neighbour in self.types.workspace.script_neighbours(module):
+                if head in self._constants_in(neighbour):
+                    return f"c:{neighbour.path}:{head}"
             return None
         module_name, _, name = (
             binding.absolute + ("." + rest if rest else "")
@@ -145,7 +148,7 @@ class DependencyCollector:
         for label, base in self.types.workspace.base_classes(ref):
             target = self.node_id(base)
             last = label.split("[")[0].rsplit(".", 1)[-1]
-            is_protocol = last in _PROTOCOL_NAMES or (
+            is_protocol = last in module.language.profile.types.interface_bases or (
                 isinstance(base, SymbolRef)
                 and self.types.class_category(base) == "iface"
             )
@@ -178,46 +181,72 @@ class CodeDependencies:
         self.source = source
         self.owner = owner
         self.local_types: dict[str, PinType] = {}
+        self.locals: frozenset[str] = frozenset()
 
-    def collect_constant(self, statement: ast.AnnAssign | ast.Assign) -> None:
-        if isinstance(statement, ast.AnnAssign):
+    def collect_constant(self, statement: m.Assign) -> None:
+        if statement.annotation is not None:
             self._use(self.resolver.annotation(statement.annotation))
         if statement.value is not None:
-            for child in ast.walk(statement.value):
+            for child in m.walk(statement.value):
                 self._visit(child)
 
-    def collect_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        for arg in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]:
-            if arg.annotation is not None:
-                pin = self.resolver.annotation(arg.annotation)
-                self.local_types[arg.arg] = pin
+    def collect_function(self, node: m.FunctionDecl) -> None:
+        profile = self.module.language.profile
+        self.locals = m.bound_names(node) - {
+            name
+            for child in m.walk(node)
+            if isinstance(child, m.Global)
+            for name in child.names
+        }
+        for parameter in node.params:
+            if parameter.annotation is not None and parameter.kind in (
+                "positional_only",
+                "positional",
+                "keyword_only",
+            ):
+                pin = self.resolver.annotation(parameter.annotation)
+                self.local_types[parameter.name] = pin
                 self._use(pin)
+        regular = [p for p in node.params if p.kind == "positional"]
         if (
             self.owner is not None
-            and node.args.args
-            and node.args.args[0].arg in ("self", "cls")
+            and regular
+            and regular[0].name in profile.receiver_names
         ):
-            self.local_types[node.args.args[0].arg] = self.resolver.system.class_type(
+            self.local_types[regular[0].name] = self.resolver.system.class_type(
+                self.owner
+            )
+        if self.owner is not None and node.implicit_receiver is not None:
+            self.local_types[node.implicit_receiver] = self.resolver.system.class_type(
                 self.owner
             )
         if node.returns is not None:
             self._use(self.resolver.annotation(node.returns))
+        outer = self.locals
         for statement in node.body:
-            for child in ast.walk(statement):
-                self._visit(child)
+            pending: deque[tuple[m.Node, frozenset[str]]] = deque([(statement, outer)])
+            while pending:
+                current, scope = pending.popleft()
+                self.locals = scope
+                self._visit(current)
+                inner = scope | _scope_names(current)
+                pending.extend((child, inner) for child in m.children(current))
 
-    def _visit(self, node: ast.AST) -> None:
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+    def _visit(self, node: m.Node) -> None:
+        if isinstance(node, m.Assign):
             self._track_assignment(node)
-        elif isinstance(node, ast.Call):
+        elif isinstance(node, m.Call):
             self._call(node)
-        elif isinstance(node, ast.Attribute):
+        elif isinstance(node, m.Member):
             self._field_access(node)
             self._constant_access(node)
+        elif isinstance(node, m.TypeName):
+            self._type_name(node)
         elif (
-            isinstance(node, ast.Name)
-            and isinstance(node.ctx, ast.Load)
+            isinstance(node, m.Name)
+            and not node.store
             and node.id not in self.local_types
+            and node.id not in self.locals
         ):
             constant = self.collector.constant_id(self.module, node.id)
             if constant is not None:
@@ -228,7 +257,21 @@ class CodeDependencies:
                 target = self.collector.node_id(resolved)
                 self.collector.link(self.source, target, "uses")
 
-    def _call(self, call: ast.Call) -> None:
+    def _type_name(self, node: m.TypeName) -> None:
+        if node.dotted.split(".")[0] in self.local_types:
+            return
+        constant = self.collector.constant_id(
+            self.module, node.dotted
+        ) or self.collector.constant_id(self.module, node.dotted.split(".")[0])
+        if constant is not None:
+            self.collector.link(self.source, constant, "reads")
+            return
+        resolved = self.collector.types.workspace.resolve(self.module, node.dotted)
+        if isinstance(resolved, SymbolRef):
+            target = self.collector.node_id(resolved)
+            self.collector.link(self.source, target, "uses")
+
+    def _call(self, call: m.Call) -> None:
         func = call.func
         resolved = self._callee(func)
         target = self.collector.node_id(resolved)
@@ -237,13 +280,13 @@ class CodeDependencies:
         kind = "creates" if target.startswith("cls:") else "calls"
         self.collector.link(self.source, target, kind)
 
-    def _callee(self, func: ast.expr) -> Resolved | None:
+    def _callee(self, func: m.Expr) -> Resolved | None:
         workspace = self.collector.types.workspace
-        if isinstance(func, ast.Name):
-            if func.id in self.local_types:
+        if isinstance(func, m.Name):
+            if func.id in self.local_types or func.id in self.locals:
                 return None
             return workspace.resolve(self.module, func.id)
-        if not isinstance(func, ast.Attribute):
+        if not isinstance(func, m.Member):
             return None
         receiver = self._type_of(func.value)
         if (
@@ -253,9 +296,9 @@ class CodeDependencies:
         ):
             return workspace.find_method(receiver.ref, func.attr)
         if (
-            isinstance(func.value, ast.Call)
-            and isinstance(func.value.func, ast.Name)
-            and func.value.func.id == "super"
+            isinstance(func.value, m.Call)
+            and isinstance(func.value.func, m.Name)
+            and func.value.func.id == self.module.language.profile.super_name
             and self.owner is not None
         ):
             for _, base in workspace.base_classes(self.owner):
@@ -264,38 +307,40 @@ class CodeDependencies:
                     if found is not None:
                         return found
             return None
-        dotted = dotted_name(func)
-        if dotted is None or dotted.split(".")[0] in self.local_types:
+        dotted = m.dotted_name(func)
+        if dotted is None:
+            return None
+        head = dotted.split(".")[0]
+        if head in self.local_types or head in self.locals:
             return None
         return workspace.resolve(self.module, dotted)
 
-    def _type_of(self, node: ast.expr) -> PinType | None:
-        if isinstance(node, ast.Name):
+    def _type_of(self, node: m.Expr) -> PinType | None:
+        if isinstance(node, m.Name):
             return self.local_types.get(node.id)
-        if isinstance(node, ast.Attribute):
+        if isinstance(node, m.Member):
             base = self._type_of(node.value)
             if base is not None and base.ref is not None:
                 return self.collector.fields_of(base.ref).get(node.attr)
-        if isinstance(node, ast.Call):
+        if isinstance(node, m.Call):
             return self._returned_type(node)
         return None
 
-    def _track_assignment(self, node: ast.Assign | ast.AnnAssign) -> None:
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        if isinstance(node, ast.AnnAssign):
+    def _track_assignment(self, node: m.Assign) -> None:
+        if node.annotation is not None:
             pin: PinType | None = self.resolver.annotation(node.annotation)
         else:
             pin = self._value_type(node.value)
         if pin is None:
             return
-        for target in targets:
-            if isinstance(target, ast.Name):
+        for target in node.targets:
+            if isinstance(target, m.Name):
                 self.local_types[target.id] = pin
 
-    def _value_type(self, value: ast.expr | None) -> PinType | None:
+    def _value_type(self, value: m.Expr | None) -> PinType | None:
         return self._type_of(value) if value is not None else None
 
-    def _returned_type(self, call: ast.Call) -> PinType | None:
+    def _returned_type(self, call: m.Call) -> PinType | None:
         resolved = self._callee(call.func)
         workspace = self.collector.types.workspace
         if isinstance(resolved, SymbolRef):
@@ -317,22 +362,22 @@ class CodeDependencies:
         if pin.ref is not None:
             self.collector.link(self.source, self.collector.node_id(pin.ref), "uses")
 
-    def _field_access(self, node: ast.Attribute) -> None:
+    def _field_access(self, node: m.Member) -> None:
         receiver = self._type_of(node.value)
         if receiver is None or receiver.ref is None:
             return
         if node.attr not in self.collector.fields_of(receiver.ref):
             return
         holder = self._field_owner(receiver.ref, node.attr)
-        kind = "writes" if isinstance(node.ctx, ast.Store) else "reads"
+        kind = "writes" if node.store else "reads"
         self.collector.link(
             self.source, f"f:{holder.path}:{holder.sym}.{node.attr}", kind
         )
 
-    def _constant_access(self, node: ast.Attribute) -> None:
-        if not isinstance(node.ctx, ast.Load):
+    def _constant_access(self, node: m.Member) -> None:
+        if node.store:
             return
-        dotted = dotted_name(node)
+        dotted = m.dotted_name(node)
         if dotted is None or dotted.split(".")[0] in self.local_types:
             return
         self.collector.link(
@@ -344,3 +389,13 @@ class CodeDependencies:
             if attr in self.collector.own_fields(ancestor):
                 return ancestor
         return holder
+
+
+def _scope_names(node: m.Node) -> frozenset[str]:
+    if isinstance(node, m.FunctionDef):
+        return m.bound_names(node.function)
+    if isinstance(node, m.Function):
+        return m.bound_names(node)
+    if isinstance(node, m.Comprehension):
+        return frozenset(node.bound)
+    return frozenset()

@@ -4,6 +4,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from code_blueprints.languages.registry import EXTENSIONS
+
 FunctionGraph = Callable[[str, str], dict[str, Any] | None]
 
 KIND_WEIGHTS = {
@@ -20,8 +22,11 @@ TIGHT_SCORE = 12.0
 MODERATE_SCORE = 4.0
 NARROW_SURFACE = 3
 HUB_SHARE = 0.5
-CONSTRUCTORS = frozenset({"__init__", "__post_init__", "__new__"})
-TEST_PATH = re.compile(r"(^|/)(tests?|testing)/|(^|/)test_[^/]*\.py$|_test\.py$")
+CONSTRUCTORS = frozenset({"__init__", "__post_init__", "__new__", "constructor"})
+TEST_PATH = re.compile(
+    r"(^|/)(tests?|testing|__tests__)/|(^|/)test_[^/]*\.py$|_test\.py$"
+    r"|\.(test|spec)\.[cm]?[jt]sx?$"
+)
 MEMBER_KINDS = frozenset({"class", "function"})
 CODE_KINDS = frozenset(
     {"package", "module", "class", "function", "method", "field", "constant"}
@@ -539,7 +544,8 @@ class Structure:
         return edges
 
     def _candidates(self, wanted: str) -> list[Node]:
-        as_path = wanted.replace(".", "/") + ".py"
+        stem = wanted.replace(".", "/")
+        as_paths = {stem + extension for extension in EXTENSIONS}
         exact = [
             node
             for node in self.nodes.values()
@@ -547,7 +553,7 @@ class Structure:
             and (
                 node.path == wanted
                 and node.kind == "module"
-                or (node.kind == "module" and node.path == as_path)
+                or (node.kind == "module" and node.path in as_paths)
                 or (node.kind == "package" and node.id == f"pkg:{wanted}")
                 or node.qual == wanted
                 or (node.path is not None and f"{node.path}:{node.qual}" == wanted)
@@ -771,7 +777,7 @@ class Structure:
             e["to"]
             for e in graph["edges"]
             if e["from"] == entry
-            and e["fp"] in ("self", "cls")
+            and e["fp"] in ("self", "cls", "this")
             and items[e["to"]]["kind"] == "break"
         }
         skipped = unpack | ({entry} if entry else set())

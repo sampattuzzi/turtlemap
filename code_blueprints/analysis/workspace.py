@@ -1,17 +1,25 @@
-import ast
 import os
 import subprocess
-import sys
 import threading
-import warnings
+from collections import deque
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+
+from code_blueprints.analysis import model as m
+from code_blueprints.languages.aliases import PathAliases
+from code_blueprints.languages.language import ImportBinding, Language, Locate
+from code_blueprints.languages.registry import (
+    EXTENSIONS,
+    STDLIB_MODULES,
+    language_for,
+)
 
 EXCLUDED_DIRECTORIES = frozenset(
     {
         "node_modules",
         "__pycache__",
+        "node_modules",
         "site-packages",
         "venv",
         "build",
@@ -19,7 +27,6 @@ EXCLUDED_DIRECTORIES = frozenset(
         "dist-packages",
     }
 )
-STDLIB_MODULES = frozenset(sys.stdlib_module_names)
 _MAX_RESOLUTION_DEPTH = 6
 
 
@@ -49,21 +56,15 @@ Resolved = SymbolRef | ModuleRef | ExternalRef
 @dataclass(frozen=True)
 class ParsedFunction:
     qualname: str
-    node: ast.FunctionDef | ast.AsyncFunctionDef
+    node: m.FunctionDecl
     class_qualname: str | None
 
 
 @dataclass(frozen=True)
 class ParsedClass:
     qualname: str
-    node: ast.ClassDef
+    node: m.ClassDecl
     methods: dict[str, str]
-
-
-@dataclass(frozen=True)
-class ImportBinding:
-    absolute: str
-    is_module: bool
 
 
 @dataclass
@@ -72,16 +73,25 @@ class ParsedModule:
     name: str
     source: str
     lines: list[str]
-    tree: ast.Module
+    code: m.ModuleCode
     imports: dict[str, ImportBinding] = field(default_factory=dict)
-    import_statements: list[ast.Import | ast.ImportFrom] = field(default_factory=list)
+    import_statements: list[m.Import] = field(default_factory=list)
+    star_imports: list[str] = field(default_factory=list)
     classes: dict[str, ParsedClass] = field(default_factory=dict)
     functions: dict[str, ParsedFunction] = field(default_factory=dict)
     top_level: dict[str, str] = field(default_factory=dict)
 
     @property
+    def body(self) -> list[m.Stmt]:
+        return self.code.body
+
+    @property
+    def language(self) -> Language:
+        return self.code.language
+
+    @property
     def package(self) -> str:
-        if self.path.endswith("__init__.py"):
+        if self.language.is_package_init(self.path):
             return self.name
         return self.name.rpartition(".")[0]
 
@@ -100,11 +110,13 @@ class Workspace:
         self._resolutions: dict[tuple[str, str], Resolved | None] = {}
         self._bases: dict[SymbolRef, tuple[tuple[str, Resolved | None], ...]] = {}
         self._lock = threading.RLock()
+        self._aliases = PathAliases(self.root)
+        self._scripts: dict[str, tuple[str, ...]] = {}
         self._set_files(files)
 
     @classmethod
     def discover(cls, root: Path) -> "Workspace":
-        return cls(root, python_files_under(root))
+        return cls(root, source_files_under(root))
 
     @property
     def files(self) -> tuple[str, ...]:
@@ -115,7 +127,8 @@ class Workspace:
             self._validated.clear()
             self._resolutions.clear()
             self._bases.clear()
-        self._set_files(python_files_under(self.root))
+            self._aliases = PathAliases(self.root)
+        self._set_files(source_files_under(self.root))
 
     def contains(self, path: str) -> bool:
         return path in self._file_set
@@ -134,7 +147,7 @@ class Workspace:
             if cached is not None and cached[0] == modified:
                 self._validated.add(path)
                 return cached[1]
-        result = _parse(path, absolute)
+        result = _parse(path, absolute, self.locate)
         with self._lock:
             self._parsed[path] = (modified, result)
             self._validated.add(path)
@@ -147,7 +160,7 @@ class Workspace:
         return result if isinstance(result, ParsedModule) else None
 
     def find_module(self, dotted: str, *, near: str) -> str | None:
-        candidates = self._modules_by_suffix.get(dotted)
+        candidates = self._modules_by_suffix.get((_language_name(near), dotted))
         if not candidates:
             return None
         if len(candidates) == 1:
@@ -161,8 +174,8 @@ class Workspace:
             ),
         )
 
-    def is_package(self, dotted: str) -> bool:
-        return dotted in self._packages_by_suffix
+    def is_package(self, dotted: str, *, near: str) -> bool:
+        return (_language_name(near), dotted) in self._packages_by_suffix
 
     def resolve(self, module: ParsedModule, dotted: str) -> Resolved | None:
         key = (module.path, dotted)
@@ -176,11 +189,44 @@ class Workspace:
         head, _, rest = dotted.partition(".")
         if head in module.top_level:
             return self._lookup(module.path, dotted.split("."), 0)
+        if rest and (dotted in module.functions or dotted in module.classes):
+            return SymbolRef(module.path, dotted)
         binding = module.imports.get(head)
         if binding is None:
-            return None
+            owner = self.script_owner(module, head)
+            if owner is None:
+                return None
+            return self._lookup(owner.path, dotted.split("."), 0)
         absolute = binding.absolute + ("." + rest if rest else "")
         return self.resolve_absolute(absolute, near=module.path)
+
+    def script_owner(self, module: ParsedModule, name: str) -> ParsedModule | None:
+        for neighbour in self.script_neighbours(module):
+            if name in neighbour.top_level:
+                return neighbour
+        return None
+
+    def script_neighbours(self, module: ParsedModule) -> list[ParsedModule]:
+        if not module.code.is_script:
+            return []
+        directory = PurePosixPath(module.path).parent.as_posix()
+        paths = self._scripts.get(directory)
+        if paths is None:
+            paths = tuple(
+                path
+                for path in self._files
+                if PurePosixPath(path).parent.as_posix() == directory
+                and language_for(path) is module.language
+            )
+            self._scripts[directory] = paths
+        neighbours: list[ParsedModule] = []
+        for path in paths:
+            if path == module.path:
+                continue
+            neighbour = self.module(path)
+            if neighbour is not None and neighbour.code.is_script:
+                neighbours.append(neighbour)
+        return neighbours
 
     def resolve_absolute(
         self, dotted: str, *, near: str, depth: int = 0
@@ -198,10 +244,10 @@ class Workspace:
             if found is not None:
                 return found
             return None
-        if self.is_package(dotted):
+        if self.is_package(dotted, near=near):
             return None
         for split in range(len(parts), 0, -1):
-            if self.is_package(".".join(parts[:split])):
+            if self.is_package(".".join(parts[:split]), near=near):
                 return None
         return ExternalRef(
             parts[0] if len(parts) == 1 else ".".join(parts[:-1]),
@@ -228,9 +274,9 @@ class Workspace:
             return ()
         bases: list[tuple[str, Resolved | None]] = []
         for base in parsed.node.bases:
-            target = base.value if isinstance(base, ast.Subscript) else base
-            dotted = dotted_name(target)
-            label = ast.unparse(base)
+            target = base.value if isinstance(base, m.Subscript) else base
+            dotted = m.dotted_name(target)
+            label = module.language.text(base)
             if dotted is None:
                 bases.append((label, None))
                 continue
@@ -274,20 +320,52 @@ class Workspace:
         return seen
 
     def _set_files(self, files: Iterable[str]) -> None:
+        previous = getattr(self, "_file_set", None)
         self._files = tuple(sorted(set(files)))
         self._file_set = frozenset(self._files)
-        suffixes: dict[str, list[str]] = {}
-        packages: set[str] = set()
+        if previous is not None and previous != self._file_set:
+            self._forget_parses_that_read_other_files()
+        suffixes: dict[tuple[str, str], list[str]] = {}
+        packages: set[tuple[str, str]] = set()
         for path in self._files:
             parts = module_name_for(path).split(".")
+            language = language_for(path)
+            name = _language_name(path)
             for start in range(len(parts)):
-                suffixes.setdefault(".".join(parts[start:]), []).append(path)
-            directory = parts if path.endswith("__init__.py") else parts[:-1]
+                suffixes.setdefault((name, ".".join(parts[start:])), []).append(path)
+            is_init = language is not None and language.is_package_init(path)
+            directory = parts if is_init else parts[:-1]
             for start in range(len(directory)):
                 for end in range(start + 1, len(directory) + 1):
-                    packages.add(".".join(directory[start:end]))
+                    packages.add((name, ".".join(directory[start:end])))
         self._modules_by_suffix = suffixes
         self._packages_by_suffix = frozenset(packages)
+        self._scripts = {}
+
+    def _forget_parses_that_read_other_files(self) -> None:
+        with self._lock:
+            for path in list(self._parsed):
+                language = language_for(path)
+                if language is not None and language.reads_other_files:
+                    del self._parsed[path]
+
+    def locate(self, specifier: str, near: str) -> str | None:
+        if specifier.startswith("."):
+            target = PurePosixPath(near).parent / specifier
+            bases = [os.path.normpath(target.as_posix()).replace(os.sep, "/")]
+        else:
+            bases = self._aliases.candidates(specifier, near)
+        for normal in bases:
+            if normal.startswith(".."):
+                continue
+            for candidate in (
+                normal,
+                *(normal + ext for ext in EXTENSIONS),
+                *(f"{normal}/index{ext}" for ext in EXTENSIONS),
+            ):
+                if candidate in self._file_set:
+                    return module_name_for(candidate)
+        return None
 
     def _lookup(self, path: str, parts: Sequence[str], depth: int) -> Resolved | None:
         module = self.module(path)
@@ -309,11 +387,20 @@ class Workspace:
                 near=path,
                 depth=depth + 1,
             )
+        if depth > _MAX_RESOLUTION_DEPTH:
+            return None
+        for star in module.star_imports:
+            target = self.find_module(star, near=path)
+            if target is None or target == path:
+                continue
+            found = self._lookup(target, parts, depth + 1)
+            if found is not None:
+                return found
         return None
 
 
-def python_files_under(root: Path) -> list[str]:
-    tracked = _git_python_files(root)
+def source_files_under(root: Path) -> list[str]:
+    tracked = _git_source_files(root)
     if tracked is not None:
         return tracked
     found: list[str] = []
@@ -324,26 +411,17 @@ def python_files_under(root: Path) -> list[str]:
             if not name.startswith(".") and name not in EXCLUDED_DIRECTORIES
         ]
         for filename in filenames:
-            if filename.endswith(".py"):
-                found.append(Path(directory, filename).relative_to(root).as_posix())
+            relative = Path(directory, filename).relative_to(root).as_posix()
+            if _is_source(relative):
+                found.append(relative)
     return found
 
 
 def module_name_for(path: str) -> str:
-    without_suffix = path[: -len(".py")] if path.endswith(".py") else path
-    parts = [part for part in PurePosixPath(without_suffix).parts if part]
-    if parts and parts[-1] == "__init__":
-        parts = parts[:-1]
-    return ".".join(parts)
-
-
-def dotted_name(node: ast.expr) -> str | None:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        base = dotted_name(node.value)
-        return f"{base}.{node.attr}" if base is not None else None
-    return None
+    language = language_for(path)
+    if language is None:
+        return ".".join(part for part in PurePosixPath(path).parts if part)
+    return language.module_name(path)
 
 
 def library_of(module: str) -> str:
@@ -351,33 +429,44 @@ def library_of(module: str) -> str:
     return "stdlib" if top in STDLIB_MODULES else top
 
 
-def _parse(path: str, absolute: Path) -> ParsedModule | ParseFailure:
-    try:
-        source = absolute.read_text(encoding="utf-8")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            tree = ast.parse(source, filename=path)
-    except (
+def _language_name(path: str) -> str:
+    language = language_for(path)
+    return language.name if language is not None else ""
+
+
+def _is_source(path: str) -> bool:
+    language = language_for(path)
+    return language is not None and language.includes(path)
+
+
+def _parse(path: str, absolute: Path, locate: Locate) -> ParsedModule | ParseFailure:
+    language = language_for(path)
+    if language is None:
+        return ParseFailure(path, "Not a supported language")
+    errors: tuple[type[Exception], ...] = (
         OSError,
         UnicodeDecodeError,
-        SyntaxError,
-        ValueError,
-        RecursionError,
-    ) as error:
+        *language.parse_errors(),
+    )
+    try:
+        source = absolute.read_text(encoding="utf-8")
+        name = module_name_for(path)
+        lowered = language.lower(path, name, source, locate)
+    except errors as error:
         return ParseFailure(path, f"{type(error).__name__}: {error}")
     module = ParsedModule(
         path=path,
-        name=module_name_for(path),
+        name=name,
         source=source,
         lines=source.splitlines(),
-        tree=tree,
+        code=lowered.code,
     )
-    _collect_imports(module)
-    _collect_definitions(module, tree.body, prefix="", class_qualname=None)
+    _collect_imports(module, lowered.imports)
+    _collect_definitions(module, module.body, prefix="", class_qualname=None)
     return module
 
 
-def _git_python_files(root: Path) -> list[str] | None:
+def _git_source_files(root: Path) -> list[str] | None:
     try:
         completed = subprocess.run(
             [
@@ -388,7 +477,7 @@ def _git_python_files(root: Path) -> list[str] | None:
                 "--exclude-standard",
                 "-z",
                 "--",
-                "*.py",
+                *(f"*{extension}" for extension in EXTENSIONS),
             ],
             cwd=root,
             capture_output=True,
@@ -403,7 +492,9 @@ def _git_python_files(root: Path) -> list[str] | None:
         if entry
     ]
     return [
-        path for path in paths if not _is_excluded(path) and (root / path).is_file()
+        path
+        for path in paths
+        if not _is_excluded(path) and _is_source(path) and (root / path).is_file()
     ]
 
 
@@ -423,89 +514,84 @@ def _shared_prefix(left: Sequence[str], right: Sequence[str]) -> int:
     return count
 
 
-def _collect_imports(module: ParsedModule) -> None:
-    for node in ast.walk(module.tree):
-        if isinstance(node, ast.Import):
+def _collect_imports(module: ParsedModule, extra: dict[str, ImportBinding]) -> None:
+    pending: deque[m.Node] = deque(module.body)
+    while pending:
+        node = pending.popleft()
+        pending.extend(
+            child
+            for child in m.children(node)
+            if not isinstance(child, (m.Expr, m.TypeExpr))
+        )
+        if not isinstance(node, m.Import):
+            continue
+        if node.whole:
             module.import_statements.append(node)
             for alias in node.names:
-                if alias.asname:
-                    module.imports[alias.asname] = ImportBinding(alias.name, True)
+                if alias.alias:
+                    module.imports[alias.alias] = ImportBinding(alias.name, True)
                 else:
                     head = alias.name.partition(".")[0]
                     module.imports.setdefault(head, ImportBinding(head, True))
-        elif isinstance(node, ast.ImportFrom):
-            base = _import_from_base(module, node)
-            if base is None:
+            continue
+        base = node.module
+        if base is None:
+            continue
+        module.import_statements.append(node)
+        for alias in node.names:
+            if alias.name == "*":
+                if module.language.profile.follows_star_imports:
+                    module.star_imports.append(base)
                 continue
-            module.import_statements.append(node)
-            for alias in node.names:
-                if alias.name == "*":
-                    continue
-                module.imports[alias.asname or alias.name] = ImportBinding(
-                    f"{base}.{alias.name}" if base else alias.name, False
-                )
-
-
-def import_from_base(module: ParsedModule, node: ast.ImportFrom) -> str | None:
-    return _import_from_base(module, node)
-
-
-def _import_from_base(module: ParsedModule, node: ast.ImportFrom) -> str | None:
-    if node.level == 0:
-        return node.module or ""
-    package_parts = module.package.split(".") if module.package else []
-    if node.level - 1 > len(package_parts):
-        return None
-    kept = package_parts[: len(package_parts) - (node.level - 1)]
-    if node.module:
-        kept.append(node.module)
-    return ".".join(kept)
-
-
-def _is_overload_stub(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    return any(
-        dotted_name(decorator) in ("overload", "typing.overload")
-        for decorator in node.decorator_list
-    )
+            module.imports[alias.alias or alias.name] = ImportBinding(
+                f"{base}.{alias.name}" if base else alias.name, False
+            )
+    module.imports.update(extra)
 
 
 def _collect_definitions(
     module: ParsedModule,
-    body: Sequence[ast.stmt],
+    body: Sequence[m.Stmt],
     *,
     prefix: str,
     class_qualname: str | None,
 ) -> None:
     for statement in body:
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            qualname = prefix + statement.name
+        if isinstance(statement, m.FunctionDef):
+            function = statement.function
+            qualname = prefix + function.name
             existing = module.functions.get(qualname)
-            if existing is None or _is_overload_stub(existing.node):
+            if existing is None or existing.node.is_overload:
                 module.functions[qualname] = ParsedFunction(
-                    qualname, statement, class_qualname
+                    qualname, function, class_qualname
                 )
             if class_qualname is not None:
                 module.classes[class_qualname].methods.setdefault(
-                    statement.name, qualname
+                    function.name, qualname
                 )
             elif not prefix:
-                module.top_level[statement.name] = qualname
-        elif isinstance(statement, ast.ClassDef):
-            qualname = prefix + statement.name
-            module.classes[qualname] = ParsedClass(qualname, statement, {})
+                module.top_level[function.name] = qualname
+        elif isinstance(statement, m.ClassDef):
+            qualname = prefix + statement.cls.name
+            module.classes[qualname] = ParsedClass(qualname, statement.cls, {})
             if not prefix:
-                module.top_level[statement.name] = qualname
+                module.top_level[statement.cls.name] = qualname
             _collect_definitions(
-                module, statement.body, prefix=qualname + ".", class_qualname=qualname
+                module,
+                statement.cls.body,
+                prefix=qualname + ".",
+                class_qualname=qualname,
             )
         elif (
-            isinstance(statement, (ast.If, ast.Try))
+            isinstance(statement, (m.If, m.Try))
             and class_qualname is None
             and not prefix
         ):
-            nested: list[ast.stmt] = list(statement.body) + list(statement.orelse)
-            if isinstance(statement, ast.Try):
-                nested += list(statement.finalbody)
+            nested: list[m.Stmt] = list(statement.body)
+            if isinstance(statement, m.If):
+                nested += statement.orelse
+            else:
+                nested += list(statement.orelse) + list(statement.finalbody)
                 for handler in statement.handlers:
                     nested += handler.body
             _collect_definitions(module, nested, prefix=prefix, class_qualname=None)

@@ -62,7 +62,7 @@ class Project:
         return {
             "path": path,
             "qual": qual,
-            "line": function.node.lineno,
+            "line": function.node.line,
             "code": function_code(module, function),
             "graph": graph,
         }

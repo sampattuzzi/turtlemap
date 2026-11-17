@@ -15,7 +15,7 @@ from code_blueprints.server import start_server
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="code-blueprints",
-        description="Browse a Python codebase as blueprint-style dependency maps and dataflow graphs.",
+        description="Browse a Python, JavaScript or TypeScript codebase as blueprint-style dependency maps and dataflow graphs.",
     )
     parser.add_argument("folder", nargs="?", help="project folder to open")
     parser.add_argument(

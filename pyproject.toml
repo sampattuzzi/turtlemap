@@ -1,13 +1,15 @@
 [tool.poetry]
 name = "code-blueprints"
 version = "0.1.0"
-description = "Browse a Python codebase as blueprint-style dependency maps and dataflow graphs"
+description = "Browse a Python, JavaScript or TypeScript codebase as blueprint-style dependency maps and dataflow graphs"
 authors = ["Adia"]
 readme = "README.md"
 packages = [{ include = "code_blueprints" }]
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.14"
+tree-sitter = "^0.25"
+tree-sitter-typescript = "^0.23"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"

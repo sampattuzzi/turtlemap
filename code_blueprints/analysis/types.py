@@ -1,110 +1,17 @@
-import ast
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from code_blueprints.analysis import model as m
 from code_blueprints.analysis.workspace import (
     ExternalRef,
     ParsedModule,
     SymbolRef,
     Workspace,
-    dotted_name,
 )
+from code_blueprints.languages.language import TypeNames
 
-_SCALARS = {
-    "bool": "bool",
-    "int": "int",
-    "float": "float",
-    "complex": "float",
-    "Decimal": "float",
-    "float64": "float",
-    "float32": "float",
-    "int64": "int",
-    "int32": "int",
-    "str": "str",
-    "bytes": "bytes",
-    "bytearray": "bytes",
-    "memoryview": "bytes",
-    "None": "none",
-    "NoneType": "none",
-    "datetime": "time",
-    "date": "time",
-    "time": "time",
-    "timedelta": "time",
-    "Timestamp": "time",
-    "Timedelta": "time",
-    "tzinfo": "time",
-    "ZoneInfo": "time",
-    "Any": "any",
-    "object": "any",
-    "Path": "str",
-    "PurePath": "str",
-    "PurePosixPath": "str",
-    "UUID": "str",
-}
-_LIST_NAMES = frozenset(
-    {
-        "list",
-        "List",
-        "Sequence",
-        "MutableSequence",
-        "Iterable",
-        "Iterator",
-        "Collection",
-        "Generator",
-        "AsyncIterator",
-        "AsyncIterable",
-        "AsyncGenerator",
-        "deque",
-        "Deque",
-        "tuple",
-        "Tuple",
-        "set",
-        "Set",
-        "frozenset",
-        "FrozenSet",
-        "AbstractSet",
-        "MutableSet",
-        "KeysView",
-        "ValuesView",
-        "NDArray",
-        "ndarray",
-    }
-)
-_MAP_NAMES = frozenset(
-    {
-        "dict",
-        "Dict",
-        "Mapping",
-        "MutableMapping",
-        "FrozenDict",
-        "defaultdict",
-        "DefaultDict",
-        "OrderedDict",
-        "Counter",
-        "ChainMap",
-    }
-)
-_TRANSPARENT = frozenset(
-    {
-        "Annotated",
-        "Final",
-        "ClassVar",
-        "Required",
-        "NotRequired",
-        "ReadOnly",
-        "Awaitable",
-        "InitVar",
-    }
-)
-_ENUM_BASES = frozenset({"Enum", "StrEnum", "IntEnum", "Flag", "IntFlag"})
-_STRUCT_BASES = frozenset(
-    {"BaseModel", "NamedTuple", "TypedDict", "Struct", "BaseSettings", "RootModel"}
-)
-_STRUCT_DECORATORS = frozenset(
-    {"dataclass", "attrs", "define", "frozen", "s", "dataclass_json"}
-)
-_IFACE_BASES = frozenset({"Protocol", "ABC"})
 _MODULE_PREFIX = re.compile(r"\b(?:[A-Za-z_]\w*\.)+([A-Za-z_]\w*)")
 
 
@@ -128,6 +35,11 @@ class PinType:
 
 
 UNKNOWN = PinType("Any", "any")
+
+
+def native(pin: PinType, labels: Mapping[str, str]) -> PinType:
+    label = labels.get(pin.label)
+    return replace(pin, label=label) if label is not None else pin
 
 
 def literal_type(value: object) -> PinType:
@@ -175,8 +87,12 @@ class TypeSystem:
 
     def stereotype(self, ref: SymbolRef) -> str | None:
         parsed = self.workspace.parsed_class(ref)
-        if parsed is None:
+        module = self.workspace.module(ref.path)
+        if parsed is None or module is None:
             return None
+        if parsed.node.kind != "class":
+            return parsed.node.kind
+        names = module.language.profile.types
         category = self.class_category(ref)
         if category == "enum":
             return "enum"
@@ -187,7 +103,7 @@ class TypeSystem:
                 label.split("[")[0].rsplit(".", 1)[-1]
                 for label, _ in self.workspace.base_classes(ref)
             }
-            if labels & {"BaseModel", "BaseSettings", "RootModel"}:
+            if labels & names.model_bases:
                 return "model"
             if "NamedTuple" in labels:
                 return "namedtuple"
@@ -215,20 +131,26 @@ class TypeSystem:
 
     def _compute_category(self, ref: SymbolRef) -> str:
         parsed = self.workspace.parsed_class(ref)
-        if parsed is None:
+        module = self.workspace.module(ref.path)
+        if parsed is None or module is None:
             return "object"
-        for decorator in parsed.node.decorator_list:
-            target = decorator.func if isinstance(decorator, ast.Call) else decorator
-            name = dotted_name(target)
-            if name and name.rsplit(".", 1)[-1] in _STRUCT_DECORATORS:
+        if parsed.node.kind == "interface":
+            return "iface"
+        if parsed.node.kind == "enum":
+            return "enum"
+        names = module.language.profile.types
+        for decorator in parsed.node.decorators:
+            target = decorator.func if isinstance(decorator, m.Call) else decorator
+            name = m.dotted_name(target)
+            if name and name.rsplit(".", 1)[-1] in names.struct_decorators:
                 return "struct"
         for label, base in self.workspace.base_classes(ref):
             last = label.split("[")[0].rsplit(".", 1)[-1]
-            if last in _ENUM_BASES:
+            if last in names.enum_bases:
                 return "enum"
-            if last in _STRUCT_BASES:
+            if last in names.struct_bases:
                 return "struct"
-            if last in _IFACE_BASES:
+            if last in names.interface_bases:
                 return "iface"
             if (
                 isinstance(base, SymbolRef)
@@ -244,8 +166,9 @@ class TypeResolver:
     def __init__(self, system: TypeSystem, module: ParsedModule) -> None:
         self.system = system
         self.module = module
+        self.names: TypeNames = module.language.profile.types
 
-    def annotation(self, node: ast.expr | None) -> PinType:
+    def annotation(self, node: m.TypeExpr | None) -> PinType:
         try:
             return self._annotation(node)
         except RecursionError:
@@ -253,110 +176,111 @@ class TypeResolver:
 
     def named(self, dotted: str) -> PinType:
         last = dotted.rsplit(".", 1)[-1]
+        names = self.names
         resolved = self.system.workspace.resolve(self.module, dotted)
         if (
             isinstance(resolved, SymbolRef)
             and self.system.workspace.parsed_class(resolved) is not None
         ):
             return self.system.class_type(resolved)
-        if last in _SCALARS:
-            return PinType(last, _SCALARS[last])
-        if last in _LIST_NAMES:
+        if last in names.scalars:
+            return PinType(last, names.scalars[last])
+        if last in names.lists:
             return PinType(last, "list")
-        if last in _MAP_NAMES:
+        if last in names.maps:
             return PinType(last, "map")
-        if last in ("Callable", "Coroutine"):
+        if last in names.callables:
             return PinType(last, "callable")
-        if last in ("type", "Type"):
+        if last in names.class_types:
             return PinType(last, "class")
-        if isinstance(resolved, ExternalRef) and last in _ENUM_BASES:
+        if isinstance(resolved, ExternalRef) and last in names.enum_bases:
             return PinType(last, "enum")
         return PinType(last, "object")
 
-    def _annotation(self, node: ast.expr | None) -> PinType:
+    def label(self, node: m.TypeExpr) -> str:
+        return clean_label(self.module.language.text(node))
+
+    def _annotation(self, node: m.TypeExpr | None) -> PinType:
         if node is None:
             return UNKNOWN
-        if isinstance(node, ast.Constant):
+        if isinstance(node, m.TypeLiteral):
             if node.value is None:
-                return PinType("None", "none")
+                return PinType(self.module.language.profile.none_text, "none")
             if isinstance(node.value, str):
-                try:
-                    parsed = ast.parse(node.value, mode="eval")
-                except SyntaxError:
+                if node.parsed is None:
                     return PinType(node.value, "object")
-                return self._annotation(parsed.body)
+                return self._annotation(node.parsed)
             return UNKNOWN
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-            return self._union(_flatten_union(node))
-        if isinstance(node, (ast.Name, ast.Attribute)):
-            dotted = dotted_name(node)
-            return self.named(dotted) if dotted else UNKNOWN
-        if isinstance(node, ast.Subscript):
-            return self._subscripted(node)
-        return PinType(clean_label(ast.unparse(node)), "any")
+        if isinstance(node, m.TypeUnion):
+            return self._union(node.members)
+        if isinstance(node, m.TypeName):
+            if node.args:
+                return self._subscripted(node)
+            return self.named(node.dotted) if node.dotted else UNKNOWN
+        if isinstance(node, m.TypeOther):
+            if node.label is not None:
+                return PinType(node.label, node.cat) if node.label != "Any" else UNKNOWN
+            return PinType(self.label(node), node.cat)
+        return UNKNOWN
 
-    def _subscripted(self, node: ast.Subscript) -> PinType:
-        base = dotted_name(node.value) or ""
+    def _subscripted(self, node: m.TypeName) -> PinType:
+        base = node.dotted
         last = base.rsplit(".", 1)[-1]
-        args = (
-            list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
-        )
-        label = clean_label(ast.unparse(node))
-        if last == "Optional":
+        args = node.args
+        names = self.names
+        label = self.label(node)
+        if last in names.optional:
             inner = self._annotation(args[0])
-            return replace(inner, opt=True, label=f"Optional[{inner.label}]")
-        if last == "Union":
+            return replace(inner, opt=True, label=self._optional(inner.label))
+        if last in names.union:
             return self._union(args)
-        if last in _TRANSPARENT:
+        if last in names.transparent:
             return self._annotation(args[0])
-        if last == "Coroutine":
+        if last in names.awaitables:
             return self._annotation(args[-1])
-        if last == "Literal":
-            values = [arg.value for arg in args if isinstance(arg, ast.Constant)]
+        if last in names.literal:
+            values = [arg.value for arg in args if isinstance(arg, m.TypeLiteral)]
             first = literal_type(values[0]) if values else UNKNOWN
             return PinType(label, first.cat)
-        if last in ("TypeGuard", "TypeIs"):
+        if last in names.guards:
             return PinType("bool", "bool")
-        if last in ("type", "Type"):
+        if last in names.class_types:
             return replace(self._annotation(args[0]), cat="class", label=label)
-        if last in ("Callable", "Awaitable"):
+        if last in names.callables:
             return PinType(label, "callable")
-        if last in _LIST_NAMES:
+        if last in names.lists:
             return PinType(label, "list", items=self._held(args[0]))
-        if last in _MAP_NAMES:
+        if last in names.maps:
             return PinType(
                 label, "map", items=self._held(args[-1]) if len(args) > 1 else None
             )
         named = self.named(base) if base else UNKNOWN
         return replace(named, label=label)
 
-    def _held(self, node: ast.expr) -> SymbolRef | None:
+    def _optional(self, label: str) -> str:
+        return self.module.language.profile.optional_label.format(label)
+
+    def _held(self, node: m.TypeExpr) -> SymbolRef | None:
         held = self._annotation(node)
         return held.ref or held.items
 
-    def _union(self, members: list[ast.expr]) -> PinType:
+    def _union(self, members: list[m.TypeExpr]) -> PinType:
         types = [self._annotation(member) for member in members]
         rest = [member for member in types if member.cat != "none"]
         has_none = len(rest) < len(types)
         if not rest:
-            return PinType("None", "none")
+            return PinType(self.module.language.profile.none_text, "none")
         if len(rest) == 1:
             only = rest[0]
             return replace(
                 only,
                 opt=has_none or only.opt,
-                label=f"Optional[{only.label}]" if has_none else only.label,
+                label=self._optional(only.label) if has_none else only.label,
             )
         categories = {member.cat for member in rest}
         label = " | ".join(member.label for member in rest)
         return PinType(
-            f"Optional[{label}]" if has_none else label,
+            self._optional(label) if has_none else label,
             categories.pop() if len(categories) == 1 else "any",
             opt=has_none,
         )
-
-
-def _flatten_union(node: ast.expr) -> list[ast.expr]:
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-        return _flatten_union(node.left) + _flatten_union(node.right)
-    return [node]

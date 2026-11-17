@@ -4,6 +4,12 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from code_blueprints.languages.registry import (
+    EXTENSIONS,
+    is_project_config,
+    is_source,
+)
+
 
 class GitError(Exception):
     pass
@@ -93,7 +99,7 @@ class Repository:
                     fields[index + 2]
                 )
                 index += 3
-                if new.endswith(".py"):
+                if is_source(new):
                     changes.append(
                         FileChange(
                             "added" if status == "C" else "modified",
@@ -104,7 +110,7 @@ class Repository:
                 continue
             path = self._local(fields[index + 1])
             index += 2
-            if path.endswith(".py"):
+            if is_source(path):
                 changes.append(
                     FileChange(
                         {"A": "added", "D": "removed"}.get(status, "modified"), path
@@ -117,7 +123,7 @@ class Repository:
                 "--exclude-standard",
                 "-z",
                 "--",
-                "*.py",
+                *(f"*{extension}" for extension in EXTENSIONS),
                 cwd=self.folder,
             )
             changes += [
@@ -147,7 +153,10 @@ class Repository:
         files: list[str] = []
         with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
             for member in tar.getmembers():
-                if not member.isfile() or not member.name.endswith(".py"):
+                wanted = is_source(member.name)
+                if not member.isfile() or not (
+                    wanted or is_project_config(member.name)
+                ):
                     continue
                 local = self._local(member.name)
                 if local.startswith("../") or PurePosixPath(local).is_absolute():
@@ -158,7 +167,8 @@ class Repository:
                 target = destination / local
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(source.read())
-                files.append(local)
+                if wanted:
+                    files.append(local)
         marker.write_text("\n".join(files))
         return files
 

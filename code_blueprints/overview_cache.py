@@ -5,7 +5,7 @@ from pathlib import Path
 
 from code_blueprints.analysis.project import Project
 
-CACHE_VERSION = "6"
+CACHE_VERSION = "7"
 
 
 class OverviewCache:

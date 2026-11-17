@@ -1,7 +1,7 @@
 # Code Blueprints
 
-Browse a Python codebase as dependency maps and Unreal-style dataflow
-blueprints, in the browser. See [README.md](README.md) for what it does and how
+Browse a Python, JavaScript or TypeScript codebase as dependency maps and
+Unreal-style dataflow blueprints, in the browser. See [README.md](README.md) for what it does and how
 it is put together.
 
 ## Running and testing
@@ -28,8 +28,10 @@ what CI runs.
   (`test_links_subclass_to_its_base`). Arrange helpers are `make_*`, assertion
   helpers `expect_*`.
 - **Private helpers go below the public functions** that use them.
-- **The analysis never imports or runs the code it reads**; everything comes
-  from `ast`.
+- **The analysis never imports or runs the code it reads.** Each language's
+  front end in `languages/` parses it (`ast` for Python, tree-sitter for
+  JavaScript and TypeScript) into the model in `analysis/model.py`, and the
+  rest of the analysis works only on that model.
 - **Check UI changes in a real browser.** `poetry run code-blueprints . --no-open`
   prints the address; drive it with Playwright and look at the result, and try
   a large project as well as a small one.

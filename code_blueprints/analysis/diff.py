@@ -1,10 +1,10 @@
-import ast
 import difflib
 import hashlib
 import textwrap
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from code_blueprints.analysis import model as m
 from code_blueprints.analysis.project import Project
 from code_blueprints.analysis.workspace import ParsedModule
 from code_blueprints.git import DiffRange, FileChange
@@ -524,20 +524,15 @@ def _function_text(project: Project, path: str, qual: str) -> str | None:
     return _node_text(module, module.functions[qual].node)
 
 
-def _node_text(
-    module: ParsedModule, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
-) -> str:
+def _node_text(module: ParsedModule, node: m.FunctionDecl | m.ClassDecl) -> str:
     start, end = _span(node)
     return textwrap.dedent(
         "\n".join(line.rstrip() for line in module.lines[start - 1 : end])
     )
 
 
-def _span(
-    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
-) -> tuple[int, int]:
-    start = min([node.lineno] + [decorator.lineno for decorator in node.decorator_list])
-    return start, node.end_lineno or node.lineno
+def _span(node: m.FunctionDecl | m.ClassDecl) -> tuple[int, int]:
+    return node.start_line or node.line, node.end_line or node.line
 
 
 def _pieces(project: Project, path: str, unit_path: str) -> dict[str, _Piece]:

@@ -172,6 +172,9 @@ function callersOf(ref) {
 const SETTINGS_KEY = 'code-blueprints-settings';
 const settings = Object.assign({ pinFont: 'mono', size: 12.5, theme: 'dark', plain: false, types: false, tests: true, constants: true, layout: 'balanced' }, (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch (e) { return {}; } })());
 function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {} }
+function placeKey() { return `${SETTINGS_KEY}-place:${OVERVIEW ? OVERVIEW.root : ''}|${DIFF ? DIFF.spec : ''}`; }
+function loadPlace() { try { return JSON.parse(localStorage.getItem(placeKey()) || 'null'); } catch (e) { return null; } }
+function savePlace(place) { try { localStorage.setItem(placeKey(), JSON.stringify(place)); } catch (e) {} }
 function applySettings() {
   const root = document.documentElement;
   const fonts = { mono: '"JetBrains Mono", ui-monospace, monospace', lexend: '"Lexend", system-ui, sans-serif', atkinson: '"Atkinson Hyperlegible", system-ui, sans-serif', comic: '"Comic Neue", system-ui, sans-serif' };
@@ -196,7 +199,7 @@ const SVGNS = 'http://www.w3.org/2000/svg';
 function svg(tag, attrs = {}) { const e = document.createElementNS(SVGNS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; }
 function plain(name) {
   if (!settings.plain || !name) return name;
-  if (name === '__init__') return 'set up';
+  if (name === '__init__' || name === 'constructor') return 'set up';
   return name.replace(/\bself\./g, '').replace(/(^|[.\s])_+/g, '$1').replace(/_+/g, ' ').replace(/\./g, ' › ');
 }
 
@@ -381,8 +384,8 @@ function targetChanged(n) {
   const pins = n.kind === 'break' ? n.outs : n.ins;
   return pins.some((pin) => DIFF.status[`f:${n.target.path}:${n.target.sym}.${pin.name.split('.')[0]}`]);
 }
-function expressionEl(n) { return codeBlockEl(n.expr, n.ins); }
-function codeBlockEl(lines, ins) {
+function expressionEl(n, path) { return codeBlockEl(n.expr, n.ins, path); }
+function codeBlockEl(lines, ins, path) {
   const names = ins.map((pin) => pin.name).sort((a, b) => b.length - a.length);
   const colours = new Map(ins.map((pin) => [pin.name, `var(--t-${pin.type ? pin.type.cat : 'any'})`]));
   const pattern = names.length ? new RegExp(`(?<![\\w.])(${names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![\\w(])`, 'y') : null;
@@ -392,10 +395,10 @@ function codeBlockEl(lines, ins) {
     const match = pattern.exec(text);
     return match ? { end: at + match[1].length, node: el('span', { class: 'expr-input', style: `color:${colours.get(match[1])}` }, match[1]) } : null;
   };
-  const paint = pythonPainter(input);
+  const paint = codePainter(input, path);
   return el('div', { class: 'expr' }, lines.map((line, i) => el('div', {}, ...paint(line, i))));
 }
-function nodeEl(n, ctx, connectedIns, connectedOuts) {
+function nodeEl(n, ctx, connectedIns, connectedOuts, path) {
   const [hc] = KIND[n.kind] || KIND.ext;
   const state = n.diff || (targetChanged(n) ? 'modified' : null);
   const wrap = el('div', { class: `k-${n.kind}${state ? ` diff-${state}` : ''}`, 'data-node': n.id });
@@ -411,10 +414,10 @@ function nodeEl(n, ctx, connectedIns, connectedOuts) {
   for (const label of n.execOuts || []) right.append(pinEl('out', label, label, null, { raw: true }));
   for (const p of n.ins) left.append(pinEl('in', `in:${p.name}`, p.name, p.type, { lit: p.lit, connected: connectedIns.has(p.name) || p.lit != null, diff: p.diff }));
   for (const o of n.outs) right.append(pinEl('out', `out:${o.name}`, o.name, o.type, { connected: connectedOuts.has(o.name), diff: o.diff }));
-  if (n.expr) box.append(expressionEl(n));
+  if (n.expr) box.append(expressionEl(n, path));
   box.append(el('div', { class: 'rows' }, left, right));
   if (n.note) box.append(el('div', { class: 'note' }, n.note));
-  if (n.code) box.append(codeBlockEl([n.code], n.ins));
+  if (n.code) box.append(codeBlockEl([n.code], n.ins, path));
   box.append(el('div', { class: 'embed-slot' }));
   return wrap;
 }
@@ -426,7 +429,7 @@ function buildFunctionScene(fnSym, ctx) {
   const conIn = new Map(), conOut = new Map();
   for (const e of g.edges) { if (!conIn.has(e.to)) conIn.set(e.to, new Set()); conIn.get(e.to).add(e.tp); if (!conOut.has(e.from)) conOut.set(e.from, new Set()); conOut.get(e.from).add(e.fp); }
   for (const n of g.nodes) {
-    const v = scene.add(nodeEl(n, ctx, conIn.get(n) || new Set(), conOut.get(n) || new Set()), n);
+    const v = scene.add(nodeEl(n, ctx, conIn.get(n) || new Set(), conOut.get(n) || new Set(), fnSym.file), n);
     v.el.addEventListener('click', (ev) => { if (ev.target.closest('button')) return; ev.stopPropagation(); ctx.select(n, v, fnSym); });
     v.el.addEventListener('dblclick', (ev) => { ev.stopPropagation(); if (n.target && lookup(n.target) && n.kind !== 'entry') ctx.activate(n.target, n, v); });
     v.el.addEventListener('mouseenter', () => scene.hover(v, true));
@@ -558,7 +561,7 @@ const shortType = (label) => (label.length > 60 ? `${label.slice(0, 59)}…` : l
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : (word.endsWith('s') ? 'es' : 's')}`;
 let NET_CACHE = null;
-const TEST_PATH = /(^|\/)(tests?|testing)\/|(^|\/)test_[^/]*\.py$|_test\.py$/;
+const TEST_PATH = /(^|\/)(tests?|testing|__tests__)\/|(^|\/)test_[^/]*\.py$|_test\.py$|\.(test|spec)\.[cm]?[jt]sx?$/;
 function isTestPath(path) { return TEST_PATH.test(path) || TEST_PATH.test(`${path}/`); }
 function resetNet() { NET_CACHE = null; FOCUS_CACHE.clear(); }
 function revealHidden(ids) {
@@ -1182,7 +1185,7 @@ function netPanel(container, selId, ctx, effective) {
     const c = DIFF.counts;
     const files = Object.entries(DIFF.files);
     ex.append(el('div', { class: 'kind' }, 'Comparing'), el('h2', {}, DIFF.spec),
-      el('p', {}, `${DIFF.headLabel} against ${DIFF.baseLabel}: ${plural(files.length, 'Python file')} changed (${c.added} added, ${c.removed} removed, ${c.modified} changed).`));
+      el('p', {}, `${DIFF.headLabel} against ${DIFF.baseLabel}: ${plural(files.length, 'source file')} changed (${c.added} added, ${c.removed} removed, ${c.modified} changed).`));
     const list = el('div', { class: 'diff-files' }, files.slice(0, 60).map(([path, info]) => el('button', { class: `diff-file diff-${info.status}`, title: info.oldPath ? `renamed from ${info.oldPath}` : DIFF_WORD[info.status], onclick: () => ctx.go({ path, sym: null }) }, diffBadge(info.status), el('span', {}, path))));
     if (files.length > 60) list.append(el('span', { class: 'udim' }, `and ${files.length - 60} more`));
     ex.append(list);
@@ -1192,12 +1195,12 @@ function netPanel(container, selId, ctx, effective) {
     if (OVERVIEW) ex.append(el('p', { style: 'color:var(--fg-dim);font-size:0.9em' }, `${OVERVIEW.root} · ${plural(OVERVIEW.modules.length, 'module')}${OVERVIEW.failures && OVERVIEW.failures.length ? ` · ${OVERVIEW.failures.length} could not be read` : ''}`));
   }
   const cv = el('div', { class: 'code-view folded' });
-  const paint = pythonPainter();
+  const paint = codePainter();
   for (const r of foldedRows(effective || new Set(), ctx.refresh)) {
     const row = el('div', { class: `ln ${r.banner ? 'banner' : ''} ${r.id ? 'clickable' : ''} ${r.dim ? 'dimrow' : ''} ${r.id && r.id === selId ? 'hl' : ''} ${r.diff ? `diff-${r.diff}` : ''}`, 'data-id': r.id || null, 'data-path': r.path && r.no && r.diff !== 'removed' ? r.path : null, 'data-line': r.path && r.no && r.diff !== 'removed' ? r.no : null, title: r.diff ? DIFF_WORD[r.diff] : null },
       el('span', { class: 'no' }, r.banner ? (effective.has(r.id) ? '▾' : '▸') : r.no || ''),
       DIFF ? el('span', { class: 'sign' }, r.diff ? DIFF_SIGN[r.diff] : '') : null,
-      el('span', { class: 'tx' }, r.banner || r.dim || r.diff === 'removed' || !r.text ? r.text || ' ' : paint(r.text, r.no)),
+      el('span', { class: 'tx' }, r.banner || r.dim || r.diff === 'removed' || !r.text ? r.text || ' ' : paint(r.text, r.no, r.path)),
       r.fold ? el('span', { class: 'fold-chip', title: r.fold === 'body' ? 'Folded' : r.fold }, r.fold === 'body' ? '⋯' : r.fold) : null);
     if (r.id) {
       row.addEventListener('click', () => {
@@ -1339,6 +1342,7 @@ class Viewport {
   setScene(scene, how = 'start') { this.world.innerHTML = ''; this.scene = scene; clearTimeout(this.pointerTimer); this.hot = null; this.pointerLayer.innerHTML = ''; scene.onHot = (hot) => this.showPointers(hot); this.world.append(scene.el); if (how === 'start') this.start(); else if (how === 'fit') this.fit(); this.apply(); }
   apply(moving = false) {
     this.world.style.transform = `translate(${this.x}px, ${this.y}px) scale(${this.s})`;
+    if (this.onMoved) this.onMoved();
     const g = 16 * this.s, G2 = g * 8;
     this.host.style.backgroundSize = `${G2}px ${G2}px, ${G2}px ${G2}px, ${g}px ${g}px, ${g}px ${g}px`;
     this.host.style.backgroundPosition = `${this.x}px ${this.y}px`;
@@ -1490,7 +1494,7 @@ function codePanel(container, sym, node, ctx) {
     const cv = el('div', { class: 'code-view' });
     const wanted = node && node.diff === 'removed' ? 'removed' : null;
     const target = node && node.diff === 'removed' ? node.baseLine : line;
-    const paint = pythonPainter();
+    const paint = codePainter(null, sym.file);
     codeRows.forEach(([no, ln, change]) => {
       const hit = target && no === target && node.kind !== 'entry' && (change === 'removed') === (wanted === 'removed');
       cv.append(el('div', { class: `ln ${hit ? 'hl' : ''} ${change ? `diff-${change}` : ''}`, title: change ? DIFF_WORD[change] : null, 'data-path': change === 'removed' ? null : sym.file, 'data-line': change === 'removed' ? null : no, 'data-qual': sym.kind === 'function' ? sym.qual : null }, el('span', { class: 'no' }, no), DIFF ? el('span', { class: 'sign' }, change ? DIFF_SIGN[change] : '') : null, el('span', { class: 'tx' }, change === 'removed' || !ln ? ln || ' ' : paint(ln, no))));
@@ -1830,12 +1834,31 @@ function startExpanded() {
   }
   return ex;
 }
+function restoredEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const open = new Set(Array.isArray(entry.open) ? entry.open : []);
+  if (entry.view === 'fn') {
+    const sym = typeof entry.path === 'string' && typeof entry.sym === 'string' ? lookup({ path: entry.path, sym: entry.sym }) : null;
+    return sym && sym.kind === 'function' ? { view: 'fn', path: entry.path, sym: entry.sym, open } : null;
+  }
+  if (entry.view === 'data') return entry.scope === 'root' || net().nodes.has(entry.scope) ? { view: 'data', scope: entry.scope, open } : null;
+  if (entry.view !== 'net' || !Array.isArray(entry.expanded)) return null;
+  const known = (id) => typeof id === 'string' && net().nodes.has(id);
+  return { view: 'net', expanded: new Set(entry.expanded.filter(known)), focus: known(entry.focus) ? entry.focus : null, related: known(entry.related) ? entry.related : null, open };
+}
 function Explorer(root) {
   const expandedAtStart = startExpanded();
   const firstChange = DIFF && Object.keys(DIFF.files).sort()[0];
   const startFocus = firstChange ? [...net().chain(`mod:${firstChange}`)].reverse().find((n) => n.id === `mod:${firstChange}` ? net().chain(n.id).slice(1, -1).every((a) => expandedAtStart.has(a.id)) : expandedAtStart.has(n.id)) : null;
   const start = { view: 'net', expanded: expandedAtStart, focus: startFocus ? startFocus.id : null, open: new Set() };
   const st = { stack: [start], fwd: [], selected: null };
+  const saved = loadPlace();
+  const restored = saved && restoredEntry(saved.entry);
+  let pendingView = restored && saved.view && Number.isFinite(saved.view.s) ? saved.view : null;
+  if (restored) {
+    st.stack.push(restored);
+    if (typeof saved.selected === 'string' && net().nodes.has(saved.selected)) st.selected = saved.selected;
+  }
   const cur = () => st.stack[st.stack.length - 1];
   const lastNet = () => [...st.stack].reverse().find((e) => e.view === 'net') || start;
   const back = el('button', { class: 'btn', title: 'Back (Alt+←)', onclick: () => { if (st.stack.length > 1) { st.fwd.push(st.stack.pop()); st.selected = null; PICK = null; render(false); } } }, '←');
@@ -1846,6 +1869,26 @@ function Explorer(root) {
   const dataButton = el('button', { class: 'btn', title: 'Show the data model: data classes, their fields and how they hold each other', onclick: () => toggleData() }, '▦ Data');
   const ui = shell(root, { extraButtons: [openOther, reload, back, fwd, foldAll, dataButton], onPick: (r) => go(r), onSettings: () => render(true) });
   const vp = new Viewport(ui.vpHost);
+  let placeTimer = null;
+  const rememberPlace = () => {
+    clearTimeout(placeTimer);
+    placeTimer = setTimeout(() => {
+      if (pendingView) return;
+      const c = cur();
+      savePlace({
+        entry: { view: c.view, path: c.path, sym: c.sym, scope: c.scope, focus: c.focus, related: c.related, expanded: c.expanded ? [...c.expanded] : undefined, open: [...(c.open || [])] },
+        selected: typeof st.selected === 'string' ? st.selected : null,
+        view: { x: vp.x, y: vp.y, s: vp.s },
+      });
+    }, 250);
+  };
+  vp.onMoved = rememberPlace;
+  const restoreView = () => {
+    if (!pendingView) return;
+    Object.assign(vp, { x: pendingView.x, y: pendingView.y, s: pendingView.s });
+    pendingView = null;
+    vp.apply();
+  };
   vp.onBackground = () => { st.selected = null; PICK = null; document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected')); panel(); };
   const unfolding = [];
   const keyOf = (owner, n) => `${owner}>${n.target.path}::${n.target.sym}@${n.line || ''}:${n.title}`;
@@ -1990,11 +2033,14 @@ function Explorer(root) {
       ui.vpHost.append(dataScopeChip(c.scope, (scope) => { c.scope = scope; st.selected = null; render(false); }));
       vp.setScene(currentScene, keepView ? 'none' : 'fit');
       if (keepView) { Object.assign(vp, keep); vp.apply(); }
+      restoreView();
       panel();
+      rememberPlace();
       return;
     }
     if (!isNet && !FUNCTIONS.has(fnKey(c))) {
       if (!c.error) ensureFunction(c).then(() => { if (cur() === c) render(keepView === 'relayout' ? true : keepView); }, (err) => { c.error = err.message; if (cur() === c) render(keepView); });
+      if (c.error) pendingView = null;
       currentScene = messageScene(c.error ? `Could not draw ${c.sym}: ${c.error}` : `Reading ${c.sym}…`);
       vp.setScene(currentScene, 'none'); vp.s = 1; vp.x = 40; vp.y = 40; vp.apply();
       panel();
@@ -2012,7 +2058,9 @@ function Explorer(root) {
     vp.setScene(currentScene, keepView ? 'none' : 'start');
     if (keepView) { Object.assign(vp, keep); vp.apply(); }
     else if (isNet && c.focus) { const f = currentScene.el.querySelector(`.nb[data-id="${CSS.escape(c.focus)}"]`); const r = currentScene.netRects && currentScene.netRects.get(c.focus); vp.fit(); if (r && vp.s < 0.6) { vp.s = 0.85; vp.x = 40 - r.x * vp.s; vp.y = 60 - r.y * vp.s; vp.apply(); } if (f) f.classList.add('flash'); }
+    restoreView();
     panel();
+    rememberPlace();
     relayouts = keepView === 'relayout' ? relayouts + 1 : 0;
     const sizes = currentScene.sizes || currentScene.nodes.map((n) => ({ el: n.el, w: n.w, h: n.h }));
     if (relayouts < 3) watchSizes(sizes, () => { if (cur() === c) render('relayout'); });
@@ -2177,10 +2225,10 @@ function screen(...kids) {
 async function showWelcome(message) {
   let capabilities = { recent: [] };
   try { capabilities = await api('/api/capabilities'); } catch (e) {}
-  const input = el('input', { id: 'folder-input', class: 'path-input', placeholder: '/path/to/your/python/project', autocomplete: 'off' });
+  const input = el('input', { id: 'folder-input', class: 'path-input', placeholder: '/path/to/your/project', autocomplete: 'off' });
   const form = el('form', { class: 'open-row', onsubmit: (e) => { e.preventDefault(); if (input.value.trim()) openProject(input.value.trim()); } }, input, el('button', { class: 'btn primary', type: 'submit' }, 'Open'));
   screen(
-    el('p', { class: 'lede' }, 'Open a Python project to see its packages, modules and classes as a dependency map, and every function as a blueprint.'),
+    el('p', { class: 'lede' }, 'Open a Python, JavaScript or TypeScript project to see its packages, modules and classes as a dependency map, and every function as a blueprint.'),
     message ? el('p', { class: 'error-text' }, message) : null,
     el('div', { class: 'or' }, 'Folder to open'),
     form,
@@ -2210,7 +2258,7 @@ async function waitForProject() {
     }
     if (!status.ready) {
       const seconds = Math.round((Date.now() - started) / 1000);
-      const text = status.diff && status.files && !status.loading ? `Comparing ${status.diff.spec}…` : status.diff ? `Reading ${status.diff.spec}: ${status.files.toLocaleString()} Python files…` : `Reading ${status.files.toLocaleString()} Python files in ${status.name}…`;
+      const text = status.diff && status.files && !status.loading ? `Comparing ${status.diff.spec}…` : status.diff ? `Reading ${status.diff.spec}: ${status.files.toLocaleString()} source files…` : `Reading ${status.files.toLocaleString()} source files in ${status.name}…`;
       const hint = seconds > 2 ? `${seconds}s — large projects take a little while the first time; after that they open from a cache.` : ' ';
       const shown = document.getElementById('load-text');
       if (shown) { shown.textContent = text; document.getElementById('load-hint').textContent = hint; }

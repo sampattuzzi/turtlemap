@@ -401,3 +401,44 @@ def test_reports_seen_units_by_their_fingerprints(tmp_path: Path) -> None:
     seen = set(diff.fingerprints(["fn:shop/models.py:describe", "unknown"]))
 
     assert diff.seen_units(seen) == ["fn:shop/models.py:describe"]
+
+
+def test_compares_typescript_with_the_path_aliases_of_each_revision(
+    tmp_path: Path,
+) -> None:
+    config = '{ "compilerOptions": { "paths": { "@lib/*": ["./src/lib/*"] } } }'
+    library = """
+        export function format(value: number): string {
+          return value.toFixed(2);
+        }
+    """
+    before = {
+        "web/tsconfig.json": config,
+        "web/src/lib/format.ts": library,
+        "web/src/view.ts": """
+            import { format } from "@lib/format";
+
+            export function show(): string {
+              return format(1);
+            }
+        """,
+        "web/src/globals.d.ts": "declare const VERSION: string;\n",
+    }
+    after = {
+        **before,
+        "web/src/view.ts": """
+            import { format } from "@lib/format";
+
+            export function show(): string {
+              return format(2);
+            }
+        """,
+        "web/src/globals.d.ts": "declare const VERSION: number;\n",
+    }
+    diff = make_diff(tmp_path, before=before, after=after)
+
+    assert diff.summary()["files"] == {"web/src/view.ts": {"status": "modified"}}
+    assert statuses(diff)["fn:web/src/view.ts:show"] == "modified"
+    head = Project(tmp_path / "head", ["web/src/lib/format.ts", "web/src/view.ts"])
+    ids = head.overview()["edges"]["ids"]
+    assert "fn:web/src/lib/format.ts:format" in ids

@@ -1,6 +1,6 @@
-import ast
 from typing import Any
 
+from code_blueprints.analysis import model as m
 from code_blueprints.analysis.workspace import ParsedFunction, ParsedModule
 
 
@@ -8,21 +8,25 @@ def module_outline(module: ParsedModule) -> list[dict[str, Any]]:
     lines = module.lines
     out: list[dict[str, Any]] = []
     group: dict[str, Any] | None = None
-    body = module.tree.body
-    for index, node in enumerate(body):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
+    last_import = 0
+    for index, node in enumerate(_in_order(module.body)):
+        if isinstance(node, m.Import):
             if group is not None:
-                group["count"] += 1
+                group["count"] += node.line != last_import
+                last_import = node.line
                 continue
             group = {
                 "kind": "imports",
-                "no": node.lineno,
-                "text": _line(lines, node.lineno),
+                "no": node.line,
+                "text": _line(lines, node.line),
                 "count": 1,
             }
+            last_import = node.line
             out.append(group)
             continue
         group = None
+        if out and _first_line(node) <= out[-1]["no"]:
+            continue
         if index == 0 and _is_docstring(node):
             out.append(_doc(node, lines))
             continue
@@ -33,41 +37,41 @@ def module_outline(module: ParsedModule) -> list[dict[str, Any]]:
 def function_code(module: ParsedModule, function: ParsedFunction) -> list[list[Any]]:
     node = function.node
     lines = module.lines
-    start = node.decorator_list[0].lineno if node.decorator_list else node.lineno
-    docstring = node.body[0] if node.body and _is_docstring(node.body[0]) else None
+    start = node.start_line or node.line
     skip = (
-        range(docstring.lineno, (docstring.end_lineno or docstring.lineno) + 1)
-        if docstring is not None
+        range(node.doc_lines[0], node.doc_lines[1] + 1)
+        if node.doc_lines is not None
         else range(0)
     )
+    comment = module.language.comment_prefix
     rows: list[list[Any]] = []
-    for number in range(start, (node.end_lineno or node.lineno) + 1):
+    for number in range(start, (node.end_line or node.line) + 1):
         if number in skip:
             continue
         text = _line(lines, number)
-        if not text.strip() or text.strip().startswith("#"):
+        if not text.strip() or text.strip().startswith(comment):
             continue
         rows.append([number, text])
     return rows
 
 
-def _item(node: ast.stmt, lines: list[str]) -> dict[str, Any]:
-    decorators = [
-        [d.lineno, _line(lines, d.lineno)] for d in getattr(node, "decorator_list", [])
-    ]
-    end = node.end_lineno or node.lineno
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+def _item(node: m.Stmt, lines: list[str]) -> dict[str, Any]:
+    if isinstance(node, m.FunctionDef):
+        function = node.function
         return {
             "kind": "def",
-            "name": node.name,
-            "no": node.lineno,
-            "text": _line(lines, node.lineno),
-            "decorators": decorators,
-            "end": end,
+            "name": function.name,
+            "no": function.line,
+            "text": _line(lines, function.line),
+            "decorators": _decorators(function.decorators, lines),
+            "end": function.end_line or function.line,
         }
-    if isinstance(node, ast.ClassDef):
+    if isinstance(node, m.ClassDef):
+        cls = node.cls
         body: list[dict[str, Any]] = []
-        for index, child in enumerate(node.body):
+        for index, child in enumerate(_in_order(cls.body)):
+            if body and _first_line(child) <= body[-1]["no"]:
+                continue
             body.append(
                 _doc(child, lines)
                 if index == 0 and _is_docstring(child)
@@ -75,34 +79,51 @@ def _item(node: ast.stmt, lines: list[str]) -> dict[str, Any]:
             )
         return {
             "kind": "class",
-            "name": node.name,
-            "no": node.lineno,
-            "text": _line(lines, node.lineno),
-            "decorators": decorators,
+            "name": cls.name,
+            "no": cls.line,
+            "text": _line(lines, cls.line),
+            "decorators": _decorators(cls.decorators, lines),
             "body": body,
-            "end": end,
+            "end": cls.end_line or cls.line,
         }
+    end = node.end_line or node.line
     return {
         "kind": "stmt",
-        "no": node.lineno,
-        "text": _line(lines, node.lineno),
-        "multi": end > node.lineno,
+        "no": node.line,
+        "text": _line(lines, node.line),
+        "multi": end > node.line,
     }
 
 
-def _doc(node: ast.stmt, lines: list[str]) -> dict[str, Any]:
+def _in_order(body: list[m.Stmt]) -> list[m.Stmt]:
+    return sorted(body, key=_first_line)
+
+
+def _first_line(node: m.Stmt) -> int:
+    if isinstance(node, m.FunctionDef):
+        return node.function.line
+    if isinstance(node, m.ClassDef):
+        return node.cls.line
+    return node.line
+
+
+def _decorators(decorators: list[m.Expr], lines: list[str]) -> list[list[Any]]:
+    return [[d.line, _line(lines, d.line)] for d in decorators]
+
+
+def _doc(node: m.Stmt, lines: list[str]) -> dict[str, Any]:
     return {
         "kind": "doc",
-        "no": node.lineno,
-        "text": _line(lines, node.lineno),
-        "multi": (node.end_lineno or node.lineno) > node.lineno,
+        "no": node.line,
+        "text": _line(lines, node.line),
+        "multi": (node.end_line or node.line) > node.line,
     }
 
 
-def _is_docstring(node: ast.stmt) -> bool:
+def _is_docstring(node: m.Stmt) -> bool:
     return (
-        isinstance(node, ast.Expr)
-        and isinstance(node.value, ast.Constant)
+        isinstance(node, m.ExprStmt)
+        and isinstance(node.value, m.Literal)
         and isinstance(node.value.value, str)
     )
 

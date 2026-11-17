@@ -3,13 +3,23 @@ const PY_BUILTINS = new Set('abs all any bool bytes callable chr dict dir divmod
 const PY_TYPES = new Set('bool bytes complex dict float frozenset int list object set str tuple type'.split(' '));
 const PY_TOKEN = /(#.*)|([rRbBuUfF]{0,2})("""|'''|"|')|(@[A-Za-z_][\w.]*)|(\b0[xXoObB][\da-fA-F_]+\b|\b\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d+)?j?\b|\.\d[\d_]*(?:[eE][+-]?\d+)?j?\b)|([A-Za-z_]\w*)/g;
 
-function pythonPainter(special = null) {
+const JS_KEYWORDS = new Set('abstract as async await break case catch class const continue debugger declare default delete do else enum export extends finally for from function get if implements import in instanceof interface keyof let new of private protected public readonly return satisfies set static switch throw try type typeof var void while with yield'.split(' '));
+const JS_BUILTINS = new Set('Array Boolean Date Error JSON Map Math Number Object Promise Reflect RegExp Set String Symbol WeakMap console document fetch parseFloat parseInt require setInterval setTimeout window'.split(' '));
+const JS_TYPES = new Set('any bigint boolean never number object string symbol unknown void'.split(' '));
+const JS_TOKEN = /(\/\/.*)|(\/\*)|(["'`])|(@[A-Za-z_$][\w$.]*)|(\b0[xXoObB][\da-fA-F_]+n?\b|\b\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d+)?n?\b|\.\d[\d_]*(?:[eE][+-]?\d+)?\b)|([A-Za-z_$][\w$]*)/g;
+
+function languageOf(path) { return /\.[cm]?[jt]sx?$/.test(path || '') ? 'script' : 'python'; }
+
+function codePainter(special = null, fixedPath = null) {
   let open = null;
   let last = null;
-  return (text, no) => {
-    if (no == null || last == null || no !== last + 1) open = null;
+  let language = null;
+  return (text, no, path = fixedPath) => {
+    const now = languageOf(path);
+    if (no == null || last == null || no !== last + 1 || now !== language) open = null;
     last = no == null ? null : no;
-    const { parts, close } = paintPython(text, open, special);
+    language = now;
+    const { parts, close } = now === 'script' ? paintScript(text, open, special) : paintPython(text, open, special);
     open = close;
     return parts;
   };
@@ -60,6 +70,75 @@ function paintPython(text, open, special = null) {
   }
   plainUpTo(text.length);
   return { parts: parts.length ? parts : [text], close: null };
+}
+
+function paintScript(text, open, special = null) {
+  const parts = [];
+  const plainUpTo = (end) => { if (end > at) parts.push(text.slice(at, end)); };
+  const token = (cls, end) => { const piece = text.slice(at, end); parts.push(cls === 'plain' ? piece : el('span', { class: `s-${cls}` }, piece)); at = end; };
+  let at = 0;
+  if (open === '*/') {
+    const end = text.indexOf('*/');
+    if (end < 0) return { parts: [el('span', { class: 's-comment' }, text)], close: open };
+    token('comment', end + 2);
+  } else if (open === '`') {
+    const end = closingQuote(text, 0, '`');
+    if (end < 0) return { parts: [el('span', { class: 's-str' }, text)], close: open };
+    token('str', end);
+  }
+  let previousWord = null;
+  JS_TOKEN.lastIndex = at;
+  for (let m = JS_TOKEN.exec(text); m; m = JS_TOKEN.exec(text)) {
+    plainUpTo(m.index);
+    at = m.index;
+    const end = m.index + m[0].length;
+    if (m[1]) { token('comment', text.length); break; }
+    if (m[2]) {
+      const close = text.indexOf('*/', end);
+      if (close < 0) { token('comment', text.length); return { parts, close: '*/' }; }
+      token('comment', close + 2);
+      JS_TOKEN.lastIndex = close + 2;
+      previousWord = null;
+      continue;
+    }
+    if (m[3]) {
+      const close = closingQuote(text, end, m[3]);
+      if (close < 0) { token('str', text.length); return { parts, close: m[3] === '`' ? '`' : null }; }
+      token('str', close);
+      JS_TOKEN.lastIndex = close;
+      previousWord = null;
+      continue;
+    }
+    if (m[4]) { token('deco', end); continue; }
+    if (m[5]) { token('num', end); continue; }
+    const hit = special && special(text, m.index);
+    if (hit) {
+      parts.push(hit.node);
+      at = hit.end;
+      JS_TOKEN.lastIndex = hit.end;
+      previousWord = null;
+      continue;
+    }
+    const word = m[6];
+    token(scriptWordClass(word, previousWord, text, end), end);
+    previousWord = word;
+  }
+  plainUpTo(text.length);
+  return { parts: parts.length ? parts : [text], close: null };
+}
+
+function scriptWordClass(word, previousWord, text, end) {
+  if (previousWord === 'function') return 'fn';
+  if (['class', 'interface', 'type', 'enum', 'extends', 'implements', 'new'].includes(previousWord)) return 'type';
+  if (JS_KEYWORDS.has(word)) return 'kw';
+  if (word === 'true' || word === 'false') return 'bool';
+  if (word === 'null' || word === 'undefined') return 'none';
+  if (word === 'this' || word === 'super') return 'self';
+  if (JS_TYPES.has(word)) return 'type';
+  if (/^_*[A-Z][A-Z0-9_]+$/.test(word)) return 'const';
+  if (/^_*[A-Z]\w*[a-z]\w*$/.test(word)) return 'type';
+  if (/^\s*\(/.test(text.slice(end))) return JS_BUILTINS.has(word) ? 'builtin' : 'call';
+  return 'plain';
 }
 
 function closingQuote(text, from, quote) {
