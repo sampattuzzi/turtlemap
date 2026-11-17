@@ -1,5 +1,6 @@
 import ast
 import difflib
+import hashlib
 import textwrap
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -17,6 +18,36 @@ MODIFIED = "modified"
 class _Symbol:
     id: str
     qual: str
+    text: str
+
+
+@dataclass(frozen=True)
+class ReviewUnit:
+    id: str
+    kind: str
+    qual: str | None
+    owner: str | None
+    line: int
+    status: str
+    fingerprint: str
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "qual": self.qual,
+            "owner": self.owner,
+            "line": self.line,
+            "diff": self.status,
+        }
+
+
+@dataclass(frozen=True)
+class _Piece:
+    kind: str
+    qual: str | None
+    owner: str | None
+    line: int
     text: str
 
 
@@ -39,8 +70,27 @@ class ProjectDiff:
         }
         self.status: dict[str, str] = {}
         self.removed: dict[str, dict[str, Any]] = {}
+        self.units: dict[str, list[ReviewUnit]] = {}
         for change in changes:
             self._compare_file(change)
+            self.units[change.path] = self._review_units(change)
+
+    def fingerprints(self, unit_ids: list[str]) -> list[str]:
+        wanted = set(unit_ids)
+        return [
+            unit.fingerprint
+            for units in self.units.values()
+            for unit in units
+            if unit.id in wanted
+        ]
+
+    def seen_units(self, seen_fingerprints: set[str]) -> list[str]:
+        return [
+            unit.id
+            for units in self.units.values()
+            for unit in units
+            if unit.fingerprint in seen_fingerprints
+        ]
 
     def summary(self) -> dict[str, Any]:
         counts = {ADDED: 0, REMOVED: 0, MODIFIED: 0}
@@ -48,8 +98,8 @@ class ProjectDiff:
             counts[change.status] += 1
         return {
             "spec": self.range.spec,
-            "base": self.range.base,
-            "head": self.range.head,
+            "baseSha": self.range.base_sha,
+            "headSha": self.range.head_sha,
             "baseLabel": self.range.base_label,
             "headLabel": self.range.head_label,
             "files": {
@@ -62,6 +112,10 @@ class ProjectDiff:
             "counts": counts,
             "status": self.status,
             "removed": self.removed,
+            "units": {
+                path: [unit.to_json() for unit in units]
+                for path, units in sorted(self.units.items())
+            },
         }
 
     def outline(self, path: str) -> list[dict[str, Any]] | None:
@@ -143,6 +197,37 @@ class ProjectDiff:
             self._record_removed(
                 path, base_summary, {base_symbols[i].qual for i in removed_ids}
             )
+
+    def _review_units(self, change: FileChange) -> list[ReviewUnit]:
+        path = change.path
+        base = (
+            _pieces(self.base, change.old_path or path, path)
+            if change.status != ADDED
+            else {}
+        )
+        head = _pieces(self.head, path, path) if change.status != REMOVED else {}
+        units = [
+            unit
+            for unit_id in {**base, **head}
+            if (unit := _review_unit(unit_id, base.get(unit_id), head.get(unit_id)))
+        ]
+        if not units:
+            units = [self._whole_file_unit(change)]
+        return sorted(units, key=lambda unit: (unit.kind != "top", unit.line))
+
+    def _whole_file_unit(self, change: FileChange) -> ReviewUnit:
+        unit_id = f"top:{change.path}"
+        before = _source(self.base, change.old_path or change.path)
+        after = _source(self.head, change.path)
+        return ReviewUnit(
+            unit_id,
+            "top",
+            None,
+            None,
+            1,
+            change.status,
+            _fingerprint(unit_id, f"{change.old_path}\0{before}", after),
+        )
 
     def _compare_members(
         self, path: str, base: dict[str, Any] | None, head: dict[str, Any] | None
@@ -363,6 +448,8 @@ def _node_signature(node: dict[str, Any]) -> tuple[Any, ...]:
         tuple((pin["name"], pin.get("lit")) for pin in node.get("ins", [])),
         tuple(pin["name"] for pin in node.get("outs", [])),
         node.get("note"),
+        node.get("code"),
+        tuple(node.get("expr", [])),
     )
 
 
@@ -440,8 +527,114 @@ def _function_text(project: Project, path: str, qual: str) -> str | None:
 def _node_text(
     module: ParsedModule, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
 ) -> str:
-    start = min([node.lineno] + [decorator.lineno for decorator in node.decorator_list])
-    end = node.end_lineno or node.lineno
+    start, end = _span(node)
     return textwrap.dedent(
         "\n".join(line.rstrip() for line in module.lines[start - 1 : end])
     )
+
+
+def _span(
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+) -> tuple[int, int]:
+    start = min([node.lineno] + [decorator.lineno for decorator in node.decorator_list])
+    return start, node.end_lineno or node.lineno
+
+
+def _pieces(project: Project, path: str, unit_path: str) -> dict[str, _Piece]:
+    module = project.workspace.module(path)
+    if module is None:
+        source = _source(project, path)
+        if source is None:
+            return {}
+        lines = source.splitlines()
+        return {
+            f"top:{unit_path}": _Piece(
+                "top", None, None, 1, _code_outside(lines, 1, len(lines), [])
+            )
+        }
+    definitions = [(qual, parsed.node) for qual, parsed in module.classes.items()] + [
+        (qual, parsed.node) for qual, parsed in module.functions.items()
+    ]
+    pieces = {
+        f"top:{unit_path}": _Piece(
+            "top",
+            None,
+            None,
+            1,
+            _code_outside(
+                module.lines,
+                1,
+                len(module.lines),
+                [_span(node) for _, node in definitions],
+            ),
+        )
+    }
+    for qual, parsed_class in module.classes.items():
+        start, end = _span(parsed_class.node)
+        inner = [
+            _span(node) for inner, node in definitions if inner.startswith(f"{qual}.")
+        ]
+        pieces[f"body:{unit_path}:{qual}"] = _Piece(
+            "body",
+            qual,
+            qual,
+            start,
+            textwrap.dedent(_code_outside(module.lines, start, end, inner)),
+        )
+    for qual, function in module.functions.items():
+        owner = function.class_qualname
+        pieces[f"{'m' if owner else 'fn'}:{unit_path}:{qual}"] = _Piece(
+            "method" if owner else "function",
+            qual,
+            owner,
+            _span(function.node)[0],
+            _node_text(module, function.node),
+        )
+    return pieces
+
+
+def _code_outside(
+    lines: list[str], start: int, end: int, holes: list[tuple[int, int]]
+) -> str:
+    hidden = {number for first, last in holes for number in range(first, last + 1)}
+    return "\n".join(
+        lines[number - 1].rstrip()
+        for number in range(start, end + 1)
+        if number not in hidden and lines[number - 1].strip()
+    )
+
+
+def _review_unit(
+    unit_id: str, base: _Piece | None, head: _Piece | None
+) -> ReviewUnit | None:
+    before = base.text if base and base.text else None
+    after = head.text if head and head.text else None
+    shown = head or base
+    if before == after or shown is None:
+        return None
+    return ReviewUnit(
+        unit_id,
+        shown.kind,
+        shown.qual,
+        shown.owner,
+        shown.line,
+        ADDED if before is None else REMOVED if after is None else MODIFIED,
+        _fingerprint(unit_id, before, after),
+    )
+
+
+def _fingerprint(unit_id: str, before: str | None, after: str | None) -> str:
+    digest = hashlib.sha256(unit_id.encode())
+    for side in (before, after):
+        digest.update(b"\0absent" if side is None else b"\0text\0" + side.encode())
+    return digest.hexdigest()[:24]
+
+
+def _source(project: Project, path: str) -> str | None:
+    module = project.workspace.module(path)
+    if module is not None:
+        return module.source
+    try:
+        return (project.root / path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None

@@ -188,6 +188,27 @@ def class_fields(
     return fields
 
 
+def module_constants(
+    module: ParsedModule,
+) -> list[tuple[str, ast.AnnAssign | ast.Assign]]:
+    found: list[tuple[str, ast.AnnAssign | ast.Assign]] = []
+    for statement in module.tree.body:
+        if (
+            isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and statement.value is not None
+        ):
+            found.append((statement.target.id, statement))
+        elif (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and _is_constant_name(statement.targets[0].id)
+        ):
+            found.append((statement.targets[0].id, statement))
+    return found
+
+
 def _class_summaries(
     types: TypeSystem, resolver: TypeResolver, module: ParsedModule, parsed: ParsedClass
 ) -> list[dict[str, Any]]:
@@ -328,33 +349,13 @@ def _fields(
 
 def _constants(resolver: TypeResolver, module: ParsedModule) -> list[list[Any]]:
     out: list[list[Any]] = []
-    for statement in module.tree.body:
-        if (
-            isinstance(statement, ast.AnnAssign)
-            and isinstance(statement.target, ast.Name)
-            and statement.value is not None
-        ):
-            out.append(
-                [
-                    statement.target.id,
-                    resolver.annotation(statement.annotation).to_json(),
-                    _value_text(statement.value) or "",
-                ]
-            )
-        elif (
-            isinstance(statement, ast.Assign)
-            and len(statement.targets) == 1
-            and isinstance(statement.targets[0], ast.Name)
-        ):
-            name = statement.targets[0].id
-            if name.isupper() or (name.lstrip("_").isupper() and name.lstrip("_")):
-                out.append(
-                    [
-                        name,
-                        _value_type(resolver, statement.value).to_json(),
-                        _value_text(statement.value) or "",
-                    ]
-                )
+    for name, statement in module_constants(module):
+        pin = (
+            resolver.annotation(statement.annotation)
+            if isinstance(statement, ast.AnnAssign)
+            else _value_type(resolver, statement.value)
+        )
+        out.append([name, pin.to_json(), _value_text(statement.value) or ""])
     return out
 
 
@@ -448,3 +449,8 @@ def _first_paragraph(doc: str | None) -> str | None:
     if not doc:
         return None
     return doc.strip().split("\n\n")[0].replace("\n", " ")[:400]
+
+
+def _is_constant_name(name: str) -> bool:
+    bare = name.lstrip("_")
+    return bool(bare) and bare.isupper()

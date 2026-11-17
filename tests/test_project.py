@@ -64,6 +64,32 @@ SHOP = {
 }
 
 
+STOCK = """
+    from dataclasses import dataclass
+    from typing import Optional
+
+    from shop.models import Item
+
+
+    @dataclass
+    class Shelf:
+        by_name: dict[str, Item]
+        later: Optional[list[Item]]
+        labels: list[str]
+"""
+
+LONG_TYPE = "dict[tuple[str, str, str], Callable[[Request, dict[str, str]], Awaitable[Response]]]"
+
+ROUTES = f"""
+    from dataclasses import dataclass
+
+
+    @dataclass
+    class Table:
+        handlers: {LONG_TYPE}
+"""
+
+
 def symbol(overview: dict[str, Any], path: str, qual: str) -> dict[str, Any]:
     module = next(m for m in overview["modules"] if m["path"] == path)
     return next(s for s in module["symbols"] if s["qual"] == qual)
@@ -76,6 +102,10 @@ def edges(overview: dict[str, Any]) -> set[tuple[str, str, str]]:
         for row in overview["edges"]["rows"]
         for kind in row[2].split(",")
     }
+
+
+def expect_holds(pin: dict[str, Any], class_name: str) -> None:
+    assert pin["items"] == {"path": "src/shop/models.py", "sym": class_name}
 
 
 def test_lists_every_python_module(make_project: ProjectFactory) -> None:
@@ -195,6 +225,48 @@ def test_links_field_to_the_class_of_its_type(make_project: ProjectFactory) -> N
     ) in edges(make_project(SHOP).overview())
 
 
+def test_links_list_field_to_the_class_it_holds(make_project: ProjectFactory) -> None:
+    assert (
+        "f:src/shop/models.py:Basket.items",
+        "cls:src/shop/models.py:Item",
+        "has",
+    ) in edges(make_project(SHOP).overview())
+
+
+def test_links_dict_field_to_the_class_of_its_values(
+    make_project: ProjectFactory,
+) -> None:
+    project = make_project({**SHOP, "src/shop/stock.py": STOCK})
+
+    assert (
+        "f:src/shop/stock.py:Shelf.by_name",
+        "cls:src/shop/models.py:Item",
+        "has",
+    ) in edges(project.overview())
+
+
+def test_records_the_class_a_container_field_holds(
+    make_project: ProjectFactory,
+) -> None:
+    project = make_project({**SHOP, "src/shop/stock.py": STOCK})
+
+    fields = dict(symbol(project.overview(), "src/shop/stock.py", "Shelf")["fields"])
+
+    expect_holds(fields["by_name"], "Item")
+    expect_holds(fields["later"], "Item")
+    assert "items" not in fields["labels"]
+
+
+def test_keeps_the_whole_label_of_a_long_field_type(
+    make_project: ProjectFactory,
+) -> None:
+    project = make_project({**SHOP, "src/shop/routes.py": ROUTES})
+
+    fields = dict(symbol(project.overview(), "src/shop/routes.py", "Table")["fields"])
+
+    assert fields["handlers"]["label"] == LONG_TYPE
+
+
 def test_links_calls_and_constructions_across_modules(
     make_project: ProjectFactory,
 ) -> None:
@@ -217,6 +289,44 @@ def test_links_calls_and_constructions_across_modules(
     ) in found
 
 
+def test_links_methods_called_on_the_result_of_a_call(
+    make_project: ProjectFactory,
+) -> None:
+    found = edges(
+        make_project(
+            {
+                **SHOP,
+                "src/shop/till.py": """
+                    from shop.models import Basket
+
+
+                    def fresh(owner: str) -> Basket:
+                        return Basket(owner)
+
+
+                    def ring_up(owner: str) -> float:
+                        return Basket(owner).total()
+
+
+                    def ring_up_fresh(owner: str) -> str:
+                        return fresh(owner).publish()
+                """,
+            }
+        ).overview()
+    )
+
+    assert (
+        "fn:src/shop/till.py:ring_up",
+        "m:src/shop/models.py:Basket.total",
+        "calls",
+    ) in found
+    assert (
+        "fn:src/shop/till.py:ring_up_fresh",
+        "m:src/shop/models.py:Basket.publish",
+        "calls",
+    ) in found
+
+
 def test_links_methods_to_the_fields_they_read_and_write(
     make_project: ProjectFactory,
 ) -> None:
@@ -232,6 +342,54 @@ def test_links_methods_to_the_fields_they_read_and_write(
         "f:src/shop/models.py:Basket.items",
         "reads",
     ) in found
+
+
+def test_links_functions_to_fields_they_touch_on_other_objects(
+    make_project: ProjectFactory,
+) -> None:
+    found = edges(
+        make_project(
+            {
+                "box.py": "class Box:\n    def __init__(self) -> None:\n        self.items: list[int] = []\n",
+                "use.py": "from box import Box\n\n\ndef empty(box: Box) -> None:\n    box.items = []\n\n\ndef size(box: Box) -> int:\n    return len(box.items)\n",
+            }
+        ).overview()
+    )
+
+    assert ("fn:use.py:empty", "f:box.py:Box.items", "writes") in found
+    assert ("fn:use.py:size", "f:box.py:Box.items", "reads") in found
+
+
+def test_links_code_to_the_constants_it_reads(make_project: ProjectFactory) -> None:
+    found = edges(
+        make_project(
+            {
+                "limits.py": "MAX = 3\n",
+                "direct.py": "from limits import MAX\n\n\ndef cap(n: int) -> int:\n    return min(n, MAX)\n",
+                "dotted.py": "import limits\n\n\ndef cap(n: int) -> int:\n    return min(n, limits.MAX)\n",
+                "local.py": "STEP = 2\n\n\ndef bump(n: int) -> int:\n    return n + STEP\n",
+            }
+        ).overview()
+    )
+
+    assert ("fn:direct.py:cap", "c:limits.py:MAX", "reads") in found
+    assert ("fn:dotted.py:cap", "c:limits.py:MAX", "reads") in found
+    assert ("fn:local.py:bump", "c:local.py:STEP", "reads") in found
+
+
+def test_links_a_constant_to_the_code_its_value_names(
+    make_project: ProjectFactory,
+) -> None:
+    found = edges(
+        make_project(
+            {
+                "tools.py": "class Tool:\n    def __init__(self, run: object) -> None:\n        self.run = run\n\n\ndef hello() -> str:\n    return 'hi'\n\n\nTOOLS = (Tool(hello),)\n"
+            }
+        ).overview()
+    )
+
+    assert ("c:tools.py:TOOLS", "cls:tools.py:Tool", "creates") in found
+    assert ("c:tools.py:TOOLS", "fn:tools.py:hello", "uses") in found
 
 
 def test_links_library_calls_to_library_names(make_project: ProjectFactory) -> None:

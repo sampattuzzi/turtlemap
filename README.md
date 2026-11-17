@@ -4,28 +4,93 @@ A local web app for reading a Python codebase as pictures instead of text. It wa
 built to make code easier to follow for people with dyslexia, but it works for
 anyone who wants a map of unfamiliar code.
 
-Open a project folder and you get two views:
+Open a project folder and you get three views:
 
 - **The map.** Packages, modules, classes, functions and fields are nested
   boxes. Click a box to open it. Lines show how things depend on each other:
-  inherits, has a field of, creates, calls, reads, writes and uses. Lines are
-  coloured only at the deepest level you have opened; the rest stay grey until
-  you hover over a collapsed box or the header of an open one. Select a
+  inherits, has a field of, creates, calls, reads, writes and uses. Arrows only
+  join neighbours, boxes inside the same parent: two open modules get one
+  arrow between them, and inside each you see only the arrows between its own
+  classes and functions. An arrow gets thicker the more dependencies it stands
+  for, and one-off links are faded. Inside an open box, a faint feeder line
+  runs from each item that depends on something outside to the corner where
+  the box's arrows leave, and from the corner where arrows arrive to each item
+  they reach, so every dependency still has a line without crowding the map.
+  Hover over an item to light its whole path: its feeder, the arrow between the
+  boxes and the feeders in the other box down to what it uses. Hover over an
+  arrow between two open boxes to light the feeders that make it up; when
+  either end is closed, a card lists the dependencies it stands for instead
+  (where arrows share a path, the card lists each of them). When A already
+  reaches C through B, the direct A → C arrow is a shortcut: it is drawn very
+  faintly, threaded between the boxes without moving them, and its card names
+  the way round through B. Every arrow leaves a box on its right and enters
+  on its left. Columns are ordered so that as few dependencies as possible
+  point backwards; only a real cycle needs an arrow back to an earlier column,
+  and it loops round in its own lane between the boxes. Two boxes that depend
+  on each other get two separate strands. Select a
   module (click it, or pick it in the file tree or with Find) and the map hides
   every module that neither depends on it nor is used by it; **✕ Show all**
   brings them back. Libraries appear as one box each, and the standard
-  library gets one box of its own. The panel under the map shows the real
-  source, folded to match what you have opened.
+  library gets one box of its own. Module constants are boxes too, with lines
+  to the code that reads them and from them to whatever their value names
+  (a table of handlers links to each handler). **Show** in the corner of the
+  map hides test files (and libraries only tests import) or constants. The
+  panel under the map shows the real source, folded to match what you have
+  opened and coloured with the same palette as the wires: strings are the pink
+  of a `str` wire, numbers the green of an `int`.
+- **The data model.** **▦ Data** in the top bar shows an entity–relationship
+  diagram: only dataclasses, models and enums, with their fields, and a line
+  from each field that holds another data class to that class. The ends of each
+  line show how many: two bars for exactly one, a circle and a bar for zero or
+  one (`Optional`), and a crow's foot for many (a list, set, tuple or dict of
+  them); the label spells it out, such as *one to many*. When both classes hold
+  each other the line pairs the two fields and can read *many to many*; when
+  only one side holds the other, the holder counts as one. Classes that link
+  to each other are laid out together and the groups are packed side by side.
+  The view opens on the package or module you were looking at on the map;
+  change it in the list at the top. Data classes from elsewhere that link in
+  are faded. More than 250 data classes at once is too many to draw, so a large
+  project asks you to pick a package first.
 - **The blueprint.** Click a function or method to see it as a dataflow graph
   in the style of Unreal Engine blueprints. Each value is a wire whose colour
   shows its type. A white execution line marks where the order of steps
   matters. Press ⧉ on a call to unfold the called function in place, or **Go
-  into** to make it the whole view. The code panel highlights the line behind
-  whichever node you select.
+  into** to make it the whole view. Hover over a wire to light it and the two
+  pins it joins; a card names both ends and gives the value's full type
+  (where wires overlap, it lists each). The code panel highlights the line
+  behind whichever node you select. Arithmetic and logic stay readable: a variable
+  set from an expression (`north = np.cos(lat) * np.sin(dec) - …`) is one
+  node named after the variable, with the expression written out and one input
+  per local it reads. Library maths such as `np.sin` or `len` is folded in;
+  calls into your own code and reads from your own classes stay as their own
+  nodes. The condition of an `if` or `while` is written into the branch, loop
+  or select node in the same way.
 
-**Aa Reading** changes the label font (Lexend, Atkinson Hyperlegible, Comic
+When you hover over a box on the map or a node in a blueprint, every line
+that leads off screen gets a small marker on the edge of the view, like on a
+map: an arrow pointing the way and the name of the thing at the other end,
+with its file in front (`agent.py › connect()`) when it lives in another
+module. Click a marker to glide there.
+
+The code panel under the map has a **Code** tab on its top edge: click it to
+hide or show the panel, or drag it to resize. The cog menu holds the reading
+settings, which change the label font (Lexend, Atkinson Hyperlegible, Comic
 Neue or monospace), the text size, the background, and whether names are
-spaced out. Press `/` to find any file, class or function.
+spaced out. It also picks how blueprints and the map are laid out:
+
+| Layout | What you get |
+|---|---|
+| Balanced (default) | Sweeps each node toward the middle of its wires |
+| Classic | The original sweeps, toward the average of the wires; more of them bend |
+| Compact | Network simplex: the least wire travel and the shortest blueprints, but fewer straight wires |
+| Straighter | Brandes–Köpf locks chains of wires into straight runs, then simplex packs them |
+| Straightest | Brandes–Köpf alone: the most straight wires, in taller blueprints |
+
+On the map, Balanced and Classic are the same: the map's own sweeps, which keep
+nodes close together. The other three run on each open box's columns, with wires
+meeting at node headers.
+
+Press `/` to find any file, class or function.
 
 Nothing leaves your machine. The app reads your code with Python's `ast`
 module and never imports or runs it. It serves the UI from a server on
@@ -88,11 +153,114 @@ it go. Everything is tinted by what happened to it:
 
 This covers packages, modules, classes, functions, methods and fields on the
 map; files and symbols in the file tree; nodes, pins and execution wires in a
-blueprint (a call turns yellow when the function it calls changed); and lines
+blueprint (a call turns yellow when the function it calls changed, and a
+field read when one of the fields it reads changed); and lines
 in both code views, where removed lines are shown in place. The panel under the
 map lists every changed file. Each revision is read from git into
 `~/.cache/code-blueprints/trees`, so comparing a large project takes a little
 while the first time.
+
+### Ticking off what you have reviewed
+
+While comparing, the left panel has two tabs. **Files** is the whole project;
+**Changes** lists only the changed files, like a pull request. Each changed
+file opens into the parts that changed: functions, methods, a class's own body
+(fields, decorators, class attributes) and the module-level code (imports,
+constants). Tick a part, a class, a file or a folder to mark it seen; ticking a
+file or folder ticks every part inside it. The ✓ **Seen** box next to the
+breadcrumbs does the same for the function or file you are looking at.
+
+What you have seen is saved per project in `~/.config/code-blueprints/seen`,
+as a fingerprint of each part's old and new text. If a part's change is
+different next time (a new commit, an edit, a different range), only that part
+is unticked; everything else stays seen, even if you ticked it by ticking its
+whole file. Blank lines don't count as a change.
+
+## Comments
+
+Select something and press **C** (or **💬 Comment** in the bar that appears) to
+comment on it:
+
+- **On the map**, click a box, ⌘/Ctrl-click to add more, or Shift-drag a
+  rectangle around several.
+- **In a blueprint**, the same with nodes.
+- **In the code panel**, drag down the line numbers (Shift-click extends).
+
+Comments show as 💬 pins on the boxes, nodes and lines they point at; when the
+exact spot is folded away, the pin sits on the nearest visible box or folded
+line. The **Comments** tab in the left panel lists them, and `[` / `]` step
+through the open ones, moving the view to each. Only you can resolve a comment.
+A line comment remembers the text it was made on, so it follows the code when
+lines move, and is marked *outdated* when that text changes. Comments are saved
+per project in `~/.config/code-blueprints/comments`.
+
+### Working with a coding agent
+
+An agent working on the same branch can read and answer comments. While
+`code-blueprints` is running, it publishes its address and a separate agent
+token in `~/.config/code-blueprints/servers` (readable only by you). The agent
+can reply, and mark comments seen, working (with a short note such as
+"updating plots.py") or done, but it cannot resolve them. You see its replies
+live, its state on each comment, and its status line in the top bar.
+
+`code-blueprints-agent` is the command-line way in. It lives in this
+repository's environment, so from the project folder run it through Poetry,
+pointing `--root` at the project (an alias saves typing):
+
+```bash
+alias code-blueprints-agent='poetry -C /path/to/code-blueprints run code-blueprints-agent --root "$PWD"'
+```
+
+```bash
+code-blueprints-agent watch            # one line per new comment, reply, resolve
+code-blueprints-agent show c3          # the thread and the code it points at
+code-blueprints-agent working c3 --note "updating plots.py"
+code-blueprints-agent reply c3 "Split it into two functions"
+code-blueprints-agent done c3
+code-blueprints-agent status "running the tests"
+```
+
+In Claude Code, run `code-blueprints-agent watch` under the Monitor tool: each
+line it prints arrives as a notification, starting with the comments the agent
+has not looked at yet. Re-arm it when it expires and nothing is lost.
+
+`code-blueprints-mcp` offers the same through MCP over stdio, with a
+`comments_wait` tool to block until the reviewer says something:
+
+```bash
+claude mcp add code-blueprints -- poetry -C /path/to/code-blueprints run code-blueprints-mcp --root /path/to/project
+```
+
+### Asking about the structure
+
+The agent can ask about the code the same way the map shows it:
+
+```bash
+code-blueprints-agent query report                 # every module, plus the most coupled pairs
+code-blueprints-agent query describe pkg/plots.py  # contains, depends on, used by
+code-blueprints-agent query cohesion Plotter        # class, module, package or function
+code-blueprints-agent query coupling pkg/a.py pkg/b.py
+code-blueprints-agent query blueprint Plotter.draw  # a function's nodes and wires as text
+code-blueprints-agent query tree pkg --depth 3
+code-blueprints-agent query find plot
+```
+
+Names can be map ids (`cls:pkg/plots.py:Plotter`), paths, dotted modules or
+`Class.method`; an ambiguous name lists the candidates. Every answer states its
+formula:
+
+- **Class cohesion** is LCOM4, the number of groups of methods that share no
+  field and don't call each other. A field that most methods use, such as a
+  lock, is reported as a hub, with the count you get without it.
+- **Module and package cohesion** is the number of linked groups among the
+  members, plus internal links ÷ all links to project code.
+- **Function cohesion** counts independent dataflow strands. It is a heuristic.
+- **Coupling** weighs the edges between two parts by kind. It is *tight* for
+  inheritance, writing the other's fields, a cycle, or a high score.
+- **Instability** is Ce ÷ (Ca + Ce), with tests left out of Ca.
+
+Only Python is analysed: the numbers say nothing about JavaScript or other
+files.
 
 ## Tests
 
@@ -101,6 +269,16 @@ poetry run mypy .
 poetry run pytest tests
 ```
 
+## Measuring the layout
+
+[dev/layout-stats.js](dev/layout-stats.js) measures how straight the wires are.
+Open a project in the app, paste the script into the browser console, and it
+prints a table for 150 sampled blueprints and for the map opened two and three
+levels deep: the share of wires with no vertical travel, the mean vertical
+travel per wire, blueprint wire crossings and the total drawing height. Run it
+before and after a layout change, on a small project and a large one. It measures
+whichever layout the cog menu has selected.
+
 ## How it works
 
 | Part | What it does |
@@ -108,12 +286,27 @@ poetry run pytest tests
 | `analysis/workspace.py` | Finds the project's Python files, parses them and resolves imports, including `src/` layouts and relative and re-exported imports |
 | `analysis/types.py` | Turns annotations into pin types and colours, and classifies classes as enum, struct (dataclass, model, …), interface or object |
 | `analysis/symbols.py` | Summarises each module: classes, fields (including ones assigned to `self`), methods, functions, constants and imports |
-| `analysis/dependencies.py` | Builds the dependency lines for the map |
+| `analysis/dependencies.py` | Builds the dependency lines for the map, including field reads, writes and method calls through typed objects, whether held in a variable, a field or the result of a call such as `Thing(...).run()` |
 | `analysis/graph.py` | Builds the dataflow and execution graph for one function |
 | `analysis/outline.py` | Builds the folded source outline shown under the map |
 | `analysis/project.py` | Ties the analysis together for the server |
+| `analysis/structure.py` | Answers structure questions from the map: describe, cohesion, coupling, instability |
 | `git.py` | Resolves ranges, lists changed files and extracts revisions with `git archive` |
-| `analysis/diff.py` | Compares two revisions: symbol changes, merged outlines, code and blueprints |
-| `server.py` | Local HTTP API, cached overview, folder opening and recent projects |
+| `analysis/diff.py` | Compares two revisions: symbol changes, merged outlines, code, blueprints and the parts to review |
+| `seen.py` | Saves the fingerprints of the changes you have ticked as seen |
+| `comments.py` | Stores comment threads, the agent's state on each, and an event log to wait on |
+| `anchors.py` | Finds where a comment points now, and whether that code changed |
+| `collaboration.py` | `CollaborationService`: the comment routes for the reviewer and the agent |
+| `queries.py` | `QueryService`: the structure query routes |
+| `registry.py` | Publishes a running server's address and agent token so the agent tools can find it |
+| `agent.py` | `code-blueprints-agent`: watch, answer and query from the command line |
+| `mcp.py` | `code-blueprints-mcp`: the same as MCP tools over stdio |
+| `web.py` | HTTP plumbing: `Request`, `Response`, the `Router` and the handler that checks tokens, parses bodies and compresses replies |
+| `host.py` | `ProjectHost`: the open project and comparison as one `Session`, loaded in the background |
+| `overview_cache.py` | Caches each project's map on disk, keyed by file sizes and modification times |
+| `comparison.py` | Extracts the two revisions of a range and builds their `ProjectDiff` |
+| `services.py` | `ProjectService`, `ComparisonService` and `StaticFiles`: the project, comparison and page routes |
+| `recent.py` | Remembers recently opened projects |
+| `server.py` | Puts the services on one router and starts the server |
 | `app.py` | Command line: starts the server and opens the browser |
-| `static/` | The UI: layout, wire routing and rendering, in plain JavaScript |
+| `static/` | The UI: layout, wire routing and rendering, in plain JavaScript; `highlight.js` colours Python source, `layout.js` holds the Compact, Straighter and Straightest solvers and `datamodel.js` draws the data model |

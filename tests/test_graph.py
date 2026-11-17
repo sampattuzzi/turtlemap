@@ -280,15 +280,15 @@ def test_wires_variables_from_the_pin_that_produced_them(tmp_path: Path) -> None
         "double",
     )
 
-    entry, multiply, returned = (
+    entry, twice, returned = (
         nodes_of_kind(graph, "entry")[0],
-        the_node(graph, "*"),
+        the_node(graph, "twice"),
         the_node(graph, "Return"),
     )
     assert len(graph["nodes"]) == 3
-    assert source_of(graph, multiply, "a") == (entry["id"], "value")
-    assert input_pin(multiply, "b")["lit"] == "2"
-    assert source_of(graph, returned, "int") == (multiply["id"], "")
+    assert twice["expr"] == ["value * 2"]
+    assert source_of(graph, twice, "value") == (entry["id"], "value")
+    assert source_of(graph, returned, "int") == (twice["id"], "")
 
 
 def test_turns_if_return_into_select(tmp_path: Path) -> None:
@@ -306,9 +306,10 @@ def test_turns_if_return_into_select(tmp_path: Path) -> None:
 
     select = the_node(graph, "Select")
     entry = nodes_of_kind(graph, "entry")[0]
-    assert source_of(graph, select, "condition") == (
-        the_node(graph, "is None")["id"],
-        "",
+    assert select["expr"] == ["current is None"]
+    assert source_of(graph, select, "current") == (
+        the_node(graph, "Break estimate")["id"],
+        "value",
     )
     assert source_of(graph, select, "if true") == (entry["id"], "fallback")
     assert source_of(graph, select, "if false") == (
@@ -670,7 +671,7 @@ def test_formats_f_strings_into_a_format_text_node(tmp_path: Path) -> None:
 
     text = the_node(graph, "Format text")
     assert [pin["name"] for pin in text["ins"]] == ["name", "count"]
-    assert "hello {name}" in text["note"]
+    assert "hello {name}" in text["code"]
 
 
 def test_notes_awaited_calls(tmp_path: Path) -> None:
@@ -784,3 +785,200 @@ def test_builds_well_formed_graphs_for_every_function_of_a_realistic_module(
             assert not any(
                 "Not drawn" in node.get("note", "") for node in graph["nodes"]
             ), function.qualname
+
+
+def test_writes_a_named_calculation_as_one_node(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        import numpy as np
+
+
+        def sun_position(latitude: float, declination: float, hour_angle: float) -> float:
+            north = np.cos(latitude) * np.sin(declination) - np.sin(
+                latitude
+            ) * np.cos(declination) * np.cos(hour_angle)
+            return north
+    """,
+        "sun_position",
+    )
+
+    node = the_node(graph, "north")
+    entry = nodes_of_kind(graph, "entry")[0]
+    assert len(graph["nodes"]) == 3
+    assert node["kind"] == "expr"
+    assert node["expr"] == [
+        "np.cos(latitude) * np.sin(declination)",
+        "- np.sin(latitude)",
+        "  * np.cos(declination)",
+        "  * np.cos(hour_angle)",
+    ]
+    assert [pin["name"] for pin in node["ins"]] == [
+        "latitude",
+        "declination",
+        "hour_angle",
+    ]
+    assert source_of(graph, node, "hour_angle") == (entry["id"], "hour_angle")
+    assert node["outs"][0]["type"]["cat"] == "float"
+
+
+def test_keeps_project_calls_as_their_own_nodes_inside_a_calculation(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def price(item):
+            return item.cost
+
+
+        def order_total(item, count: int):
+            total = price(item) * count + 1
+            return total
+    """,
+        "order_total",
+    )
+
+    calculation = the_node(graph, "total")
+    assert calculation["expr"] == ["price(item) * count + 1"]
+    assert source_of(graph, calculation, "price(item)") == (
+        the_node(graph, "price")["id"],
+        "",
+    )
+
+
+def test_folds_unnamed_multi_step_expressions_into_a_check(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def report(items, notify):
+            notify(len(items) > 3 and not items[0])
+    """,
+        "report",
+    )
+
+    check = the_node(graph, "Check")
+    assert check["expr"] == ["len(items) > 3 and not items[0]"]
+    assert [pin["name"] for pin in check["ins"]] == ["items"]
+    assert nodes_of_kind(graph, "op") == []
+
+
+def test_writes_an_inline_if_condition_into_the_branch(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def guard(count: int, limit: int, done: bool, log):
+            if count > limit and not done:
+                log.write("over")
+                level = 1
+            else:
+                level = 2
+            return level
+    """,
+        "guard",
+    )
+
+    branch = the_node(graph, "Branch")
+    assert branch["expr"] == ["count > limit and not done"]
+    assert [pin["name"] for pin in branch["ins"]] == ["count", "limit", "done"]
+    assert nodes_of_kind(graph, "op") == []
+    assert nodes_of_kind(graph, "expr") == []
+    assert source_of(graph, the_node(graph, "Select"), "condition") == (
+        branch["id"],
+        "condition",
+    )
+
+
+def test_writes_a_while_condition_into_the_loop(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def drain(queue, limit: int):
+            while len(queue) < limit:
+                queue.pop()
+    """,
+        "drain",
+    )
+
+    loop = the_node(graph, "While")
+    assert loop["expr"] == ["len(queue) < limit"]
+    assert [pin["name"] for pin in loop["ins"]] == ["queue", "limit"]
+
+
+def test_wraps_long_expressions_with_brackets_where_needed(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def rank(alpha: float, beta: float, gamma_adjustment: float, delta: float):
+            score = (alpha + beta * gamma_adjustment) * (delta - alpha) ** 2
+            return score
+    """,
+        "rank",
+    )
+
+    assert the_node(graph, "score")["expr"] == [
+        "(alpha + beta * gamma_adjustment)",
+        "* (delta - alpha) ** 2",
+    ]
+
+
+def test_keeps_field_reads_on_project_objects_as_their_own_nodes(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        from dataclasses import dataclass
+
+
+        @dataclass
+        class Order:
+            cost: float
+            count: int
+
+
+        def order_total(order: Order, tax: float) -> float:
+            total = order.cost * order.count + tax
+            return total
+    """,
+        "order_total",
+    )
+
+    calculation = the_node(graph, "total")
+    breaks = nodes_of_kind(graph, "break")
+    assert calculation["expr"] == ["order.cost * order.count + tax"]
+    assert [pin["name"] for pin in calculation["ins"]] == [
+        "order.cost",
+        "order.count",
+        "tax",
+    ]
+    assert len(breaks) == 1
+    assert calculation["outs"][0]["type"]["cat"] == "float"
+
+
+def test_names_long_operands_by_their_pin_in_the_expression(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def combine_measurements(first, second):
+            return first
+
+
+        def build(first_value, second_value, offset: float, flag: bool):
+            result = combine_measurements(first_value, second_value) + offset if flag else 0.0
+            return result
+    """,
+        "build",
+    )
+
+    result = the_node(graph, "result")
+    assert result["expr"] == [
+        "combine_measurements(first_… + offset",
+        "if flag",
+        "else 0.0",
+    ]
+    assert [pin["name"] for pin in result["ins"]] == [
+        "flag",
+        "combine_measurements(first_…",
+        "offset",
+    ]

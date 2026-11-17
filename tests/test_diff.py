@@ -101,31 +101,41 @@ def write(folder: Path, files: dict[str, str]) -> None:
         target.write_text(dedent(source).lstrip())
 
 
-def make_repository(tmp_path: Path) -> Path:
+def make_repository(
+    tmp_path: Path,
+    before: dict[str, str] = BEFORE,
+    after: dict[str, str] = AFTER,
+) -> Path:
     folder = tmp_path / "repo"
-    folder.mkdir()
+    folder.mkdir(parents=True)
     git(folder, "init", "-q", "-b", "main")
     git(folder, "config", "user.email", "test@example.com")
     git(folder, "config", "user.name", "Test")
-    write(folder, BEFORE)
+    write(folder, before)
     git(folder, "add", "-A")
     git(folder, "commit", "-q", "-m", "before")
     git(folder, "checkout", "-q", "-b", "feature")
-    (folder / "shop/legacy.py").unlink()
-    write(folder, AFTER)
+    for gone in set(before) - set(after):
+        (folder / gone).unlink()
+    write(folder, after)
     git(folder, "add", "-A")
     git(folder, "commit", "-q", "-m", "after")
     git(folder, "checkout", "-q", "main")
     return folder
 
 
-def make_diff(tmp_path: Path, spec: str = "main..feature") -> ProjectDiff:
-    folder = make_repository(tmp_path)
+def make_diff(
+    tmp_path: Path,
+    spec: str = "main..feature",
+    before: dict[str, str] = BEFORE,
+    after: dict[str, str] = AFTER,
+) -> ProjectDiff:
+    folder = make_repository(tmp_path, before, after)
     repository = Repository(folder)
     diff_range = repository.resolve_range(spec)
-    base_files = repository.extract(diff_range.base, tmp_path / "base")
-    assert diff_range.head is not None
-    head_files = repository.extract(diff_range.head, tmp_path / "head")
+    base_files = repository.extract(diff_range.base_sha, tmp_path / "base")
+    assert diff_range.head_sha is not None
+    head_files = repository.extract(diff_range.head_sha, tmp_path / "head")
     return ProjectDiff(
         Project(tmp_path / "base", base_files),
         Project(tmp_path / "head", head_files),
@@ -136,6 +146,14 @@ def make_diff(tmp_path: Path, spec: str = "main..feature") -> ProjectDiff:
 
 def statuses(diff: ProjectDiff) -> dict[str, str]:
     return dict(diff.summary()["status"])
+
+
+def review_units(diff: ProjectDiff, path: str) -> dict[str, str]:
+    return {unit["id"]: unit["diff"] for unit in diff.summary()["units"][path]}
+
+
+def fingerprints(diff: ProjectDiff, path: str) -> dict[str, str]:
+    return {unit.id: unit.fingerprint for unit in diff.units[path]}
 
 
 def test_reports_file_level_changes(tmp_path: Path) -> None:
@@ -208,7 +226,8 @@ def test_merged_graph_keeps_removed_nodes_and_marks_new_ones(tmp_path: Path) -> 
     by_title: dict[str, Any] = {
         node["title"]: node for node in payload["graph"]["nodes"]
     }
-    assert by_title["len"]["diff"] == "added"
+    assert by_title["Calculate"]["diff"] == "added"
+    assert by_title["Calculate"]["expr"] == ["2.0 * len(self.items)"]
     assert by_title["Return"]["diff"] == "modified"
     assert "diff" not in by_title["total"]
 
@@ -261,7 +280,7 @@ def test_three_dot_ranges_compare_against_the_merge_base(tmp_path: Path) -> None
     repository = Repository(folder)
 
     assert (
-        repository.resolve_range("main...feature").base
+        repository.resolve_range("main...feature").base_sha
         == git(folder, "rev-parse", "main~1").strip()
     )
 
@@ -274,7 +293,7 @@ def test_compares_against_the_working_copy_when_no_head_is_given(
     repository = Repository(folder)
     diff_range = repository.resolve_range("main")
 
-    assert diff_range.head is None
+    assert diff_range.head_sha is None
     assert [
         (change.status, change.path) for change in repository.changes(diff_range)
     ] == [("added", "shop/new_module.py")]
@@ -297,5 +316,88 @@ def test_works_from_a_subfolder_of_the_repository(tmp_path: Path) -> None:
         "models.py",
         "receipts.py",
     }
-    assert diff_range.head is not None
-    assert "receipts.py" in repository.extract(diff_range.head, tmp_path / "sub")
+    assert diff_range.head_sha is not None
+    assert "receipts.py" in repository.extract(diff_range.head_sha, tmp_path / "sub")
+
+
+def test_lists_each_changed_function_as_a_review_unit(tmp_path: Path) -> None:
+    diff = make_diff(tmp_path)
+
+    assert review_units(diff, "shop/models.py") == {
+        "m:shop/models.py:Basket.__init__": "modified",
+        "m:shop/models.py:Basket.total": "modified",
+        "m:shop/models.py:Basket.clear": "removed",
+        "fn:shop/models.py:describe": "modified",
+        "fn:shop/models.py:summarise": "added",
+        "fn:shop/models.py:price": "modified",
+    }
+    assert review_units(diff, "shop/legacy.py") == {
+        "fn:shop/legacy.py:old_helper": "removed"
+    }
+    assert review_units(diff, "shop/receipts.py") == {
+        "fn:shop/receipts.py:print_receipt": "added"
+    }
+
+
+def test_gives_module_level_changes_their_own_review_unit(tmp_path: Path) -> None:
+    before = {"app.py": "import os\n\n\ndef run() -> None:\n    pass\n"}
+    after = {"app.py": "import os\nimport sys\n\n\ndef run() -> None:\n    pass\n"}
+
+    assert review_units(make_diff(tmp_path, before=before, after=after), "app.py") == {
+        "top:app.py": "modified"
+    }
+
+
+def test_gives_class_body_changes_their_own_review_unit(tmp_path: Path) -> None:
+    before = {
+        "app.py": "class Box:\n    size = 1\n\n    def open(self) -> None:\n        pass\n"
+    }
+    after = {
+        "app.py": "class Box:\n    size = 2\n\n    def open(self) -> None:\n        pass\n"
+    }
+
+    assert review_units(make_diff(tmp_path, before=before, after=after), "app.py") == {
+        "body:app.py:Box": "modified"
+    }
+
+
+def test_ignores_blank_lines_left_behind_by_a_removed_function(
+    tmp_path: Path,
+) -> None:
+    before = {"app.py": "X = 1\n\n\ndef gone() -> None:\n    pass\n\n\nY = 2\n"}
+    after = {"app.py": "X = 1\n\n\nY = 2\n"}
+
+    assert review_units(make_diff(tmp_path, before=before, after=after), "app.py") == {
+        "fn:app.py:gone": "removed"
+    }
+
+
+def test_review_fingerprints_change_only_for_the_function_that_changed(
+    tmp_path: Path,
+) -> None:
+    before = {
+        "app.py": "def a() -> int:\n    return 1\n\n\ndef b() -> int:\n    return 1\n"
+    }
+    first = {
+        "app.py": "def a() -> int:\n    return 2\n\n\ndef b() -> int:\n    return 2\n"
+    }
+    second = {
+        "app.py": "def a() -> int:\n    return 2\n\n\ndef b() -> int:\n    return 3\n"
+    }
+
+    old = fingerprints(
+        make_diff(tmp_path / "one", before=before, after=first), "app.py"
+    )
+    new = fingerprints(
+        make_diff(tmp_path / "two", before=before, after=second), "app.py"
+    )
+
+    assert old["fn:app.py:a"] == new["fn:app.py:a"]
+    assert old["fn:app.py:b"] != new["fn:app.py:b"]
+
+
+def test_reports_seen_units_by_their_fingerprints(tmp_path: Path) -> None:
+    diff = make_diff(tmp_path)
+    seen = set(diff.fingerprints(["fn:shop/models.py:describe", "unknown"]))
+
+    assert diff.seen_units(seen) == ["fn:shop/models.py:describe"]

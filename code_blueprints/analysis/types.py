@@ -114,6 +114,7 @@ class PinType:
     cat: str
     opt: bool = False
     ref: SymbolRef | None = None
+    items: SymbolRef | None = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"label": self.label, "cat": self.cat}
@@ -121,6 +122,8 @@ class PinType:
             out["opt"] = True
         if self.ref is not None:
             out["ref"] = self.ref.to_json()
+        if self.items is not None:
+            out["items"] = self.items.to_json()
         return out
 
 
@@ -290,7 +293,7 @@ class TypeResolver:
             return self.named(dotted) if dotted else UNKNOWN
         if isinstance(node, ast.Subscript):
             return self._subscripted(node)
-        return PinType(clean_label(ast.unparse(node))[:60], "any")
+        return PinType(clean_label(ast.unparse(node)), "any")
 
     def _subscripted(self, node: ast.Subscript) -> PinType:
         base = dotted_name(node.value) or ""
@@ -298,7 +301,7 @@ class TypeResolver:
         args = (
             list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
         )
-        label = clean_label(ast.unparse(node))[:60]
+        label = clean_label(ast.unparse(node))
         if last == "Optional":
             inner = self._annotation(args[0])
             return replace(inner, opt=True, label=f"Optional[{inner.label}]")
@@ -319,11 +322,17 @@ class TypeResolver:
         if last in ("Callable", "Awaitable"):
             return PinType(label, "callable")
         if last in _LIST_NAMES:
-            return PinType(label, "list")
+            return PinType(label, "list", items=self._held(args[0]))
         if last in _MAP_NAMES:
-            return PinType(label, "map")
+            return PinType(
+                label, "map", items=self._held(args[-1]) if len(args) > 1 else None
+            )
         named = self.named(base) if base else UNKNOWN
         return replace(named, label=label)
+
+    def _held(self, node: ast.expr) -> SymbolRef | None:
+        held = self._annotation(node)
+        return held.ref or held.items
 
     def _union(self, members: list[ast.expr]) -> PinType:
         types = [self._annotation(member) for member in members]

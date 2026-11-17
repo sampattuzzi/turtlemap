@@ -1,11 +1,15 @@
 import argparse
 import secrets
+import signal
 import threading
 import webbrowser
 from pathlib import Path
 
 from code_blueprints.git import GitError
-from code_blueprints.server import ProjectHost, remember_project, start_server
+from code_blueprints.registry import ServerRegistry
+from code_blueprints.host import ProjectHost
+from code_blueprints.recent import remember_project
+from code_blueprints.server import start_server
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -31,7 +35,8 @@ def main(argv: list[str] | None = None) -> int:
         help="print the address instead of opening it in your browser",
     )
     args = parser.parse_args(argv)
-    host = ProjectHost()
+    registry = ServerRegistry()
+    host = ProjectHost(registry=registry)
     if args.folder:
         folder = Path(args.folder).expanduser()
         if not folder.is_dir():
@@ -43,7 +48,10 @@ def main(argv: list[str] | None = None) -> int:
         remember_project(folder)
     token = secrets.token_urlsafe(18)
     server = start_server(host, token, args.port)
-    url = f"http://127.0.0.1:{server.server_address[1]}/?t={token}"
+    address = f"http://127.0.0.1:{server.server_address[1]}"
+    url = f"{address}/?t={token}"
+    registry.publish(address, host.agent_token)
+    signal.signal(signal.SIGTERM, _stop)
     print(f"Code Blueprints is running at {url}", flush=True)
     print("Press Ctrl+C to stop.", flush=True)
     if not args.no_open:
@@ -52,8 +60,14 @@ def main(argv: list[str] | None = None) -> int:
         threading.Event().wait()
     except KeyboardInterrupt:
         pass
+    finally:
+        registry.remove()
     server.shutdown()
     return 0
+
+
+def _stop(signum: int, frame: object) -> None:
+    raise KeyboardInterrupt
 
 
 if __name__ == "__main__":

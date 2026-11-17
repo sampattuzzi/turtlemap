@@ -2,12 +2,11 @@ import ast
 from dataclasses import dataclass, field
 from typing import Any
 
-from code_blueprints.analysis.symbols import class_fields
+from code_blueprints.analysis.symbols import class_fields, module_constants
 from code_blueprints.analysis.types import PinType, TypeResolver, TypeSystem
 from code_blueprints.analysis.workspace import (
     ExternalRef,
     ParsedClass,
-    ParsedFunction,
     ParsedModule,
     Resolved,
     SymbolRef,
@@ -24,6 +23,8 @@ class DependencyCollector:
     external_names: set[tuple[str, str | None]] = field(default_factory=set)
     _fields: dict[SymbolRef, dict[str, PinType]] = field(default_factory=dict)
     _own_fields: dict[SymbolRef, dict[str, PinType]] = field(default_factory=dict)
+    _constants: dict[str, frozenset[str]] = field(default_factory=dict)
+    _constant_ids: dict[tuple[str, str], str | None] = field(default_factory=dict)
 
     def collect(self, module: ParsedModule) -> None:
         resolver = self.types.resolver(module)
@@ -35,7 +36,14 @@ class DependencyCollector:
                 if function.class_qualname
                 else None
             )
-            FunctionDependencies(self, module, resolver, function, owner).collect()
+            source = f"{'m' if owner else 'fn'}:{module.path}:{function.qualname}"
+            CodeDependencies(self, module, resolver, source, owner).collect_function(
+                function.node
+            )
+        for name, statement in module_constants(module):
+            CodeDependencies(
+                self, module, resolver, f"c:{module.path}:{name}", None
+            ).collect_constant(statement)
 
     def result(self) -> dict[str, Any]:
         ids: dict[str, int] = {}
@@ -85,6 +93,12 @@ class DependencyCollector:
             )
         return None
 
+    def constant_id(self, module: ParsedModule, dotted: str) -> str | None:
+        key = (module.path, dotted)
+        if key not in self._constant_ids:
+            self._constant_ids[key] = self._find_constant(module, dotted)
+        return self._constant_ids[key]
+
     def own_fields(self, ref: SymbolRef) -> dict[str, PinType]:
         if ref not in self._own_fields:
             self._own_fields[ref] = {
@@ -99,6 +113,29 @@ class DependencyCollector:
                 merged.update(self.own_fields(ancestor))
             self._fields[ref] = merged
         return self._fields[ref]
+
+    def _find_constant(self, module: ParsedModule, dotted: str) -> str | None:
+        head, _, rest = dotted.partition(".")
+        if not rest and head in self._constants_in(module):
+            return f"c:{module.path}:{head}"
+        binding = module.imports.get(head)
+        if binding is None:
+            return None
+        module_name, _, name = (
+            binding.absolute + ("." + rest if rest else "")
+        ).rpartition(".")
+        path = self.types.workspace.find_module(module_name, near=module.path)
+        target = self.types.workspace.module(path) if path else None
+        if target is None or name not in self._constants_in(target):
+            return None
+        return f"c:{target.path}:{name}"
+
+    def _constants_in(self, module: ParsedModule) -> frozenset[str]:
+        if module.path not in self._constants:
+            self._constants[module.path] = frozenset(
+                name for name, _ in module_constants(module)
+            )
+        return self._constants[module.path]
 
     def _collect_class(
         self, module: ParsedModule, resolver: TypeResolver, parsed: ParsedClass
@@ -116,34 +153,40 @@ class DependencyCollector:
         if self.types.class_category(ref) == "enum":
             return
         for name, pin in self.own_fields(ref).items():
-            if pin.ref is not None:
-                self.link(
-                    f"f:{module.path}:{parsed.qualname}.{name}",
-                    self.node_id(pin.ref),
-                    "has",
-                    name,
-                )
+            for held in (pin.ref, pin.items):
+                if held is not None:
+                    self.link(
+                        f"f:{module.path}:{parsed.qualname}.{name}",
+                        self.node_id(held),
+                        "has",
+                        name,
+                    )
 
 
-class FunctionDependencies:
+class CodeDependencies:
     def __init__(
         self,
         collector: DependencyCollector,
         module: ParsedModule,
         resolver: TypeResolver,
-        function: ParsedFunction,
+        source: str,
         owner: SymbolRef | None,
     ) -> None:
         self.collector = collector
         self.module = module
         self.resolver = resolver
-        self.function = function
+        self.source = source
         self.owner = owner
-        self.source = f"{'m' if owner else 'fn'}:{module.path}:{function.qualname}"
         self.local_types: dict[str, PinType] = {}
 
-    def collect(self) -> None:
-        node = self.function.node
+    def collect_constant(self, statement: ast.AnnAssign | ast.Assign) -> None:
+        if isinstance(statement, ast.AnnAssign):
+            self._use(self.resolver.annotation(statement.annotation))
+        if statement.value is not None:
+            for child in ast.walk(statement.value):
+                self._visit(child)
+
+    def collect_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         for arg in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]:
             if arg.annotation is not None:
                 pin = self.resolver.annotation(arg.annotation)
@@ -168,23 +211,18 @@ class FunctionDependencies:
             self._track_assignment(node)
         elif isinstance(node, ast.Call):
             self._call(node)
-        elif (
-            isinstance(node, ast.Attribute)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "self"
-            and self.owner is not None
-        ):
-            if node.attr in self.collector.fields_of(self.owner):
-                kind = "writes" if isinstance(node.ctx, ast.Store) else "reads"
-                holder = self._field_owner(node.attr)
-                self.collector.link(
-                    self.source, f"f:{holder.path}:{holder.sym}.{node.attr}", kind
-                )
+        elif isinstance(node, ast.Attribute):
+            self._field_access(node)
+            self._constant_access(node)
         elif (
             isinstance(node, ast.Name)
             and isinstance(node.ctx, ast.Load)
             and node.id not in self.local_types
         ):
+            constant = self.collector.constant_id(self.module, node.id)
+            if constant is not None:
+                self.collector.link(self.source, constant, "reads")
+                return
             resolved = self.collector.types.workspace.resolve(self.module, node.id)
             if isinstance(resolved, SymbolRef):
                 target = self.collector.node_id(resolved)
@@ -238,6 +276,8 @@ class FunctionDependencies:
             base = self._type_of(node.value)
             if base is not None and base.ref is not None:
                 return self.collector.fields_of(base.ref).get(node.attr)
+        if isinstance(node, ast.Call):
+            return self._returned_type(node)
         return None
 
     def _track_assignment(self, node: ast.Assign | ast.AnnAssign) -> None:
@@ -253,9 +293,10 @@ class FunctionDependencies:
                 self.local_types[target.id] = pin
 
     def _value_type(self, value: ast.expr | None) -> PinType | None:
-        if not isinstance(value, ast.Call):
-            return self._type_of(value) if value is not None else None
-        resolved = self._callee(value.func)
+        return self._type_of(value) if value is not None else None
+
+    def _returned_type(self, call: ast.Call) -> PinType | None:
+        resolved = self._callee(call.func)
         workspace = self.collector.types.workspace
         if isinstance(resolved, SymbolRef):
             if workspace.parsed_class(resolved) is not None:
@@ -276,9 +317,30 @@ class FunctionDependencies:
         if pin.ref is not None:
             self.collector.link(self.source, self.collector.node_id(pin.ref), "uses")
 
-    def _field_owner(self, attr: str) -> SymbolRef:
-        assert self.owner is not None
-        for ancestor in self.collector.types.workspace.class_ancestry(self.owner):
+    def _field_access(self, node: ast.Attribute) -> None:
+        receiver = self._type_of(node.value)
+        if receiver is None or receiver.ref is None:
+            return
+        if node.attr not in self.collector.fields_of(receiver.ref):
+            return
+        holder = self._field_owner(receiver.ref, node.attr)
+        kind = "writes" if isinstance(node.ctx, ast.Store) else "reads"
+        self.collector.link(
+            self.source, f"f:{holder.path}:{holder.sym}.{node.attr}", kind
+        )
+
+    def _constant_access(self, node: ast.Attribute) -> None:
+        if not isinstance(node.ctx, ast.Load):
+            return
+        dotted = dotted_name(node)
+        if dotted is None or dotted.split(".")[0] in self.local_types:
+            return
+        self.collector.link(
+            self.source, self.collector.constant_id(self.module, dotted), "reads"
+        )
+
+    def _field_owner(self, holder: SymbolRef, attr: str) -> SymbolRef:
+        for ancestor in self.collector.types.workspace.class_ancestry(holder):
             if attr in self.collector.own_fields(ancestor):
                 return ancestor
-        return self.owner
+        return holder

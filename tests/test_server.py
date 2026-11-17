@@ -1,7 +1,9 @@
 import gzip
 import subprocess
 import json
+import threading
 import time
+from dataclasses import dataclass
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
@@ -10,7 +12,10 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from code_blueprints.server import ProjectHost, start_server
+from code_blueprints.comparison import head_project
+from code_blueprints.host import ProjectHost
+from code_blueprints.seen import SeenStore
+from code_blueprints.server import start_server
 
 TOKEN = "secret-token"
 
@@ -22,10 +27,14 @@ def make_server(tmp_path: Path) -> Iterator[ThreadingHTTPServer]:
     (project / "shapes.py").write_text(
         "class Square:\n    def area(self, side: float) -> float:\n        return side * side\n"
     )
-    host = ProjectHost(cache_dir=tmp_path / "cache")
-    server = start_server(host, TOKEN)
+    server = make_started(tmp_path)
     yield server
     server.shutdown()
+
+
+def make_started(tmp_path: Path) -> ThreadingHTTPServer:
+    host = ProjectHost(cache_dir=tmp_path / "cache")
+    return start_server(host, TOKEN, seen_store=SeenStore(tmp_path / "seen"))
 
 
 def fetch(
@@ -45,6 +54,20 @@ def fetch(
             )
     except HTTPError as error:
         return error.code, error.read()
+
+
+def post_json(server: ThreadingHTTPServer, path: str, payload: Any) -> Any:
+    request = Request(
+        f"http://127.0.0.1:{server.server_address[1]}{path}",
+        data=json.dumps(payload).encode(),
+        headers={"X-Blueprints-Token": TOKEN, "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=10) as response:
+        body = response.read()
+        if response.headers.get("Content-Encoding") == "gzip":
+            body = gzip.decompress(body)
+        return json.loads(body)
 
 
 def fetch_json(server: ThreadingHTTPServer, path: str) -> Any:
@@ -214,6 +237,84 @@ def test_clearing_the_comparison_returns_to_the_working_copy(
     ] == ["area"]
 
 
+def test_a_slow_earlier_comparison_does_not_replace_a_later_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = make_opened_host(tmp_path)
+    held = make_held_head(monkeypatch, hold_call=1)
+
+    host.open_diff("main..feature")
+    host.open_diff("main")
+    expect_host_ready(host)
+    held.release.set()
+    assert held.finished.wait(10)
+    time.sleep(0.3)
+
+    expect_comparing(host, "main")
+
+
+def test_an_earlier_comparison_does_not_win_over_a_slower_later_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = make_opened_host(tmp_path)
+    held = make_held_head(monkeypatch, hold_call=2)
+
+    host.open_diff("main")
+    host.open_diff("main..feature")
+    time.sleep(0.5)
+    held.release.set()
+    assert held.finished.wait(10)
+
+    expect_comparing(host, "main..feature")
+
+
+@dataclass
+class HeldHead:
+    release: threading.Event
+    finished: threading.Event
+
+
+def make_held_head(monkeypatch: pytest.MonkeyPatch, hold_call: int) -> HeldHead:
+    held = HeldHead(threading.Event(), threading.Event())
+    calls: list[int] = []
+
+    def hold(*args: Any) -> Any:
+        calls.append(len(calls) + 1)
+        holding = len(calls) == hold_call
+        if holding:
+            held.release.wait(10)
+        result = head_project(*args)
+        if holding:
+            held.finished.set()
+        return result
+
+    monkeypatch.setattr("code_blueprints.host.head_project", hold)
+    return held
+
+
+def make_opened_host(tmp_path: Path) -> ProjectHost:
+    host = ProjectHost(cache_dir=tmp_path / "cache")
+    host.open(make_git_project(tmp_path))
+    expect_host_ready(host)
+    return host
+
+
+def expect_comparing(host: ProjectHost, spec: str) -> None:
+    expect_host_ready(host)
+    assert host.status()["diff"]["spec"] == spec
+    diff = host.session().diff
+    assert diff is not None
+    assert diff.range.spec == spec
+
+
+def expect_host_ready(host: ProjectHost) -> None:
+    deadline = time.monotonic() + 20
+    while not (status := host.status())["ready"]:
+        assert status["error"] is None, status["error"]
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+
+
 def test_lists_branches(make_server: ThreadingHTTPServer, tmp_path: Path) -> None:
     fetch_json(make_server, f"/api/open?root={make_git_project(tmp_path)}")
 
@@ -221,3 +322,95 @@ def test_lists_branches(make_server: ThreadingHTTPServer, tmp_path: Path) -> Non
         "main",
         "feature",
     }
+
+
+def make_working_copy_of_feature(tmp_path: Path) -> Path:
+    folder = make_git_project(tmp_path)
+    subprocess.run(
+        ["git", "checkout", "-q", "feature"],
+        cwd=folder,
+        check=True,
+        capture_output=True,
+    )
+    return folder
+
+
+def expect_ready(server: ThreadingHTTPServer) -> None:
+    deadline = time.monotonic() + 20
+    while not (status := fetch_json(server, "/api/status"))["ready"]:
+        assert status["error"] is None, status["error"]
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+
+
+def test_lists_review_units_for_a_comparison(
+    make_server: ThreadingHTTPServer, tmp_path: Path
+) -> None:
+    make_compared(make_server, make_git_project(tmp_path), "main..feature")
+
+    units = fetch_json(make_server, "/api/diff/data")["units"]["shapes.py"]
+    assert [(unit["id"], unit["diff"]) for unit in units] == [
+        ("fn:shapes.py:area", "modified"),
+        ("fn:shapes.py:perimeter", "added"),
+    ]
+    assert fetch_json(make_server, "/api/seen") == {"seen": []}
+
+
+def test_only_the_function_that_changed_since_is_unseen(
+    make_server: ThreadingHTTPServer, tmp_path: Path
+) -> None:
+    folder = make_working_copy_of_feature(tmp_path)
+    make_compared(make_server, folder, "main")
+    post_json(
+        make_server,
+        "/api/seen",
+        {"ids": ["fn:shapes.py:area", "fn:shapes.py:perimeter"], "seen": True},
+    )
+    shapes = folder / "shapes.py"
+    shapes.write_text(shapes.read_text().replace("4 * side", "side * 4"))
+    fetch_json(make_server, "/api/reload")
+    expect_ready(make_server)
+
+    assert fetch_json(make_server, "/api/seen") == {"seen": ["fn:shapes.py:area"]}
+
+
+def test_unmarking_forgets_a_seen_function(
+    make_server: ThreadingHTTPServer, tmp_path: Path
+) -> None:
+    make_compared(make_server, make_git_project(tmp_path), "main..feature")
+    post_json(
+        make_server,
+        "/api/seen",
+        {"ids": ["fn:shapes.py:area", "fn:shapes.py:perimeter"], "seen": True},
+    )
+
+    assert post_json(
+        make_server, "/api/seen", {"ids": ["fn:shapes.py:area"], "seen": False}
+    ) == {"seen": ["fn:shapes.py:perimeter"]}
+
+
+def test_keeps_seen_functions_on_disk_between_runs(tmp_path: Path) -> None:
+    folder = make_git_project(tmp_path)
+    first = make_started(tmp_path)
+    make_compared(first, folder, "main..feature")
+    post_json(first, "/api/seen", {"ids": ["fn:shapes.py:area"], "seen": True})
+    first.shutdown()
+    second = make_started(tmp_path)
+    make_compared(second, folder, "main..feature")
+
+    assert fetch_json(second, "/api/seen") == {"seen": ["fn:shapes.py:area"]}
+    second.shutdown()
+
+
+def test_refuses_to_mark_without_the_token(
+    make_server: ThreadingHTTPServer, tmp_path: Path
+) -> None:
+    request = Request(
+        f"http://127.0.0.1:{make_server.server_address[1]}/api/seen",
+        data=b'{"ids": []}',
+        method="POST",
+    )
+
+    with pytest.raises(HTTPError) as error:
+        urlopen(request, timeout=10)
+    assert error.value.code == 403

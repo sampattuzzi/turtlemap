@@ -12,8 +12,8 @@ class GitError(Exception):
 @dataclass(frozen=True)
 class DiffRange:
     spec: str
-    base: str
-    head: str | None
+    base_sha: str
+    head_sha: str | None
     base_label: str
     head_label: str
 
@@ -28,9 +28,11 @@ class FileChange:
 class Repository:
     def __init__(self, folder: Path) -> None:
         self.folder = folder.resolve()
-        top = self._run("rev-parse", "--show-toplevel", cwd=self.folder).strip()
-        self.top = Path(top).resolve()
-        relative = self.folder.relative_to(self.top).as_posix()
+        repository_folder = self._run(
+            "rev-parse", "--show-toplevel", cwd=self.folder
+        ).strip()
+        self.repository_folder = Path(repository_folder).resolve()
+        relative = self.folder.relative_to(self.repository_folder).as_posix()
         self.prefix = "" if relative == "." else relative
 
     def resolve_range(self, spec: str) -> DiffRange:
@@ -77,9 +79,9 @@ class Repository:
         ]
 
     def changes(self, diff: DiffRange) -> list[FileChange]:
-        arguments = ["diff", "--name-status", "-M", "-z", diff.base]
-        if diff.head is not None:
-            arguments.append(diff.head)
+        arguments = ["diff", "--name-status", "-M", "-z", diff.base_sha]
+        if diff.head_sha is not None:
+            arguments.append(diff.head_sha)
         arguments += ["--", self._pathspec()]
         fields = self._run(*arguments).split("\0")
         changes: list[FileChange] = []
@@ -108,7 +110,7 @@ class Repository:
                         {"A": "added", "D": "removed"}.get(status, "modified"), path
                     )
                 )
-        if diff.head is None:
+        if diff.head_sha is None:
             untracked = self._run(
                 "ls-files",
                 "--others",
@@ -136,7 +138,7 @@ class Repository:
                 sha,
                 *([self.prefix] if self.prefix else []),
             ],
-            cwd=self.top,
+            cwd=self.repository_folder,
             capture_output=True,
             check=False,
         )
@@ -176,7 +178,7 @@ class Repository:
         try:
             completed = subprocess.run(
                 ["git", *arguments],
-                cwd=cwd or self.top,
+                cwd=cwd or self.repository_folder,
                 capture_output=True,
                 check=False,
                 timeout=120,
