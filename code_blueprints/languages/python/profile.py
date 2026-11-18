@@ -25,6 +25,7 @@ _SET = ("set", "list")
 _CLASS = ("type", "class")
 
 PYTHON_PROFILE = Profile(
+    descriptor_method="__get__",
     builtin_names=frozenset(dir(builtins)),
     builtin_classes=frozenset(
         name for name in dir(builtins) if isinstance(getattr(builtins, name), type)

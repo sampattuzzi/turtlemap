@@ -7,8 +7,8 @@ from code_blueprints.analysis.blueprint.lookups import TypeLookups
 from code_blueprints.analysis.blueprint.scope import Scope
 from code_blueprints.analysis.blueprint.text import pin_name
 from code_blueprints.analysis.blueprint.values import Value
-from code_blueprints.analysis.types import PinType
-from code_blueprints.analysis.workspace.parsed import ParsedModule
+from code_blueprints.analysis.types import UNKNOWN, PinType
+from code_blueprints.analysis.workspace.parsed import ParsedModule, SymbolRef
 
 
 class AttributeReads:
@@ -26,6 +26,7 @@ class AttributeReads:
         self._evaluate = evaluate
         self._attribute_counts = _attribute_counts(function)
         self._breaks: dict[tuple[str | None, str | None, str | None], GraphNode] = {}
+        self._getters: dict[tuple[str | None, str | None, str | None, str], Value] = {}
 
     def read(self, expression: m.Member) -> Value:
         attributes, base = _split_attribute(expression)
@@ -43,6 +44,17 @@ class AttributeReads:
         index = 0
         while index < len(attributes):
             end = self._group_end(prefix, attributes, index)
+            getter_at = self._first_getter(current, attributes, index, end)
+            if getter_at is not None and getter_at[0] == index:
+                current = self._getter_read(
+                    current, base_name, attributes[index], getter_at[1], expression.line
+                )
+                base_name = attributes[index]
+                prefix = f"{prefix}.{base_name}" if prefix is not None else None
+                index += 1
+                continue
+            if getter_at is not None:
+                end = getter_at[0] - 1
             name = ".".join(attributes[index : end + 1])
             pin_type, annotation = self._lookups.attribute_chain(
                 current, attributes[index : end + 1]
@@ -69,6 +81,54 @@ class AttributeReads:
         ):
             end += 1
         return end
+
+    def _first_getter(
+        self, current: Value, attributes: Sequence[str], start: int, end: int
+    ) -> tuple[int, SymbolRef] | None:
+        for position in range(start, end + 1):
+            owner = (
+                current.type
+                if position == start
+                else self._lookups.attribute_chain(current, attributes[start:position])[
+                    0
+                ]
+            )
+            getter = self._getter(owner, attributes[position])
+            if getter is not None:
+                return position, getter
+        return None
+
+    def _getter(self, owner: PinType, attribute: str) -> SymbolRef | None:
+        workspace = self._lookups.workspace
+        if owner.ref is None or workspace.parsed_class(owner.ref) is None:
+            return None
+        found = workspace.find_method(owner.ref, attribute)
+        return (
+            found if found is not None and workspace.reads_as_property(found) else None
+        )
+
+    def _getter_read(
+        self, base: Value, base_name: str, attribute: str, getter: SymbolRef, line: int
+    ) -> Value:
+        key = (base.node, base.pin, base.literal, attribute)
+        cached = self._getters.get(key)
+        if cached is not None:
+            return cached
+        node = self._graph.add(
+            "method", f"{base_name}.{attribute}", line, target=getter
+        )
+        self._graph.connect(node, self._lookups.profile.instance_receiver, base)
+        value = self._graph.output(node, attribute, self._returned_by(getter))
+        self._getters[key] = value
+        return value
+
+    def _returned_by(self, getter: SymbolRef) -> PinType:
+        workspace = self._lookups.workspace
+        function = workspace.parsed_function(getter)
+        module = workspace.module(getter.path)
+        if function is None or module is None or function.node.returns is None:
+            return UNKNOWN
+        return self._lookups.resolver(module).annotation(function.node.returns)
 
     def _break_read(
         self,

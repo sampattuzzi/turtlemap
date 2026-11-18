@@ -240,6 +240,7 @@ class CodeDependencies:
         elif isinstance(node, m.Member):
             self._field_access(node)
             self._constant_access(node)
+            self._property_access(node)
         elif isinstance(node, m.TypeName):
             self._type_name(node)
         elif (
@@ -329,7 +330,13 @@ class CodeDependencies:
         if isinstance(node, m.Member):
             base = self._type_of(node.value)
             if base is not None and base.ref is not None:
-                return self.collector.fields_of(base.ref).get(node.attr)
+                field_type = self.collector.fields_of(base.ref).get(node.attr)
+                getter = self._property(node)
+                return (
+                    field_type
+                    if field_type is not None or getter is None
+                    else self._returned_by(getter)
+                )
         if isinstance(node, m.Call):
             return self._returned_type(node)
         return None
@@ -354,16 +361,21 @@ class CodeDependencies:
         if isinstance(resolved, SymbolRef):
             if workspace.parsed_class(resolved) is not None:
                 return self.collector.types.class_type(resolved)
-            function = workspace.parsed_function(resolved)
-            target_module = workspace.module(resolved.path)
-            if (
-                function is not None
-                and target_module is not None
-                and function.node.returns is not None
-            ):
-                return self.collector.types.resolver(target_module).annotation(
-                    function.node.returns
-                )
+            return self._returned_by(resolved)
+        return None
+
+    def _returned_by(self, ref: SymbolRef) -> PinType | None:
+        workspace = self.collector.types.workspace
+        function = workspace.parsed_function(ref)
+        target_module = workspace.module(ref.path)
+        if (
+            function is not None
+            and target_module is not None
+            and function.node.returns is not None
+        ):
+            return self.collector.types.resolver(target_module).annotation(
+                function.node.returns
+            )
         return None
 
     def _use(self, pin: PinType) -> None:
@@ -380,6 +392,25 @@ class CodeDependencies:
         kind = "writes" if node.store else "reads"
         self.collector.link(
             self.source, f"f:{holder.path}:{holder.sym}.{node.attr}", kind
+        )
+
+    def _property_access(self, node: m.Member) -> None:
+        if node.store:
+            return
+        getter = self._property(node)
+        if getter is not None:
+            self.collector.link(self.source, self.collector.node_id(getter), "calls")
+
+    def _property(self, node: m.Member) -> SymbolRef | None:
+        workspace = self.collector.types.workspace
+        receiver = self._type_of(node.value)
+        if receiver is None or receiver.ref is None:
+            return None
+        if workspace.parsed_class(receiver.ref) is None:
+            return None
+        found = workspace.find_method(receiver.ref, node.attr)
+        return (
+            found if found is not None and workspace.reads_as_property(found) else None
         )
 
     def _constant_access(self, node: m.Member) -> None:

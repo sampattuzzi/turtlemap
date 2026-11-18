@@ -200,6 +200,39 @@ class Workspace:
                     return found
         return None
 
+    def reads_as_property(self, ref: SymbolRef) -> bool:
+        function = self.parsed_function(ref)
+        module = self.module(ref.path)
+        if function is None or module is None:
+            return False
+        return function.node.is_property or any(
+            self._makes_descriptor(module, decorator)
+            for decorator in function.node.decorators
+        )
+
+    def _makes_descriptor(self, module: ParsedModule, decorator: m.Expr) -> bool:
+        called = isinstance(decorator, m.Call)
+        dotted = m.dotted_name(
+            decorator.func if isinstance(decorator, m.Call) else decorator
+        )
+        resolved = self.resolve(module, dotted) if dotted is not None else None
+        if not isinstance(resolved, SymbolRef):
+            return False
+        if self.parsed_class(resolved) is not None and not called:
+            return self._is_descriptor(resolved)
+        function = self.parsed_function(resolved)
+        owner = self.module(resolved.path)
+        returns = function.node.returns if function is not None else None
+        if owner is None or not isinstance(returns, m.TypeName):
+            return False
+        made = self.resolve(owner, returns.dotted)
+        return isinstance(made, SymbolRef) and self._is_descriptor(made)
+
+    def _is_descriptor(self, ref: SymbolRef) -> bool:
+        module = self.module(ref.path)
+        method = module.language.profile.descriptor_method if module else None
+        return method is not None and self.find_method(ref, method) is not None
+
     def class_ancestry(self, ref: SymbolRef) -> list[SymbolRef]:
         seen: list[SymbolRef] = []
         pending = [ref]
