@@ -983,3 +983,46 @@ def test_names_long_operands_by_their_pin_in_the_expression(tmp_path: Path) -> N
         "combine_measurements(first_…",
         "offset",
     ]
+
+
+def test_wires_a_class_chosen_at_runtime_into_the_make_node(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        class Model:
+            def __init__(self, size: int) -> None:
+                self.size = size
+
+        class MassModel(Model):
+            pass
+
+        def build(heavy: bool, size: int) -> Model:
+            kind = MassModel if heavy else Model
+            return kind(size)
+    """,
+        "build",
+    )
+
+    make = the_node(graph, "Make kind")
+    select = the_node(graph, "Select")
+    assert source_of(graph, make, "class") == (select["id"], "")
+    assert [pin["name"] for pin in make["ins"]] == ["class", "size"]
+
+
+def test_makes_the_class_itself_when_a_classmethod_calls_cls(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        class Model:
+            def __init__(self, size: int) -> None:
+                self.size = size
+
+            @classmethod
+            def small(cls) -> "Model":
+                return cls(1)
+    """,
+        "Model.small",
+    )
+
+    make = the_node(graph, "Make Model")
+    assert [pin["name"] for pin in make["ins"]] == ["size"]

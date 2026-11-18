@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from code_blueprints.analysis import model as m
 from code_blueprints.analysis.blueprint.lookups import TypeLookups
@@ -11,6 +11,8 @@ from code_blueprints.analysis.workspace.parsed import (
     SymbolRef,
 )
 from code_blueprints.languages.language import Profile
+
+CHOSEN_CLASS = "class"
 
 
 @dataclass
@@ -42,7 +44,15 @@ class Callees:
             and value.type.ref is not None
             and self._workspace.parsed_class(value.type.ref) is not None
         ):
-            return self.constructor(value.type.ref)
+            constructor = self.constructor(value.type.ref)
+            if value.node is None or name in self._profile.receiver_names:
+                return constructor
+            return replace(
+                constructor,
+                title=f"Make {name}",
+                receiver=value,
+                receiver_name=CHOSEN_CLASS,
+            )
         return Callee("ext", name, pure=False, receiver=value, receiver_name=name)
 
     def global_callee(self, dotted: str, line: int) -> Callee:
