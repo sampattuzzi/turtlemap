@@ -10,6 +10,7 @@ from code_blueprints.languages.javascript.lowering.ports import (
     StatementsPort,
     TargetsPort,
 )
+from code_blueprints.languages.javascript.lowering.state import LoweringState
 
 
 class ControlFlow:
@@ -17,6 +18,9 @@ class ControlFlow:
     expressions: ExpressionsPort
     statements: StatementsPort
     targets: TargetsPort
+
+    def __init__(self, state: LoweringState) -> None:
+        self.state = state
 
     def if_statement(self, node: Syntax) -> m.If:
         line, end = ts.span(node)
@@ -55,10 +59,13 @@ class ControlFlow:
         left = ts.field(node, "left")
         right = ts.field(node, "right")
         is_async = any(child.type == "await" for child in node.children)
+        target = self.targets.target(left)
+        if node.child_by_field_name("kind") is not None:
+            self.state.declare(target)
         return m.For(
             line,
             end,
-            self.targets.target(left),
+            target,
             self.expressions.expr(right),
             self.statements.body(node.child_by_field_name("body")),
             is_async=is_async,
@@ -139,7 +146,11 @@ class ControlFlow:
             name = ts.decode(parameter.text)
         elif parameter is not None:
             name = "error"
-            body = [self._unpack_error(parameter, name), *body]
+            unpack = self._unpack_error(parameter, name)
+            self.state.declare(unpack)
+            body = [unpack, *body]
+        if name is not None:
+            self.state.declare_name(name)
         return m.Handler(*ts.span(handler), None, name, body, origin=handler)
 
     def _unpack_error(self, parameter: Syntax, name: str) -> m.Stmt:

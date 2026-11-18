@@ -46,6 +46,7 @@ class ColumnSweep {
     }
   }
   linksInto(n) {
+    if (n.kind === 'closure' && (this.succs.get(n) || []).length) return [];
     const links = this.preds.get(n) || [];
     if (!isExecNode(n)) return links;
     const exec = links.filter((l) => l.exec);
@@ -74,18 +75,33 @@ function blueprintRanks(g) {
   const realPreds = new Map(), realSuccs = new Map();
   for (const e of [...g.edges, ...g.exec]) { pushTo(realPreds, e.to, e.from); pushTo(realSuccs, e.from, e.to); }
   const rank = new Map();
+  const placedByUse = (n) => n.kind === 'closure' && (realSuccs.get(n) || []).length > 0;
   const rankOf = (n) => {
     if (rank.has(n)) return rank.get(n);
     rank.set(n, 0);
-    const r = forwardRank(n, realPreds.get(n) || [], rankOf);
+    const r = placedByUse(n) ? null : forwardRank(n, realPreds.get(n) || [], rankOf);
     rank.set(n, r);
     return r;
   };
   g.nodes.forEach((n) => rankOf(n));
+  for (const n of g.nodes) if (placedByUse(n)) rank.set(n, Math.max(forwardRank(n, realPreds.get(n) || [], (p) => rank.get(p)) ?? 1, backwardRank(realSuccs.get(n) || [], rank)));
+  pushPastFrames(g.nodes.filter(placedByUse), realSuccs, rank);
   for (const n of g.nodes) if (rank.get(n) === null) rank.set(n, backwardRank(realSuccs.get(n) || [], rank));
   const maxR = Math.max(...rank.values());
   for (const n of g.nodes) if (n.kind === 'return' && !(realSuccs.get(n) || []).length) rank.set(n, maxR);
   return rank;
+}
+function pushPastFrames(frames, succs, rank) {
+  const pending = [...frames];
+  let guard = 0;
+  while (pending.length && guard++ < 100000) {
+    const n = pending.pop();
+    for (const s of succs.get(n) || []) {
+      if ((rank.get(s) ?? 0) > rank.get(n)) continue;
+      rank.set(s, rank.get(n) + 1);
+      pending.push(s);
+    }
+  }
 }
 function forwardRank(n, preds, rankOf) {
   if (n.kind === 'entry') return 0;
@@ -153,7 +169,7 @@ function arrangeBlueprintColumns(layout, columns, succs, { V, isExec, lane, gapY
     floor: (n) => (isExec(n) ? 0 : Math.max(0, lane)),
     pinned: (n) => n.kind === 'entry',
     isDummy: (n) => Boolean(n.dummy),
-    candidates: (n, list, forwards) => { if (!isExec(n)) return list; const exec = list.filter((l) => l.exec); return forwards ? (exec.length ? exec : list) : n.dummy ? list : exec; },
+    candidates: (n, list, forwards) => { if (n.kind === 'closure' && forwards && (succs.get(n) || []).length) return []; if (!isExec(n)) return list; const exec = list.filter((l) => l.exec); return forwards ? (exec.length ? exec : list) : n.dummy ? list : exec; },
     previous: new Map(columns.flat().map((n) => [n, V(n).y])),
   });
   if (placed) for (const [n, y] of placed) V(n).y = y;

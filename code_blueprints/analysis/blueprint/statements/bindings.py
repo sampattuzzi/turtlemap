@@ -65,7 +65,7 @@ class Bindings:
 
     def bind(self, target: m.Expr, value: Value, line: int) -> None:
         if isinstance(target, m.Name):
-            self._bind_name(target.id, value, line)
+            self.assign_name(target.id, value, line)
         elif isinstance(target, m.Spread):
             self.bind(target.value, value, line)
         elif isinstance(target, m.Sequence):
@@ -95,7 +95,16 @@ class Bindings:
             self.context.graph.connect(node, "value", value)
             self.context.flow.step(node)
 
-    def _bind_name(self, name: str, value: Value, line: int) -> None:
+    def assign_name(self, name: str, value: Value, line: int) -> None:
+        cell = self.context.scope.cell(name, line)
+        if cell is not None:
+            self.context.scope.settle(name, value.type)
+            cell = self.context.scope.cell(name, line) or cell
+            node = self.context.graph.add("set", "Set", line)
+            self.context.graph.connect(node, name, cell, cell=True)
+            self.context.graph.connect(node, "value", value)
+            self.context.flow.step(node)
+            return
         if name in self.context.carried or name in self.context.scope.declared_globals:
             node = self.context.graph.add("set", f"Set {name}", line)
             self.context.graph.connect(node, "value", value)
@@ -112,9 +121,31 @@ class Bindings:
         ]
 
     def augmented_assign(self, statement: m.AugAssign) -> None:
-        symbol = statement.op
-        target = statement.target
-        value = self.context.expressions.value(statement.value)
+        self._augmented(statement, statement.target, statement.op, statement.value, "")
+
+    def update(self, expression: m.AugAssignExpr, out_name: str) -> Value:
+        before = (
+            self.context.scope.value_of(expression.target.id, expression.line)
+            if expression.gives_old
+            and isinstance(expression.target, m.Name)
+            and not self.context.scope.is_cell(expression.target.id)
+            else None
+        )
+        after = self._augmented(
+            expression, expression.target, expression.op, expression.value, out_name
+        )
+        return before or after
+
+    def _augmented(
+        self, statement: m.Node, target: m.Expr, symbol: str, operand: m.Expr, out: str
+    ) -> Value:
+        if isinstance(target, m.Name):
+            cell = self.context.scope.cell(target.id, statement.line)
+            if cell is not None:
+                return self._write_through(
+                    statement, target.id, cell, symbol, operand, out
+                )
+        value = self.context.expressions.value(operand)
         if isinstance(target, m.Name):
             current = self.context.scope.value_of(target.id, statement.line)
             node = self.context.graph.add(
@@ -123,13 +154,11 @@ class Bindings:
             self.context.graph.connect(node, target.id, current)
             self.context.graph.connect(node, "value", value)
             self.context.flow.step(node)
-            self.context.scope.bind(
-                target.id,
-                self.context.graph.output(
-                    node, target.id, current.type, current.annotation
-                ),
+            result = self.context.graph.output(
+                node, target.id, current.type, current.annotation
             )
-            return
+            self.context.scope.bind(target.id, result)
+            return result
         base = target.value if isinstance(target, (m.Member, m.Subscript)) else target
         container = self.context.expressions.value(base)
         key = (
@@ -145,6 +174,25 @@ class Bindings:
             self.context.graph.connect(node, "key", key)
         self.context.graph.connect(node, "value", value)
         self.context.flow.step(node)
+        return self.context.graph.output(node, out, UNKNOWN) if out else value
+
+    def _write_through(
+        self,
+        statement: m.Node,
+        name: str,
+        cell: Value,
+        symbol: str,
+        operand: m.Expr,
+        out: str,
+    ) -> Value:
+        step = _step_title(self.context.text(statement))
+        value = None if step is not None else self.context.expressions.value(operand)
+        node = self.context.graph.add("set", step or f"{symbol}=", statement.line)
+        self.context.graph.connect(node, name, cell, cell=True)
+        if value is not None:
+            self.context.graph.connect(node, "value", value)
+        self.context.flow.step(node)
+        return self.context.graph.output(node, out or name, cell.type)
 
     def delete(self, statement: m.Delete) -> None:
         for target in statement.targets:
@@ -212,6 +260,14 @@ class Bindings:
                 f"{self.context.profile.spread_prefix}{self.target_label(target.value)}"
             )
         return shorten(self.context.text(target), LABEL_LIMIT)
+
+
+def _step_title(text: str) -> str | None:
+    stripped = text.strip()
+    for step in ("++", "--"):
+        if stripped.startswith(step) or stripped.endswith(step):
+            return step
+    return None
 
 
 def _unwrap_call(value: m.Expr) -> tuple[m.Call | None, bool]:

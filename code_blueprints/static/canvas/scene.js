@@ -48,16 +48,19 @@ export class Scene {
   add(element, data = {}) { const v = { el: element, data, x: 0, y: 0 }; element.classList.add('node'); this.layer.append(element); this.nodes.push(v); return v; }
   wire(a, ak, b, bk, cls, type) { const w = { a, ak, b, bk, cls, type }; this.wires.push(w); return w; }
   measure() {
-    for (const n of this.nodes) {
-      n.w = n.el.offsetWidth; n.h = n.el.offsetHeight; n.pins = {};
-      n.el.querySelectorAll('[data-pin]').forEach((p) => {
-        if (p.closest('.node') !== n.el) return;
-        const s = p.querySelector('.shape') || p;
-        let x = 0, y = 0, cur = s;
-        while (cur && cur !== n.el) { x += cur.offsetLeft; y += cur.offsetTop; cur = cur.offsetParent; }
-        n.pins[p.dataset.pin] = { dx: x + s.offsetWidth / 2, dy: y + s.offsetHeight / 2 };
-      });
-    }
+    for (const n of this.nodes) this.measureNode(n);
+  }
+  measureNode(n) {
+    n.w = n.el.offsetWidth; n.h = n.el.offsetHeight;
+    const extra = Object.fromEntries(Object.entries(n.pins || {}).filter(([key]) => key.startsWith('in:cap:')));
+    n.pins = extra;
+    n.el.querySelectorAll('[data-pin]').forEach((p) => {
+      if (p.closest('.node') !== n.el) return;
+      const s = p.querySelector('.shape') || p;
+      let x = 0, y = 0, cur = s;
+      while (cur && cur !== n.el) { x += cur.offsetLeft; y += cur.offsetTop; cur = cur.offsetParent; }
+      n.pins[p.dataset.pin] = { dx: x + s.offsetWidth / 2, dy: y + s.offsetHeight / 2 };
+    });
   }
   finish(pad = 40) {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -73,8 +76,9 @@ export class Scene {
       const pa = w.a.pins[w.ak], pb = w.b.pins[w.bk];
       if (!pa || !pb) continue;
       const path = svg('path', { d: routedPath(w.a.x + pa.dx, w.a.y + pa.dy, w.b.x + pb.dx, w.b.y + pb.dy, (w.via || []).map((d) => ({ x: d.x, y: d.y + d.pins.d.dy, w: d.w }))), class: `wire ${w.cls || ''}${w.diff ? ` wire-${w.diff}` : ''}` });
-      if (!w.cls) path.style.stroke = `var(--t-${w.type ? w.type.cat : 'any'})`;
+      if (!w.cls || w.cls === 'cell') path.style.stroke = `var(--t-${w.type ? w.type.cat : 'any'})`;
       w.path = path; this.svg.append(path);
+      if (w.cls === 'cell') { w.core = svg('path', { d: path.getAttribute('d'), class: 'wire-core' }); this.svg.append(w.core); }
     }
     this.wires.forEach((w, i) => { if (w.path) { w.hit = svg('path', { d: w.path.getAttribute('d'), class: 'wire-hit', 'data-wire': i }); this.svg.append(w.hit); } });
   }
@@ -84,6 +88,7 @@ export class Scene {
       if (!w.path) continue;
       if (!w.box) w.box = pathBox(w.path);
       setCulled(w.path, w, !overlaps(w.box, view));
+      if (w.core) w.core.style.display = w.culled ? 'none' : '';
       w.hit.style.display = w.culled ? 'none' : '';
     }
   }
@@ -131,7 +136,7 @@ function wireCardEl(wires) {
   return el('div', { class: 'edge-card wire-card' },
     shown.map((w, i) => el('div', { class: `edge-card-section${i ? ' divided' : ''}` },
       el('div', { class: 'wire-card-ends' }, el('span', {}, end(w.a, w.ak)), el('span', { class: 'udim' }, '→'), el('span', {}, end(w.b, w.bk))),
-      w.cls === 'exec' ? el('div', { class: 'udim' }, 'Runs next, in this order') : el('code', { class: 'wire-card-type', style: `color:${wireColour(w)}` }, w.type ? w.type.label : 'Any'))),
+      w.cls === 'exec' ? el('div', { class: 'udim' }, 'Runs next, in this order') : el('code', { class: 'wire-card-type', style: `color:${wireColour(w)}` }, `${w.cls === 'cell' ? 'the variable itself · ' : ''}${w.type ? w.type.label : 'Any'}`))),
     wires.length > shown.length ? el('div', { class: 'udim' }, `and ${wires.length - shown.length} more`) : null);
 }
 export function placeCard(card, e, avoid = []) {

@@ -73,9 +73,25 @@ class Operators:
         return m.OtherExpr(line, end, [self.targets.target(left), value], origin=node)
 
     def augmented(self, node: Syntax) -> m.Expr:
-        return m.OtherExpr(
-            *ts.span(node),
-            [self.expressions.expr(child) for child in ts.named(node)],
+        line, end = ts.span(node)
+        if node.type == "update_expression":
+            argument = ts.field(node, "argument")
+            return m.AugAssignExpr(
+                line,
+                end,
+                self.targets.target(argument),
+                "+" if "++" in ts.operator(node) else "-",
+                m.Literal(line, end, 1, origin="1"),
+                node.children[0] == argument,
+                origin=node,
+            )
+        operator = ts.operator(node).removesuffix("=")
+        return m.AugAssignExpr(
+            line,
+            end,
+            self.targets.target(ts.field(node, "left")),
+            ts.LOGICAL.get(operator, operator),
+            self.expressions.expr(ts.field(node, "right")),
             origin=node,
         )
 

@@ -52,6 +52,14 @@ class Value:
 
 
 @dataclass(frozen=True)
+class Signature:
+    parameters: tuple[str, ...]
+    result: PinType
+    is_async: bool
+    anonymous: bool
+
+
+@dataclass(frozen=True)
 class Folded:
     inputs: list[tuple[str, Value]]
     result: PinType

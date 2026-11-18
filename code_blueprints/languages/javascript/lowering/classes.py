@@ -31,6 +31,7 @@ class Classes:
     def class_def(self, node: Syntax, name: str) -> m.ClassDef:
         line, end = ts.span(node)
         self.state.scopes[-1].add(name)
+        self.state.declare_name(name)
         bases: list[m.Expr] = []
         for heritage in node.named_children:
             if heritage.type != "class_heritage":

@@ -2,7 +2,7 @@ from dataclasses import dataclass, field, replace
 
 from code_blueprints.analysis import model as m
 from code_blueprints.analysis.blueprint.lookups import TypeLookups
-from code_blueprints.analysis.blueprint.values import Value
+from code_blueprints.analysis.blueprint.values import Signature, Value
 from code_blueprints.analysis.types import UNKNOWN, PinType
 from code_blueprints.analysis.workspace.parsed import (
     ExternalRef,
@@ -13,6 +13,7 @@ from code_blueprints.analysis.workspace.parsed import (
 from code_blueprints.languages.language import Profile
 
 CHOSEN_CLASS = "class"
+FUNCTION_PIN = "function"
 
 
 @dataclass
@@ -29,6 +30,7 @@ class Callee:
     vararg: str | None = None
     parameter_types: dict[str, PinType] = field(default_factory=dict)
     note: str | None = None
+    is_async: bool = False
 
 
 class Callees:
@@ -54,6 +56,18 @@ class Callees:
                 receiver_name=CHOSEN_CLASS,
             )
         return Callee("ext", name, pure=False, receiver=value, receiver_name=name)
+
+    def closure(self, name: str, value: Value, signature: Signature) -> Callee:
+        return Callee(
+            "call",
+            "Call" if signature.anonymous else name,
+            pure=False,
+            result=signature.result,
+            receiver=value,
+            receiver_name=FUNCTION_PIN,
+            parameters=signature.parameters,
+            is_async=signature.is_async,
+        )
 
     def global_callee(self, dotted: str, line: int) -> Callee:
         head, _, rest = dotted.partition(".")
@@ -170,6 +184,7 @@ class Callees:
             parameters=positional,
             vararg=vararg,
             parameter_types=parameter_types,
+            is_async=function.node.is_async,
         )
 
     def method(self, function: m.Member, receiver: Value) -> Callee:

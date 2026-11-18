@@ -18,6 +18,11 @@ class EntryNode:
         function = self.context.function.node
         node = self.context.graph.add("entry", function.name, function.line)
         self._bind_receiver(node, function)
+        self.bind_parameters(node)
+        return node
+
+    def bind_parameters(self, node: GraphNode) -> None:
+        function = self.context.function.node
         positional = [
             parameter
             for parameter in function.params
@@ -49,7 +54,6 @@ class EntryNode:
             profile.mapping_spread_prefix,
             profile.keywords_label,
         )
-        return node
 
     def _bind_receiver(self, node: GraphNode, function: m.FunctionDecl) -> None:
         owner = self.context.owner_ref()
@@ -102,6 +106,7 @@ class EntryNode:
         function = self.context.function.node
         if (
             index == 0
+            and self.context.frame is None
             and owner is not None
             and parameter.annotation is None
             and function.implicit_receiver is None

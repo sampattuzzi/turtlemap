@@ -26,7 +26,7 @@ class Lowering:
         self.state = LoweringState(language, ModuleLinks(path, name, locate))
         self.links = self.state.links
         self.statements = Statements(self.state)
-        self.control = ControlFlow()
+        self.control = ControlFlow(self.state)
         self.exports = Exports(self.state)
         self.bindings = Bindings(self.state)
         self.functions = Functions(self.state)

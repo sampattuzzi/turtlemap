@@ -1,10 +1,11 @@
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
 from code_blueprints.analysis import model as m
 from code_blueprints.analysis.blueprint.text import shorten, unused_name
-from code_blueprints.analysis.blueprint.values import Value
+from code_blueprints.analysis.blueprint.values import Signature, Value
 from code_blueprints.analysis.types import PinType
 from code_blueprints.analysis.workspace.parsed import ParsedModule, SymbolRef
 
@@ -22,11 +23,14 @@ class Pin:
     name: str
     type: PinType
     literal: str | None = None
+    cell: bool = False
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"name": self.name, "type": self.type.to_json()}
         if self.literal is not None:
             out["lit"] = self.literal
+        if self.cell:
+            out["cell"] = True
         return out
 
 
@@ -46,6 +50,7 @@ class GraphNode:
     exec_out: bool = False
     exec_outs: list[str] | None = None
     expression: list[str] | None = None
+    parent: str | None = None
 
     def output(self, name: str) -> Pin | None:
         return next((pin for pin in self.outs if pin.name == name), None)
@@ -75,6 +80,8 @@ class GraphNode:
             out["execOuts"] = list(self.exec_outs)
         if self.expression is not None:
             out["expr"] = list(self.expression)
+        if self.parent is not None:
+            out["parent"] = self.parent
         return out
 
 
@@ -88,6 +95,22 @@ class Graph:
         self.nodes: list[GraphNode] = []
         self.edges: list[dict[str, str]] = []
         self.exec: list[dict[str, str]] = []
+        self.frame: str | None = None
+        self.moment = 0
+        self.signatures: dict[str, Signature] = {}
+        self._by_id: dict[str, GraphNode] = {}
+
+    def node(self, node_id: str) -> GraphNode:
+        return self._by_id[node_id]
+
+    @contextmanager
+    def inside(self, frame: str | None) -> Iterator[None]:
+        outer = self.frame
+        self.frame = frame
+        try:
+            yield
+        finally:
+            self.frame = outer
 
     def add(
         self,
@@ -134,16 +157,24 @@ class Graph:
             target=target,
             external=external,
             exec_outs=_unique_labels(exec_outs) if exec_outs is not None else None,
+            parent=self.frame,
         )
         if note:
             node.notes.append(shorten(note, _NOTE_LIMIT))
         if code:
             node.code = shorten(code, _NOTE_LIMIT)
         self.nodes.append(node)
+        self._by_id[node.id] = node
         return node
 
     def connect(
-        self, node: GraphNode, name: str, value: Value, pin_type: PinType | None = None
+        self,
+        node: GraphNode,
+        name: str,
+        value: Value,
+        pin_type: PinType | None = None,
+        *,
+        cell: bool = False,
     ) -> None:
         unique = unused_name(name, {pin.name for pin in node.ins})
         node.ins.append(
@@ -151,6 +182,7 @@ class Graph:
                 unique,
                 pin_type or value.type,
                 value.literal if value.node is None else None,
+                cell,
             )
         )
         if value.node is not None and value.pin is not None:
@@ -164,9 +196,11 @@ class Graph:
         name: str,
         pin_type: PinType,
         annotation: tuple[m.TypeExpr, ParsedModule] | None = None,
+        *,
+        cell: bool = False,
     ) -> Value:
         unique = unused_name(name, {pin.name for pin in node.outs})
-        node.outs.append(Pin(unique, pin_type))
+        node.outs.append(Pin(unique, pin_type, cell=cell))
         return Value(pin_type, node.id, unique, annotation=annotation)
 
     def link(self, source: GraphNode, label: str, target: GraphNode) -> None:
@@ -176,15 +210,24 @@ class Graph:
             source.exec_outs = [*(source.exec_outs or []), label]
         target.exec_in = True
         self.exec.append({"from": source.id, "fp": label, "to": target.id})
+        self.moment += 1
 
-    def strip_exec_when_only_returns(self) -> None:
+    def strip_exec_when_only_returns(self, head: GraphNode) -> None:
+        frame = head.id if head.kind == "closure" else None
+        members = [node for node in self.nodes if node.parent == frame]
         if any(
             node.kind not in ("entry", "return") and (node.exec_in or node.exec_out)
-            for node in self.nodes
+            for node in members
         ):
             return
-        self.exec.clear()
-        for node in self.nodes:
+        stripped = {head.id, *(node.id for node in members)}
+        self.exec[:] = [
+            wire
+            for wire in self.exec
+            if wire["from"] not in stripped or wire["to"] not in stripped
+        ]
+        head.exec_outs = None
+        for node in [head, *members]:
             node.exec_in = False
             node.exec_out = False
 

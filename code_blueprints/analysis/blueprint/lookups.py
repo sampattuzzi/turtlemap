@@ -2,6 +2,7 @@ import json
 from collections.abc import Sequence
 
 from code_blueprints.analysis import model as m
+from code_blueprints.analysis.blueprint.captures import reassigned_globals
 from code_blueprints.analysis.blueprint.code_shapes import (
     assigned_names,
     is_literal_expression,
@@ -26,6 +27,9 @@ class TypeLookups:
         self.module = module
         self.profile = module.language.profile
         self.module_variables = _module_variables(module)
+        self.reassigned_globals = reassigned_globals(module.body) & frozenset(
+            self.module_variables
+        )
         self._resolvers: dict[str, TypeResolver] = {}
         self._members: dict[SymbolRef, dict[str, Member]] = {}
 

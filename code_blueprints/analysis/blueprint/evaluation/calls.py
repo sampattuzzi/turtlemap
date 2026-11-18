@@ -1,5 +1,5 @@
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from code_blueprints.analysis import model as m
 from code_blueprints.analysis.blueprint.callees import Callee, Callees
@@ -7,7 +7,7 @@ from code_blueprints.analysis.blueprint.canvas import Flow, GraphNode
 from code_blueprints.analysis.blueprint.lookups import TypeLookups
 from code_blueprints.analysis.blueprint.scope import Scope
 from code_blueprints.analysis.blueprint.text import pin_name, short_name
-from code_blueprints.analysis.blueprint.values import Value
+from code_blueprints.analysis.blueprint.values import Signature, Value
 from code_blueprints.analysis.types import UNKNOWN, PinType
 from code_blueprints.analysis.workspace.parsed import SymbolRef
 
@@ -83,6 +83,11 @@ class Calls:
         )
         if awaited:
             node.notes.append("awaits")
+        elif callee.is_async:
+            node.notes.append("not awaited")
+            callee = replace(
+                callee, result=PinType(self._profile.awaitable_label, "any")
+            )
         if callee.receiver is not None:
             self._graph.connect(
                 node,
@@ -125,22 +130,33 @@ class Calls:
             if function.id in self._scope.local_functions:
                 return Callee("ext", function.id, pure=False, note="Local function")
             if self._scope.is_local(function.id):
-                return self._callees.local(
-                    function.id, self._scope.value_of(function.id, call.line)
-                )
+                value = self._scope.value_of(function.id, call.line)
+                signature = self._signature_of(value)
+                if signature is not None:
+                    return self._callees.closure(function.id, value, signature)
+                return self._callees.local(function.id, value)
             return self._callees.global_callee(function.id, call.line)
         if isinstance(function, m.Member):
             dotted = m.dotted_name(function)
             if dotted is not None and not self._scope.is_local(dotted.split(".")[0]):
                 return self._callees.global_callee(dotted, call.line)
             return self._callees.method(function, self._evaluate(function.value))
+        receiver = self._evaluate(function)
+        signature = self._signature_of(receiver)
+        if signature is not None:
+            return self._callees.closure(
+                self._language.text(function), receiver, signature
+            )
         return Callee(
             "ext",
             self._language.text(function),
             pure=False,
-            receiver=self._evaluate(function),
+            receiver=receiver,
             receiver_name="callable",
         )
+
+    def _signature_of(self, value: Value) -> Signature | None:
+        return self._graph.signatures.get(value.node) if value.node else None
 
     def call_is_pure(self, call: m.Call) -> bool:
         function = call.func

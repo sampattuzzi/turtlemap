@@ -18,6 +18,7 @@ from code_blueprints.analysis.blueprint.statements.regions import DataRegions
 from code_blueprints.analysis.blueprint.statements.control import ControlFlow
 from code_blueprints.analysis.blueprint.statements.entry import EntryNode
 from code_blueprints.analysis.blueprint.statements.loops import Loops
+from code_blueprints.analysis.blueprint.statements.closures import Closures
 
 _Handler = tuple[type[m.Stmt], Callable[[m.Stmt], None]]
 _Statement = TypeVar("_Statement", bound=m.Stmt)
@@ -26,19 +27,19 @@ _Statement = TypeVar("_Statement", bound=m.Stmt)
 def build_function_graph(
     types: TypeSystem, module: ParsedModule, function: ParsedFunction
 ) -> dict[str, Any]:
-    return _FunctionGraphBuilder(types, module, function).build()
+    return _FunctionGraphBuilder(BuildContext(types, module, function)).build()
 
 
 class _FunctionGraphBuilder:
-    def __init__(
-        self, types: TypeSystem, module: ParsedModule, function: ParsedFunction
-    ) -> None:
-        self.context = BuildContext(types, module, function)
+    def __init__(self, context: BuildContext) -> None:
+        self.context = context
         self.bindings = Bindings(self.context)
         self.regions = DataRegions(self.context, self.bindings)
         self.entry = EntryNode(self.context)
         self.control = ControlFlow(self.context, self.regions, self._run_nested)
         self.loops = Loops(self.context, self.bindings, self._run_nested)
+        self.closures = Closures(self.context, self.bindings, self._run_closure)
+        self.context.expressions.nested = self.closures
         self._truncated = False
         self._handlers = self._statement_handlers()
 
@@ -49,7 +50,7 @@ class _FunctionGraphBuilder:
             self._run_block(self.context.function.node.body, function_level=True)
         except GraphFull:
             self._mark_truncated()
-        self.context.graph.strip_exec_when_only_returns()
+        self.context.graph.strip_exec_when_only_returns(entry)
         graph = self.context.graph.to_json()
         self._native_labels(graph)
         if self._truncated:
@@ -84,6 +85,16 @@ class _FunctionGraphBuilder:
 
     def _run_nested(self, statements: Sequence[m.Stmt]) -> None:
         self._run_block(statements, function_level=False)
+
+    def _run_closure(self, context: BuildContext) -> None:
+        frame = context.frame
+        assert frame is not None
+        builder = _FunctionGraphBuilder(context)
+        builder.entry.bind_parameters(frame)
+        context.flow.resume([(frame, "start")])
+        with context.graph.inside(frame.id):
+            builder._run_block(context.function.node.body, function_level=True)
+        context.graph.strip_exec_when_only_returns(frame)
 
     def _statement(self, statement: m.Stmt) -> None:
         try:
@@ -128,7 +139,7 @@ class _FunctionGraphBuilder:
             _handler(m.Break, loops.break_statement),
             _handler(m.Continue, lambda s: flow.resume([])),
             _handler(m.Global, lambda s: scope.declare_globals(s.names)),
-            _handler(m.FunctionDef, lambda s: _define(scope, s)),
+            _handler(m.FunctionDef, self.closures.define),
             _handler(m.ClassDef, lambda s: _define(scope, s)),
             _handler(m.Pass, lambda s: None),
             _handler(m.Import, lambda s: None),
@@ -178,12 +189,6 @@ class _FunctionGraphBuilder:
         return text.splitlines()[0] if text else type(statement).__name__
 
 
-def _definition_name(statement: m.FunctionDef | m.ClassDef) -> str:
-    if isinstance(statement, m.FunctionDef):
-        return statement.function.name
-    return statement.cls.name
-
-
 def _handler(kind: type[_Statement], handle: Callable[[_Statement], None]) -> _Handler:
     def run(statement: m.Stmt) -> None:
         assert isinstance(statement, kind)
@@ -192,7 +197,6 @@ def _handler(kind: type[_Statement], handle: Callable[[_Statement], None]) -> _H
     return kind, run
 
 
-def _define(scope: Scope, statement: m.FunctionDef | m.ClassDef) -> None:
-    name = _definition_name(statement)
-    scope.define_function(name)
-    scope.forget(name)
+def _define(scope: Scope, statement: m.ClassDef) -> None:
+    scope.define_function(statement.cls.name)
+    scope.forget(statement.cls.name)

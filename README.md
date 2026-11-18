@@ -65,7 +65,15 @@ Open a project folder and you get three views:
   per local it reads. Library maths such as `np.sin` or `len` is folded in;
   calls into your own code and reads from your own classes stay as their own
   nodes. The condition of an `if` or `while` is written into the branch, loop
-  or select node in the same way.
+  or select node in the same way. A function made inside another (a nested
+  `def`, a lambda, an arrow function) is drawn as a frame around its own
+  body: its parameters and start pin come out of the header, the function
+  itself leaves from the header's right edge, and values it captures are wired
+  straight in. A variable that is shared and changes (a module variable that
+  something reassigns, or a local a closure captures and that is assigned more
+  than once) becomes a node of its own with a double wire: Get reads it at
+  that moment, and Set, `++` or `+=` write it as steps. An async call that is
+  not awaited is marked as such and gives back a Promise or Coroutine.
 
 When you hover over a box on the map or a node in a blueprint, every line
 that leads off screen gets a small marker on the edge of the view, like on a

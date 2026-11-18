@@ -1,0 +1,94 @@
+import { layered } from './layout.js';
+const FRAME_PAD = 22;
+export function framedLayout(g, byId, remeasure) {
+  if (!g.nodes.some((n) => n.kind === 'closure')) {
+    const { routes, dummies } = layered(g, byId);
+    return { routes, dummies, routeKey: plainRouteKey };
+  }
+  const byNodeId = new Map(g.nodes.map((n) => [n.id, n]));
+  const members = new Map();
+  for (const n of g.nodes) pushTo(members, frameOf(n, byNodeId), n);
+  const routes = new Map(), routeKeys = new Map(), frameDummies = new Map();
+  const standIns = new Map();
+  const standIn = (n) => {
+    if (n.kind !== 'closure') return n;
+    if (!standIns.has(n)) standIns.set(n, { id: n.id, kind: 'closure', title: n.title, ins: [], outs: n.outs });
+    return standIns.get(n);
+  };
+  const contentOf = (frameId) => {
+    const out = [];
+    for (const n of members.get(frameId) || []) { out.push(n); if (n.kind === 'closure') out.push(...contentOf(n.id)); }
+    return out;
+  };
+  const framesUnder = (frameId) => [frameId, ...(members.get(frameId) || []).filter((n) => n.kind === 'closure').flatMap((n) => framesUnder(n.id))];
+  const shiftContent = (frameId, dx, dy) => {
+    for (const n of contentOf(frameId)) { const v = byId.get(n); v.x += dx; v.y += dy; }
+    for (const f of framesUnder(frameId)) for (const d of frameDummies.get(f) || []) { d.x += dx; d.y += dy; }
+  };
+  const layoutFrame = (frameId) => {
+    const own = members.get(frameId) || [];
+    for (const n of own) if (n.kind === 'closure') layoutFrame(n.id);
+    const views = new Map(byId);
+    const sub = { nodes: [], edges: [], exec: [] };
+    const frame = frameId ? byNodeId.get(frameId) : null;
+    let head = null;
+    if (frame) {
+      const fv = byId.get(frame);
+      head = { id: `${frame.id}#head`, kind: 'entry', execOut: true, ins: [], outs: [] };
+      const pins = { then: fv.pins.start };
+      for (const [key, pin] of Object.entries(fv.pins)) if (key.startsWith('out:') && key !== `out:${frame.outs[0].name}`) pins[key] = pin;
+      views.set(head, { w: fv.headW, h: fv.headH, x: 0, y: 0, pins });
+      sub.nodes.push(head);
+    }
+    for (const n of own) { const s = standIn(n); views.set(s, byId.get(n)); sub.nodes.push(s); }
+    const memberOf = (n) => { let cur = n; while (cur && frameOf(cur, byNodeId) !== frameId) cur = byNodeId.get(cur.parent); return cur || null; };
+    const sourceOf = (n, pin) => (frame && n === frame && pin !== frame.outs[0].name ? head : memberOf(n));
+    for (const e of g.edges) {
+      const a = sourceOf(e.from, e.fp), b = memberOf(e.to);
+      if (!a || !b || (a !== head && a !== e.from) || (a === b && b !== e.to)) continue;
+      let tp = e.tp;
+      if (b !== e.to) {
+        tp = `cap:${e.to.id}:${e.tp}`;
+        const inner = byId.get(e.to), outer = byId.get(b), pin = inner.pins[`in:${e.tp}`];
+        if (pin) outer.pins[`in:${tp}`] = { dx: 0, dy: inner.y - outer.y + pin.dy };
+      }
+      const from = a === head ? head : standIn(a), to = standIn(b);
+      sub.edges.push({ from, fp: e.fp, to, tp });
+      routeKeys.set(e, `${from.id}|out:${e.fp}|${to.id}|in:${tp}`);
+    }
+    for (const e of g.exec) {
+      const a = frame && e.from === frame ? head : memberOf(e.from), b = memberOf(e.to);
+      if (!a || !b || b !== e.to || (a !== head && a !== e.from)) continue;
+      const fp = a === head ? 'then' : e.fp;
+      const from = a === head ? head : standIn(a);
+      sub.exec.push({ from, fp, to: standIn(b) });
+      routeKeys.set(e, `${from.id}|${fp}|${b.id}|exec-in`);
+    }
+    if (!frame && !sub.nodes.some((n) => n.kind === 'entry')) return;
+    const placed = layered(sub, views);
+    for (const [key, via] of placed.routes) routes.set(key, via);
+    frameDummies.set(frameId, placed.dummies);
+    for (const n of own) if (n.kind === 'closure') { const v = byId.get(n); shiftContent(n.id, v.x, v.y); }
+    if (frame) fitFrame(frame, own, placed.dummies);
+  };
+  const fitFrame = (frame, own, dummies) => {
+    const fv = byId.get(frame);
+    const boxes = [...own.map((n) => byId.get(n)), ...dummies];
+    if (boxes.length) {
+      const x0 = Math.min(...boxes.map((b) => b.x)), y0 = Math.min(...boxes.map((b) => b.y));
+      const dx = FRAME_PAD - x0, dy = fv.headH + FRAME_PAD - y0;
+      for (const n of own) { const v = byId.get(n); v.x += dx; v.y += dy; if (n.kind === 'closure') shiftContent(n.id, dx, dy); }
+      for (const d of dummies) { d.x += dx; d.y += dy; }
+    }
+    const w = Math.max(fv.headW, ...boxes.map((b) => b.x + b.w + FRAME_PAD));
+    const h = Math.max(fv.headH, ...boxes.map((b) => b.y + b.h + FRAME_PAD));
+    fv.el.style.width = `${w}px`; fv.el.style.height = `${h}px`;
+    remeasure(fv);
+  };
+  layoutFrame('');
+  const dummies = [...frameDummies.values()].flat();
+  return { routes, dummies, routeKey: (e) => routeKeys.get(e) };
+}
+function plainRouteKey(e) { return e.tp === undefined ? `${e.from.id}|${e.fp}|${e.to.id}|exec-in` : `${e.from.id}|out:${e.fp}|${e.to.id}|in:${e.tp}`; }
+function frameOf(n, byNodeId) { return n.parent && byNodeId.has(n.parent) ? n.parent : ''; }
+function pushTo(map, key, value) { if (!map.has(key)) map.set(key, []); map.get(key).push(value); }

@@ -172,6 +172,7 @@ class Structure:
             line = f" line {item['line']}" if item.get("line") else ""
             lines.append(
                 f"  {item['id']} {item['kind']} {titles[item['id']]}{line}"
+                + (f"  inside {item['parent']}" if item.get("parent") else "")
                 + (f"  in: {ins}" if ins else "")
                 + (f"  out: {outs}" if outs else "")
             )

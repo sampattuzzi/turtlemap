@@ -35,6 +35,7 @@ class Functions:
         is_constructor: bool = False,
     ) -> m.FunctionDef:
         self.state.scopes[-1].add(name)
+        self.state.declare_name(name)
         decl = self.function_decl(
             node,
             name,
@@ -67,11 +68,12 @@ class Functions:
         doc, doc_lines = docs.doc_before(naming.exported(outer))
         self.state.scopes.append(set())
         self.state.receivers.append(receiver)
+        self.state.enter_function()
         params, prologue = self._signature(node)
         if is_constructor:
             prologue += self.parameter_properties(node)
         body_node = node.child_by_field_name("body")
-        body = self._body(body_node)
+        body = self.state.leave_function(params, prologue + self._body(body_node))
         self.state.scopes.pop()
         self.state.receivers.pop()
         return m.FunctionDecl(
@@ -80,7 +82,7 @@ class Functions:
             name,
             [*params],
             self.types.annotation(node.child_by_field_name("return_type")),
-            prologue + body,
+            body,
             decorators,
             ts.has_token(node, "async"),
             doc,
@@ -153,11 +155,13 @@ class Functions:
                 continue
             if pattern.type in ("object_pattern", "array_pattern"):
                 name = ts.shorten(ts.collapse(ts.decode(pattern.text)), 32)
+                unpacked = self.targets.target(pattern)
+                self.state.declare(unpacked)
                 prologue.append(
                     m.Assign(
                         line,
                         end,
-                        [self.targets.target(pattern)],
+                        [unpacked],
                         m.Name(line, end, name, origin=name),
                         origin=pattern,
                     )
@@ -202,6 +206,7 @@ class Functions:
         line, end = ts.span(node)
         if not force and naming.is_expression_arrow(node):
             self.state.scopes.append(set())
+            self.state.enter_function()
             params, prologue = self.parameters(node.child_by_field_name("parameters"))
             single = node.child_by_field_name("parameter")
             if single is not None:
@@ -210,13 +215,16 @@ class Functions:
                 ]
             body = ts.field(node, "body")
             expression = self.expressions.expr(body)
+            line_of_body = ts.span(body)[0]
+            ends: list[m.Stmt] = [m.ExprStmt(line_of_body, line_of_body, expression)]
+            markers = self.state.leave_function(params, ends)[: -len(ends)]
             self.state.scopes.pop()
             if not prologue:
                 return m.Function(
                     line,
                     end,
                     params,
-                    [],
+                    markers,
                     expression,
                     ts.has_token(node, "async"),
                     origin=node,

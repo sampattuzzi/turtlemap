@@ -154,6 +154,7 @@ class DataRegions:
             or name == "."
             or name in self.context.carried
             or name in self.context.scope.declared_globals
+            or self.context.scope.is_cell(name)
         )
 
     def _is_effectful_call(self, value: m.Expr) -> bool:

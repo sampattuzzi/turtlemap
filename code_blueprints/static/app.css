@@ -22,7 +22,7 @@
   --frame-line: #33363c;
   --h-entry: #b03a3a; --h-pkg: #3d4654; --h-mod: #145e5e; --h-lib: #4a4d53; --h-struct: #1d4a86; --h-break: #2c5fa8; --h-make: #2c5fa8; --h-call: #187a7a; --h-method: #5a7a24;
   --h-ext: #3a4c63; --h-op: #2b7a43; --h-lit: #4a4d53; --h-var: #4a4d53; --h-select: #575a61; --h-branch: #575a61;
-  --h-return: #6644a6; --h-raise: #8c3030; --h-set: #3f5168; --h-enum: #a85d1c; --h-iface: #4a4d53; --h-file: #33363c;
+  --h-return: #6644a6; --h-raise: #8c3030; --h-set: #3f5168; --h-closure: #4f3d8f; --h-enum: #a85d1c; --h-iface: #4a4d53; --h-file: #33363c;
   --t-bool: #e25454; --t-int: #2fd3a6; --t-float: #93d453; --t-str: #e45fc8; --t-bytes: #c9b38e;
   --t-none: #8a8f98; --t-time: #e5c64a; --t-enum: #ea8a48; --t-struct: #4a8df2; --t-object: #c3c7cf;
   --t-map: #31c28e; --t-list: #4fb8de; --t-class: #b07cf0; --t-callable: #9c84f2; --t-any: #8a8f98;
@@ -149,6 +149,17 @@ button { cursor: pointer; }
 .wire-card-ends { display: flex; flex-wrap: wrap; gap: 4px 8px; font-family: var(--font-pin); }
 .wire-card-type { font-family: var(--font-pin); font-size: 1.05em; overflow-wrap: anywhere; }
 .scene.has-hot > svg .wire:not(.hot) { opacity: 0.35; }
+.wire.cell { stroke-width: 5; }
+.wire.cell.hot { stroke-width: 6.4; }
+.wire-core { fill: none; stroke: var(--canvas); stroke-width: 1.6; pointer-events: none; }
+.scene.has-hot > svg .wire:not(.hot) + .wire-core { opacity: 0.35; }
+.node.k-closure { pointer-events: none; }
+.node.k-closure > .closure-frame { height: 100%; box-sizing: border-box; overflow: visible; background: color-mix(in srgb, var(--h-closure) 9%, transparent); border: 1px solid color-mix(in srgb, var(--h-closure) 70%, var(--node-border)); box-shadow: none; }
+.node.k-closure .head, .node.k-closure .strip { pointer-events: auto; }
+.node.k-closure .head { border-radius: 6px 6px 0 0; }
+.node.k-closure .head .pin { color: #fff; margin-right: -8px; }
+.node.k-closure .strip { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 5px 0 6px; background: color-mix(in srgb, var(--h-closure) 55%, var(--node-body)); }
+.node.k-closure .strip .pin { padding-left: 9px; }
 
 .node { position: absolute; width: max-content; font-size: var(--node-size); color: var(--node-fg); user-select: none; letter-spacing: var(--tracking); }
 .node > .box, .node-in-frame > .box { background: var(--node-body); border: 1px solid var(--node-border); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.4); overflow: hidden; min-width: 90px; }

@@ -84,6 +84,8 @@ class Profile:
     mapping_kind: tuple[str, str] = ("dict", "map")
     function_title: str = "Lambda"
     descriptor_method: str | None = None
+    awaitable_label: str = "Coroutine"
+    no_result_label: str = "None"
     variadic_label: str = "{}"
     keywords_label: str = "{}"
     callable_label: str = "Callable"

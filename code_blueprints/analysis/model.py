@@ -168,6 +168,14 @@ class AssignExpr(Expr):
 
 
 @dataclass(eq=False)
+class AugAssignExpr(Expr):
+    target: Expr
+    op: str
+    value: Expr
+    gives_old: bool = False
+
+
+@dataclass(eq=False)
 class Spread(Expr):
     value: Expr
     store: bool = False

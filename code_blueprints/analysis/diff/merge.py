@@ -42,6 +42,10 @@ def merge_graphs(base: dict[str, Any], head: dict[str, Any]) -> dict[str, Any]:
     def mapped(node_id: str) -> str:
         return to_head.get(node_id, f"base:{node_id}")
 
+    for node in removed_nodes:
+        if "parent" in node:
+            node["parent"] = mapped(node["parent"])
+
     edges = _merge_wires(base["edges"], head["edges"], mapped, by_id, data=True)
     execs = _merge_wires(base["exec"], head["exec"], mapped, by_id, data=False)
     merged: dict[str, Any] = {

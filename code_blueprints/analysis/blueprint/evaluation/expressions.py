@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Protocol, TypeVar
 
 from code_blueprints.analysis import model as m
 from code_blueprints.analysis.blueprint.evaluation.attributes import AttributeReads
@@ -17,6 +17,14 @@ from code_blueprints.analysis.workspace.parsed import SymbolRef
 
 _Handler = Callable[[m.Expr], Value]
 _Expression = TypeVar("_Expression", bound=m.Expr)
+
+
+class Nested(Protocol):
+    def function_value(self, function: m.Function) -> Value: ...
+
+    def update(self, expression: m.AugAssignExpr, out_name: str) -> Value: ...
+
+    def assign_name(self, name: str, value: Value, line: int) -> None: ...
 
 
 class Expressions:
@@ -45,6 +53,7 @@ class Expressions:
             self._profile, flow.graph, self.value, self._text
         )
         self._handlers = self._expression_handlers()
+        self.nested: Nested | None = None
 
     def value(
         self, expression: m.Expr, *, exec_candidate: bool = False, out_name: str = ""
@@ -64,6 +73,8 @@ class Expressions:
             return self.calls.awaited(
                 expression, exec_candidate=exec_candidate, out_name=out_name
             )
+        if isinstance(expression, m.AugAssignExpr) and self.nested is not None:
+            return self.nested.update(expression, out_name)
         handler = self._handlers.get(type(expression))
         if handler is None:
             return self._opaque(expression, self._text(expression), UNKNOWN, code=None)
@@ -121,6 +132,8 @@ class Expressions:
         )
 
     def _function_value(self, expression: m.Function) -> Value:
+        if self.nested is not None:
+            return self.nested.function_value(expression)
         return self._opaque(
             expression,
             expression.name or self._profile.function_title,
@@ -130,7 +143,10 @@ class Expressions:
 
     def _assign_expression(self, expression: m.AssignExpr) -> Value:
         value = self.value(expression.value, out_name=expression.target.id)
-        self._scope.bind(expression.target.id, value)
+        if self.nested is not None:
+            self.nested.assign_name(expression.target.id, value, expression.line)
+        else:
+            self._scope.bind(expression.target.id, value)
         return value
 
     def _inner(self, expression: m.Spread | m.Interpolation) -> Value:

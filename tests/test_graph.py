@@ -209,6 +209,33 @@ def expect_well_formed(graph: dict[str, Any]) -> None:
     assert entry.get("execOut", False) == any(
         edge["from"] == entry["id"] for edge in graph["exec"]
     )
+    expect_frames_hold_their_wires(graph)
+
+
+def expect_frames_hold_their_wires(graph: dict[str, Any]) -> None:
+    nodes = {node["id"]: node for node in graph["nodes"]}
+
+    def frames_around(node_id: str) -> list[str | None]:
+        chain: list[str | None] = []
+        frame = nodes[node_id].get("parent")
+        while frame is not None:
+            assert nodes[frame]["kind"] == "closure"
+            chain.append(frame)
+            frame = nodes[frame].get("parent")
+        return [*chain, None]
+
+    for edge in graph["exec"]:
+        target_frame = frames_around(edge["to"])[0]
+        if edge["fp"] == "start":
+            assert target_frame == edge["from"], edge
+        else:
+            assert frames_around(edge["from"])[0] == target_frame, edge
+    for edge in graph["edges"]:
+        around_target = frames_around(edge["to"])
+        assert (
+            frames_around(edge["from"])[0] in around_target
+            or edge["from"] in around_target
+        ), edge
 
 
 def test_reads_attributes_through_a_single_break_node(tmp_path: Path) -> None:
@@ -1026,3 +1053,163 @@ def test_makes_the_class_itself_when_a_classmethod_calls_cls(tmp_path: Path) -> 
 
     make = the_node(graph, "Make Model")
     assert [pin["name"] for pin in make["ins"]] == ["size"]
+
+
+def test_draws_a_nested_function_as_a_frame_around_its_body(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def greet_all(names: list[str], greeting: str) -> None:
+            def greet(name: str) -> None:
+                print(greeting, name)
+
+            for name in names:
+                greet(name)
+    """,
+        "greet_all",
+    )
+    frame = nodes_of_kind(graph, "closure")[0]
+    printed = the_node(graph, "print")
+    entry = nodes_of_kind(graph, "entry")[0]
+    assert frame["title"] == "greet"
+    assert printed["parent"] == frame["id"]
+    assert source_of(graph, printed, "greeting") == (entry["id"], "greeting")
+    assert source_of(graph, printed, "name") == (frame["id"], "name")
+    assert [pin["name"] for pin in frame["outs"]] == ["function", "name"]
+    assert frame["outs"][0]["type"]["label"] == "(name) ⇒ None"
+    assert {"from": frame["id"], "fp": "start", "to": printed["id"]} in graph["exec"]
+    assert "parent" not in the_node(graph, "For each name")
+
+
+def test_calls_a_nested_function_through_its_function_pin(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def twice(value: int) -> int:
+            def double(number: int) -> int:
+                return number * 2
+
+            return double(value)
+    """,
+        "twice",
+    )
+    frame = next(node for node in nodes_of_kind(graph, "closure"))
+    call = next(node for node in nodes_of_kind(graph, "call"))
+    assert call["title"] == "double"
+    assert source_of(graph, call, "function") == (frame["id"], "function")
+    assert [pin["name"] for pin in call["ins"]] == ["function", "number"]
+
+
+def test_keeps_a_pure_lambda_off_the_execution_line(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def sort_people(people: list[str]) -> list[str]:
+            return sorted(people, key=lambda person: person.lower())
+    """,
+        "sort_people",
+    )
+    frame = the_node(graph, "Lambda")
+    lowered = the_node(graph, "person.lower")
+    assert graph["exec"] == []
+    assert "execOuts" not in frame
+    assert lowered["parent"] == frame["id"]
+    assert source_of(graph, lowered, "self") == (frame["id"], "person")
+    assert source_of(graph, the_node(graph, "sorted"), "key") == (
+        frame["id"],
+        "function",
+    )
+
+
+def test_shares_a_captured_local_that_changes_through_one_variable(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def make_counter(start: int):
+            count = start
+
+            def bump() -> int:
+                nonlocal count
+                count += 1
+                return count
+
+            return bump
+    """,
+        "make_counter",
+    )
+    variable = the_node(graph, "count")
+    store = the_node(graph, "Set")
+    bump = the_node(graph, "+=")
+    read = the_node(graph, "Get")
+    assert variable["outs"][0]["cell"] is True
+    assert variable["outs"][0]["type"]["label"] == "int"
+    assert "parent" not in variable
+    assert bump["parent"] == read["parent"] == the_node(graph, "bump")["id"]
+    for node in (store, bump, read):
+        assert source_of(graph, node, "count") == (variable["id"], "count")
+        assert input_pin(node, "count")["cell"] is True
+
+
+def test_reads_a_module_variable_that_changes_through_a_get_each_time(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        CALLS = 0
+
+        def count_call() -> int:
+            global CALLS
+            before = CALLS
+            CALLS += 1
+            return before + CALLS
+    """,
+        "count_call",
+    )
+    variable = the_node(graph, "CALLS")
+    reads = nodes_of_kind(graph, "get")
+    assert variable["outs"][0]["cell"] is True
+    assert len(reads) == 2
+    assert all(
+        source_of(graph, read, "CALLS") == (variable["id"], "CALLS") for read in reads
+    )
+    assert source_of(graph, the_node(graph, "+="), "CALLS") == (variable["id"], "CALLS")
+
+
+def test_leaves_module_constants_as_plain_values(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        LIMIT = 10
+
+        def capped(value: int) -> int:
+            return min(value, LIMIT)
+    """,
+        "capped",
+    )
+    limit = the_node(graph, "LIMIT")
+    assert "cell" not in limit["outs"][0]
+    assert nodes_of_kind(graph, "get") == []
+
+
+def test_notes_an_async_call_that_is_not_awaited(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        import asyncio
+
+        async def fetch() -> int:
+            return 1
+
+        async def start() -> None:
+            asyncio.create_task(fetch())
+            await fetch()
+    """,
+        "start",
+    )
+    started, awaited = nodes_of_kind(graph, "call")
+    assert started["note"] == "not awaited"
+    assert started["outs"][0]["type"]["label"] == "Coroutine"
+    assert awaited["note"] == "awaits"

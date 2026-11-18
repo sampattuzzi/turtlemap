@@ -489,3 +489,80 @@ def test_picks_up_a_module_added_after_its_importer_was_read(
         "fn:app/helper.ts:helper",
         "calls",
     ) in edges(project.overview())
+
+
+def test_shares_a_module_variable_between_a_step_and_a_closure_that_reads_it(
+    make_project: ProjectFactory,
+) -> None:
+    project = make_project({"static/watch.js": """
+        let WATCH = 0;
+        export function startWatch(poll) {
+          const generation = ++WATCH;
+          (async () => {
+            while (generation === WATCH) {
+              await poll();
+            }
+          })();
+        }
+    """})
+
+    graph = blueprint(project, "static/watch.js", "startWatch")
+
+    variable = only(graph, lambda node: node["kind"] == "var")
+    step = only(graph, lambda node: node["title"] == "++")
+    frame = only(graph, lambda node: node["kind"] == "closure")
+    read = only(graph, lambda node: node["kind"] == "get")
+    call = only(graph, lambda node: node["title"] == "Call")
+    assert variable["outs"][0]["cell"] is True
+    assert "parent" not in variable
+    assert feeds(graph, variable, step) and feeds(graph, variable, read)
+    assert read["parent"] == frame["id"]
+    loop = only(graph, lambda node: node["kind"] == "loop")
+    assert feeds(graph, step, loop) and feeds(graph, read, loop)
+    assert call["note"] == "not awaited"
+    assert feeds(graph, frame, call)
+    assert frame["outs"][0]["type"]["label"] == "async () ⇒ Promise"
+
+
+def test_draws_a_write_to_a_module_variable_as_a_set_through_the_variable(
+    make_project: ProjectFactory,
+) -> None:
+    project = make_project({"static/pick.js": """
+        let PICK = null;
+        export function setPick(pick) { PICK = pick; }
+    """})
+
+    graph = blueprint(project, "static/pick.js", "setPick")
+
+    variable = only(graph, lambda node: node["kind"] == "var")
+    store = only(graph, lambda node: node["kind"] == "set")
+    assert store["title"] == "Set"
+    assert [(pin["name"], pin.get("cell", False)) for pin in store["ins"]] == [
+        ("PICK", True),
+        ("value", False),
+    ]
+    assert feeds(graph, variable, store)
+
+
+def blueprint(project: Project, path: str, qual: str) -> dict[str, Any]:
+    found = project.function(path, qual)
+    assert found is not None
+    graph: dict[str, Any] = found["graph"]
+    return graph
+
+
+def only(
+    graph: dict[str, Any], matches: Callable[[dict[str, Any]], bool]
+) -> dict[str, Any]:
+    found: list[dict[str, Any]] = [node for node in graph["nodes"] if matches(node)]
+    assert len(found) == 1, [node["title"] for node in graph["nodes"]]
+    return found[0]
+
+
+def feeds(
+    graph: dict[str, Any], source: dict[str, Any], target: dict[str, Any]
+) -> bool:
+    return any(
+        edge["from"] == source["id"] and edge["to"] == target["id"]
+        for edge in graph["edges"]
+    )

@@ -105,7 +105,17 @@ class Bindings:
             if declarator.type != "variable_declarator":
                 continue
             out.extend(self.declarator(declarator, kind))
+        for statement in out:
+            self._declare(statement)
         return out
+
+    def _declare(self, statement: m.Stmt) -> None:
+        if isinstance(statement, m.Assign):
+            for target in statement.targets:
+                self.state.declare(target)
+        elif isinstance(statement, m.Import):
+            for imported in statement.names:
+                self.state.declare_name(imported.alias or imported.name)
 
     def declarator(self, node: Syntax, kind: str) -> list[m.Stmt]:
         line, end = ts.span(node)
