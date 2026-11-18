@@ -238,8 +238,8 @@ claude mcp add code-blueprints -- poetry -C /path/to/code-blueprints run code-bl
 The agent can ask about the code the same way the map shows it:
 
 ```bash
-code-blueprints-agent query report                 # every module, plus the most coupled pairs
-code-blueprints-agent query describe pkg/plots.py  # contains, depends on, used by
+code-blueprints-agent query report                 # every module, the most coupled pairs and what is too large
+code-blueprints-agent query describe pkg/plots.py  # contains, size, depends on, used by
 code-blueprints-agent query cohesion Plotter        # class, module, package or function
 code-blueprints-agent query coupling pkg/a.py pkg/b.py
 code-blueprints-agent query blueprint Plotter.draw  # a function's nodes and wires as text
@@ -260,6 +260,12 @@ formula:
 - **Coupling** weighs the edges between two parts by kind. It is *tight* for
   inheritance, writing the other's fields, a cycle, or a high score.
 - **Instability** is Ce ÷ (Ca + Ce), with tests left out of Ca.
+- **Size** flags a folder with more than 15 files and folders directly inside
+  it or 6000 lines in those files, a file over 500 lines or 40 classes and
+  functions, a class over 300 lines or 20 methods, and a function over 50
+  lines or a complexity of 15. Complexity is 1 plus the function's branches,
+  loops, handlers, cases, conditional expressions and extra `and`/`or`
+  operands, including the functions nested inside it. Tests are left out.
 
 Only Python, JavaScript and TypeScript are analysed: the numbers say nothing
 about other files.
@@ -320,34 +326,27 @@ whichever layout the cog menu has selected.
 |---|---|
 | `analysis/model.py` | The neutral code model every language is lowered into: declarations, statements, expressions and type expressions |
 | `languages/language.py` | What a language front end provides: parsing into the model, source text, and its builtins, operators and type names |
-| `languages/python.py` | The Python front end, built on `ast` |
-| `languages/javascript.py` | The JavaScript and TypeScript front end, built on tree-sitter, including how anonymous functions are named |
+| `languages/python/` | The Python front end, built on `ast`. `language.py` is the `Language`; `lowering.py` lowers statements, with `expressions.py`, `operators.py`, `displays.py` (literals and comprehensions), `signatures.py` (parameters and annotations), `definitions.py` (functions and classes) and `imports.py`; `profile.py` holds Python's builtins and operators and `type_names.py` its type names |
+| `languages/javascript/` | The JavaScript and TypeScript front end, built on tree-sitter. `lowering/` turns the syntax tree into the model, one small component per concern (`statements.py`, `expressions.py`, `bindings.py`, `control.py`, `functions.py`, `classes.py`, `exports.py`, `jsx.py`, …) wired together in `module.py` through the ports in `ports.py`; `links.py` reads imports, exports and `require`; `annotations.py` reads type annotations; `nodes.py` holds helpers for tree-sitter nodes; `profile.py` holds the builtins, operators and type names |
 | `languages/aliases.py` | Reads the `paths` aliases in `tsconfig.json` and `jsconfig.json` |
 | `languages/registry.py` | The languages in use and which files each one reads |
-| `analysis/workspace.py` | Finds the project's source files, parses them and resolves imports, including `src/` layouts, relative and re-exported imports, and globals shared between plain scripts |
+| `analysis/workspace/` | The project's source files and what they say. `files.py` finds the source files; `index.py` maps module names to files, including `src/` layouts, path aliases and `.js` imports that point at `.ts` sources; `parsed.py` is a parsed module and its symbols; `workspace.py` caches parses and resolves names through imports, re-exports, base classes and globals shared between plain scripts |
 | `analysis/types.py` | Turns annotations into pin types and colours, and classifies classes as enum, struct (dataclass, model, …), interface or object |
-| `analysis/symbols.py` | Summarises each module: classes, fields (including ones assigned to `self`), methods, functions, constants and imports |
+| `analysis/symbols.py` | Summarises each module: classes, fields (including ones assigned to `self`), methods, functions and constants |
+| `analysis/import_summary.py` | Summarises each module's imports for the map |
 | `analysis/dependencies.py` | Builds the dependency lines for the map, including field reads, writes and method calls through typed objects, whether held in a variable, a field or the result of a call such as `Thing(...).run()` |
-| `analysis/graph.py` | Builds the dataflow and execution graph for one function |
+| `analysis/blueprint/` | Builds the dataflow and execution graph for one function. `builder.py` walks the statements; `statements/` handles bindings, control flow, loops, data regions and the entry node; `evaluation/` turns expressions into nodes (calls, attributes, operations, constructions) and `folding.py` there decides which expressions fold into one node; `scope.py` tracks what each name holds; `callees.py` works out what a call reaches; `lookups.py` finds pin types; `canvas.py` is the graph being drawn; `printer.py` prints folded expressions |
 | `analysis/outline.py` | Builds the folded source outline shown under the map |
 | `analysis/project.py` | Ties the analysis together for the server |
-| `analysis/structure.py` | Answers structure questions from the map: describe, cohesion, coupling, instability |
-| `git.py` | Resolves ranges, lists changed files and extracts revisions with `git archive` |
-| `analysis/diff.py` | Compares two revisions: symbol changes, merged outlines, code, blueprints and the parts to review |
-| `seen.py` | Saves the fingerprints of the changes you have ticked as seen |
-| `comments.py` | Stores comment threads, the agent's state on each, and an event log to wait on |
-| `anchors.py` | Finds where a comment points now, and whether that code changed |
-| `collaboration.py` | `CollaborationService`: the comment routes for the reviewer and the agent |
-| `queries.py` | `QueryService`: the structure query routes |
-| `registry.py` | Publishes a running server's address and agent token so the agent tools can find it |
+| `analysis/structure.py` | Answers structure questions from the map: describe, cohesion, coupling, instability, report, and what is too large |
+| `analysis/metrics/` | The measures behind those answers: `code_graph.py` is the tree of packages, modules and members with their edges; `cohesion.py` gathers `class_cohesion.py`, `group_cohesion.py` and `function_cohesion.py`; `coupling.py` scores the links between modules; `size.py` finds folders, files, classes and functions that are too large or complex |
+| `analysis/diff/` | Compares two revisions (`revisions.py` names the range and the changed files): `changes.py` marks what changed in each file, `outline.py` and `merge.py` merge the outlines, code and blueprints, `units.py` splits the changes into the parts to review, and `project_diff.py` puts them together |
+| `projects/` | Opening projects: `host.py` (`ProjectHost`, the open project and comparison, loaded in the background), `git.py` (ranges, changed files and `git archive`), `comparison.py` (builds a `ProjectDiff` for a range), `overview_cache.py` (caches each project's map on disk), `seen.py` (the changes you have ticked as seen), `recent.py` (recently opened projects) and `registry.py` (publishes a running server's address and agent token) |
+| `review/` | Comments: `comments.py` stores threads, the agent's state on each and an event log to wait on; `anchors.py` finds where a comment points now and whether that code changed |
+| `agent_tools/` | What `agent.py` and `mcp.py` share: `client.py` finds and calls the running server, `thread_text.py` prints comment threads |
+| `web/` | The server: `framework.py` (`Request`, `Response`, the `Router` and the handler that checks tokens, parses bodies and compresses replies), one service per area (`project_service.py`, `comparison_service.py`, `query_service.py`, `collaboration_service.py`), `static_files.py` (serves the page) and `server.py` (puts them on one router) |
+| `config.py` | Where settings, comments and the server registry are kept |
+| `app.py` | `code-blueprints`: starts the server and opens the browser |
 | `agent.py` | `code-blueprints-agent`: watch, answer and query from the command line |
 | `mcp.py` | `code-blueprints-mcp`: the same as MCP tools over stdio |
-| `web.py` | HTTP plumbing: `Request`, `Response`, the `Router` and the handler that checks tokens, parses bodies and compresses replies |
-| `host.py` | `ProjectHost`: the open project and comparison as one `Session`, loaded in the background |
-| `overview_cache.py` | Caches each project's map on disk, keyed by file sizes and modification times |
-| `comparison.py` | Extracts the two revisions of a range and builds their `ProjectDiff` |
-| `services.py` | `ProjectService`, `ComparisonService` and `StaticFiles`: the project, comparison and page routes |
-| `recent.py` | Remembers recently opened projects |
-| `server.py` | Puts the services on one router and starts the server |
-| `app.py` | Command line: starts the server and opens the browser |
-| `static/` | The UI: layout, wire routing and rendering, in plain JavaScript; `highlight.js` colours Python, JavaScript and TypeScript source, `layout.js` holds the Compact, Straighter and Straightest solvers and `datamodel.js` draws the data model |
+| `static/` | The UI, as plain JavaScript modules. `app.js` starts it. `core/` holds the data and helpers (`data.js`, `project.js`, `dom.js`, `highlight.js`, `settings.js`) and the layered layout (`layout.js`, `simplex.js` for ranks, `columns.js` for ordering); `canvas/` is the pannable view (`viewport.js`, `gestures.js`, `pointers.js`, `scene.js`); `map/` draws the dependency and data maps; `blueprint/` draws a function's blueprint and its code panel; `comments/` holds the comment store, list, cards and marks; `explorer/` is the sidebar, toolbar, palette and the trail of views |

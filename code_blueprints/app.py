@@ -5,14 +5,41 @@ import threading
 import webbrowser
 from pathlib import Path
 
-from code_blueprints.git import GitError
-from code_blueprints.registry import ServerRegistry
-from code_blueprints.host import ProjectHost
-from code_blueprints.recent import remember_project
-from code_blueprints.server import start_server
+from code_blueprints.projects.git import GitError
+from code_blueprints.projects.registry import ServerRegistry
+from code_blueprints.projects.host import ProjectHost
+from code_blueprints.projects.recent import remember_project
+from code_blueprints.web.server import start_server
 
 
 def main(argv: list[str] | None = None) -> int:
+    parser = _parser()
+    args = parser.parse_args(argv)
+    registry = ServerRegistry()
+    host = ProjectHost(registry=registry)
+    if args.folder:
+        _open_folder(parser, host, Path(args.folder).expanduser(), args.diff)
+    token = secrets.token_urlsafe(18)
+    server = start_server(host, token, args.port)
+    address = f"http://127.0.0.1:{server.server_address[1]}"
+    url = f"{address}/?t={token}"
+    registry.publish(address, host.agent_token)
+    signal.signal(signal.SIGTERM, _stop)
+    print(f"Code Blueprints is running at {url}", flush=True)
+    print("Press Ctrl+C to stop.", flush=True)
+    if not args.no_open:
+        webbrowser.open(url)
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        registry.remove()
+    server.shutdown()
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="code-blueprints",
         description="Browse a Python, JavaScript or TypeScript codebase as blueprint-style dependency maps and dataflow graphs.",
@@ -34,36 +61,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="print the address instead of opening it in your browser",
     )
-    args = parser.parse_args(argv)
-    registry = ServerRegistry()
-    host = ProjectHost(registry=registry)
-    if args.folder:
-        folder = Path(args.folder).expanduser()
-        if not folder.is_dir():
-            parser.error(f"not a folder: {folder}")
-        try:
-            host.open(folder, args.diff)
-        except GitError as error:
-            parser.error(str(error))
-        remember_project(folder)
-    token = secrets.token_urlsafe(18)
-    server = start_server(host, token, args.port)
-    address = f"http://127.0.0.1:{server.server_address[1]}"
-    url = f"{address}/?t={token}"
-    registry.publish(address, host.agent_token)
-    signal.signal(signal.SIGTERM, _stop)
-    print(f"Code Blueprints is running at {url}", flush=True)
-    print("Press Ctrl+C to stop.", flush=True)
-    if not args.no_open:
-        webbrowser.open(url)
+    return parser
+
+
+def _open_folder(
+    parser: argparse.ArgumentParser, host: ProjectHost, folder: Path, diff: str | None
+) -> None:
+    if not folder.is_dir():
+        parser.error(f"not a folder: {folder}")
     try:
-        threading.Event().wait()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        registry.remove()
-    server.shutdown()
-    return 0
+        host.open(folder, diff)
+    except GitError as error:
+        parser.error(str(error))
+    remember_project(folder)
 
 
 def _stop(signum: int, frame: object) -> None:

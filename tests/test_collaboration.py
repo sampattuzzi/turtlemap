@@ -6,7 +6,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from code_blueprints.registry import ServerRegistry, find_server
+from code_blueprints.projects.registry import ServerRegistry, find_server
 from tests.conftest import SOURCE, Running
 
 

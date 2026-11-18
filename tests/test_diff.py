@@ -5,9 +5,9 @@ from typing import Any
 
 import pytest
 
-from code_blueprints.analysis.diff import ProjectDiff
+from code_blueprints.analysis.diff.project_diff import ProjectDiff
 from code_blueprints.analysis.project import Project
-from code_blueprints.git import GitError, Repository
+from code_blueprints.projects.git import GitError, Repository
 
 BEFORE = {
     "shop/models.py": """

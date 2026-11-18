@@ -4,12 +4,12 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from code_blueprints.analysis import model as m
-from code_blueprints.analysis.workspace import (
+from code_blueprints.analysis.workspace.parsed import (
     ExternalRef,
     ParsedModule,
     SymbolRef,
-    Workspace,
 )
+from code_blueprints.analysis.workspace.workspace import Workspace
 from code_blueprints.languages.language import TypeNames
 
 _MODULE_PREFIX = re.compile(r"\b(?:[A-Za-z_]\w*\.)+([A-Za-z_]\w*)")
@@ -92,34 +92,37 @@ class TypeSystem:
             return None
         if parsed.node.kind != "class":
             return parsed.node.kind
-        names = module.language.profile.types
         category = self.class_category(ref)
         if category == "enum":
             return "enum"
         if category == "iface":
             return "protocol"
         if category == "struct":
-            labels = {
-                label.split("[")[0].rsplit(".", 1)[-1]
-                for label, _ in self.workspace.base_classes(ref)
-            }
-            if labels & names.model_bases:
-                return "model"
-            if "NamedTuple" in labels:
-                return "namedtuple"
-            if "TypedDict" in labels:
-                return "typeddict"
-            return "dataclass"
-        for ancestor in self.workspace.class_ancestry(ref):
-            for label, _ in self.workspace.base_classes(ancestor):
-                last = label.split("[")[0].rsplit(".", 1)[-1]
-                if last in ("Exception", "BaseException", "Warning") or last.endswith(
-                    "Error"
-                ):
-                    return "exception"
+            return self._struct_stereotype(ref, module.language.profile.types)
+        if self._is_exception(ref):
+            return "exception"
         if ref.sym.endswith("Mixin"):
             return "mixin"
         return None
+
+    def _struct_stereotype(self, ref: SymbolRef, names: TypeNames) -> str:
+        labels = {_base_name(label) for label, _ in self.workspace.base_classes(ref)}
+        if labels & names.model_bases:
+            return "model"
+        if "NamedTuple" in labels:
+            return "namedtuple"
+        if "TypedDict" in labels:
+            return "typeddict"
+        return "dataclass"
+
+    def _is_exception(self, ref: SymbolRef) -> bool:
+        return any(
+            last in ("Exception", "BaseException", "Warning") or last.endswith("Error")
+            for ancestor in self.workspace.class_ancestry(ref)
+            for last in (
+                _base_name(label) for label, _ in self.workspace.base_classes(ancestor)
+            )
+        )
 
     def class_type(self, ref: SymbolRef) -> PinType:
         category = self.class_category(ref)
@@ -139,13 +142,13 @@ class TypeSystem:
         if parsed.node.kind == "enum":
             return "enum"
         names = module.language.profile.types
-        for decorator in parsed.node.decorators:
-            target = decorator.func if isinstance(decorator, m.Call) else decorator
-            name = m.dotted_name(target)
-            if name and name.rsplit(".", 1)[-1] in names.struct_decorators:
-                return "struct"
+        if _has_struct_decorator(parsed.node, names):
+            return "struct"
+        return self._category_from_bases(ref, names)
+
+    def _category_from_bases(self, ref: SymbolRef, names: TypeNames) -> str:
         for label, base in self.workspace.base_classes(ref):
-            last = label.split("[")[0].rsplit(".", 1)[-1]
+            last = _base_name(label)
             if last in names.enum_bases:
                 return "enum"
             if last in names.struct_bases:
@@ -284,3 +287,16 @@ class TypeResolver:
             categories.pop() if len(categories) == 1 else "any",
             opt=has_none,
         )
+
+
+def _base_name(label: str) -> str:
+    return label.split("[")[0].rsplit(".", 1)[-1]
+
+
+def _has_struct_decorator(node: m.ClassDecl, names: TypeNames) -> bool:
+    for decorator in node.decorators:
+        target = decorator.func if isinstance(decorator, m.Call) else decorator
+        name = m.dotted_name(target)
+        if name and name.rsplit(".", 1)[-1] in names.struct_decorators:
+            return True
+    return False

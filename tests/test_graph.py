@@ -2,9 +2,10 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-from code_blueprints.analysis.graph import MAX_NODES, build_function_graph
+from code_blueprints.analysis.blueprint.canvas import MAX_NODES
+from code_blueprints.analysis.blueprint.builder import build_function_graph
 from code_blueprints.analysis.types import TypeSystem
-from code_blueprints.analysis.workspace import Workspace
+from code_blueprints.analysis.workspace.workspace import Workspace
 
 REALISTIC_MODULE = """
     import dataclasses
@@ -776,7 +777,7 @@ def test_builds_well_formed_graphs_for_every_function_of_a_realistic_module(
         {"shop/basket.py": REALISTIC_MODULE, "shop/pricing.py": PRICING_MODULE},
     )
 
-    for path in workspace.files:
+    for path in workspace.index.files:
         module = workspace.module(path)
         assert module is not None
         for function in module.functions.values():

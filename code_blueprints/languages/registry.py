@@ -1,8 +1,8 @@
 from pathlib import PurePosixPath
 
 from code_blueprints.languages.language import Language
-from code_blueprints.languages.javascript import JavaScript
-from code_blueprints.languages.python import Python
+from code_blueprints.languages.javascript.language import JavaScript
+from code_blueprints.languages.python.language import Python
 
 LANGUAGES: tuple[Language, ...] = (Python(), JavaScript())
 EXTENSIONS: tuple[str, ...] = tuple(

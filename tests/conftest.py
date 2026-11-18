@@ -12,10 +12,10 @@ from urllib.request import Request, urlopen
 import pytest
 
 from code_blueprints.analysis.project import Project
-from code_blueprints.comments import CommentStore
-from code_blueprints.seen import SeenStore
-from code_blueprints.host import ProjectHost
-from code_blueprints.server import start_server
+from code_blueprints.review.comments import CommentStore
+from code_blueprints.projects.seen import SeenStore
+from code_blueprints.projects.host import ProjectHost
+from code_blueprints.web.server import start_server
 
 TOKEN = "user-token"
 SOURCE = "class Square:\n    def area(self, side: float) -> float:\n        return side * side\n"

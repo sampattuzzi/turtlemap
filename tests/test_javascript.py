@@ -290,6 +290,32 @@ def test_follows_names_re_exported_from_a_barrel(
     ) in edges(project.overview())
 
 
+def test_links_a_js_specifier_to_the_typescript_file_it_compiles_from(
+    make_project: ProjectFactory,
+) -> None:
+    project = make_project(
+        {
+            "web/core/dom.ts": """
+                export function el(tag: string): string {
+                  return tag;
+                }
+            """,
+            "web/map/view.ts": """
+                import { el } from '../core/dom.js';
+                export function draw(): string {
+                  return el('div');
+                }
+            """,
+        }
+    )
+
+    assert (
+        "fn:web/map/view.ts:draw",
+        "fn:web/core/dom.ts:el",
+        "calls",
+    ) in edges(project.overview())
+
+
 def test_links_classic_scripts_through_their_shared_globals(
     make_project: ProjectFactory,
 ) -> None:

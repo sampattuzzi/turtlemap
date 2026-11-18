@@ -1,7 +1,8 @@
 import pytest
 
 from code_blueprints.analysis.project import Project
-from code_blueprints.analysis.structure import QueryError, Structure
+from code_blueprints.analysis.metrics.code_graph import QueryError
+from code_blueprints.analysis.structure import Structure
 from tests.conftest import ProjectFactory
 
 ACCOUNT = """
@@ -333,6 +334,62 @@ def test_blueprint_lists_nodes_and_their_wires(make_project: ProjectFactory) -> 
 
     assert "Return" in answer["text"]
     assert "←" in answer["text"]
+
+
+def test_reports_a_function_that_is_too_long(make_project: ProjectFactory) -> None:
+    body = "".join(f"    total += {n}\n" for n in range(60))
+    structure = make_structure(
+        make_project(
+            {
+                "app/long.py": f"def long() -> int:\n    total = 0\n{body}    return total\n"
+            }
+        )
+    )
+
+    oversized = structure.report()["oversized"]
+
+    assert [(item["id"], item["over"]) for item in oversized] == [
+        ("fn:app/long.py:long", ["lines"])
+    ]
+
+
+def test_counts_branches_loops_and_conditions_as_complexity(
+    make_project: ProjectFactory,
+) -> None:
+    structure = make_structure(make_project({"app/branchy.py": """
+                def branchy(items: list[int], flag: bool) -> int:
+                    total = 0
+                    for item in items:
+                        if item > 0 and flag:
+                            total += item
+                        elif item < 0 or not flag:
+                            total -= 1 if flag else 2
+                    while total > 100:
+                        total //= 2
+                    return total
+            """}))
+
+    answer = structure.describe("fn:app/branchy.py:branchy")
+
+    assert answer["size"] == {"lines": 10, "complexity": 8}
+
+
+def test_reports_a_file_with_too_many_lines(make_project: ProjectFactory) -> None:
+    constants = "".join(f"VALUE_{n} = {n}\n" for n in range(520))
+    structure = make_structure(make_project({"app/table.py": constants}))
+
+    oversized = structure.report()["oversized"]
+
+    assert [(item["id"], item["size"]["lines"]) for item in oversized] == [
+        ("mod:app/table.py", 520)
+    ]
+
+
+def test_leaves_tests_out_of_the_size_report(make_project: ProjectFactory) -> None:
+    constants = "".join(f"VALUE_{n} = {n}\n" for n in range(520))
+    structure = make_structure(make_project({"tests/test_table.py": constants}))
+
+    assert structure.report()["oversized"] == []
 
 
 def make_structure(project: Project) -> Structure:

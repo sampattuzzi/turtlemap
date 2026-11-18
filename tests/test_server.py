@@ -12,10 +12,10 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from code_blueprints.comparison import head_project
-from code_blueprints.host import ProjectHost
-from code_blueprints.seen import SeenStore
-from code_blueprints.server import start_server
+from code_blueprints.projects.comparison import head_project
+from code_blueprints.projects.host import ProjectHost
+from code_blueprints.projects.seen import SeenStore
+from code_blueprints.web.server import start_server
 
 TOKEN = "secret-token"
 
@@ -288,7 +288,7 @@ def make_held_head(monkeypatch: pytest.MonkeyPatch, hold_call: int) -> HeldHead:
             held.finished.set()
         return result
 
-    monkeypatch.setattr("code_blueprints.host.head_project", hold)
+    monkeypatch.setattr("code_blueprints.projects.host.head_project", hold)
     return held
 
 

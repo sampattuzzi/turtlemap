@@ -6,13 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
-from code_blueprints.agent import (
-    AgentClient,
-    AgentError,
-    connect,
-    describe_thread,
-    thread_text,
-)
+from code_blueprints.agent_tools.client import AgentClient, AgentError, connect
+from code_blueprints.agent_tools.thread_text import describe_thread, thread_text
 
 DEFAULT_PROTOCOL = "2025-06-18"
 SERVER_INFO = {"name": "code-blueprints", "version": "0.1.0"}
@@ -296,7 +291,7 @@ TOOLS = (
     ),
     Tool(
         "structure_report",
-        "Cohesion, coupling and instability for every module, the most coupled module pairs and any cycles.",
+        "Cohesion, coupling and instability for every module, the most coupled module pairs, any cycles, and the folders, files, classes and functions that are too large or complex.",
         {"tests": {"type": "boolean"}, "top": {"type": "integer", "minimum": 1}},
         (),
         _query("report", "top"),
@@ -317,7 +312,7 @@ TOOLS = (
     ),
     Tool(
         "structure_describe",
-        "What a package, module, class or function contains, depends on and is used by.",
+        "What a package, module, class or function contains, how large and complex it is, what it depends on and what uses it.",
         {"name": _NAME},
         ("name",),
         _query("describe", "name"),

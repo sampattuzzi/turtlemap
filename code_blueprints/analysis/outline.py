@@ -1,7 +1,7 @@
 from typing import Any
 
 from code_blueprints.analysis import model as m
-from code_blueprints.analysis.workspace import ParsedFunction, ParsedModule
+from code_blueprints.analysis.workspace.parsed import ParsedFunction, ParsedModule
 
 
 def module_outline(module: ParsedModule) -> list[dict[str, Any]]:

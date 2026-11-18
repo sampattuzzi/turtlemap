@@ -3,63 +3,16 @@ import json
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, TextIO
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
-from code_blueprints.registry import ServerInfo, find_server
+from code_blueprints.agent_tools.client import AgentClient, AgentError, connect
+from code_blueprints.agent_tools.thread_text import describe_thread, thread_text
 
 WATCH_WAIT = 25
 RETRY_SECONDS = 2.0
-EXCERPT = 160
-
-
-class AgentError(Exception):
-    pass
-
-
-class AgentClient:
-    def __init__(self, info: ServerInfo) -> None:
-        self.info = info
-
-    def get(self, path: str, **query: Any) -> Any:
-        suffix = f"?{urlencode(query)}" if query else ""
-        return self._send(Request(f"{self.info.url}{path}{suffix}"), timeout=60)
-
-    def post(self, path: str, payload: dict[str, Any]) -> Any:
-        request = Request(
-            f"{self.info.url}{path}",
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        return self._send(request, timeout=30)
-
-    def _send(self, request: Request, timeout: float) -> Any:
-        request.add_header("X-Blueprints-Token", self.info.token)
-        try:
-            with urlopen(request, timeout=timeout) as response:
-                return json.loads(response.read())
-        except HTTPError as error:
-            try:
-                message = json.loads(error.read()).get("error", str(error))
-            except ValueError:
-                message = str(error)
-            raise AgentError(message) from None
-        except (URLError, OSError) as error:
-            raise ConnectionError(str(error)) from None
-
-
-def connect(root: Path) -> AgentClient:
-    info = find_server(root)
-    if info is None:
-        raise AgentError(
-            f"No Code Blueprints server is running for {root}. "
-            "Start one with: code-blueprints <folder> --no-open"
-        )
-    return AgentClient(info)
 
 
 def main(argv: list[str] | None = None, out: TextIO | None = None) -> int:
@@ -80,83 +33,6 @@ def main(argv: list[str] | None = None, out: TextIO | None = None) -> int:
     return 0
 
 
-def describe_thread(thread: dict[str, Any]) -> str:
-    agent = thread.get("agent") or {}
-    state = agent.get("state") or "unseen"
-    note = f' "{agent["note"]}"' if agent.get("note") else ""
-    last = thread["messages"][-1]
-    flags = [
-        "resolved" if thread["resolved"] else "open",
-        f"agent:{state}{note}",
-    ]
-    if thread.get("where", {}).get("outdated"):
-        flags.append("outdated")
-    return (
-        f"{thread['id']} [{', '.join(flags)}] {anchor_label(thread)} · "
-        f"{len(thread['messages'])} message(s), last by {last['author']}: "
-        f"{_excerpt(last['body'])}"
-    )
-
-
-def anchor_label(thread: dict[str, Any]) -> str:
-    anchor = thread.get("anchor", {})
-    locations = thread.get("where", {}).get("locations", [])
-    nodes: dict[str, list[str]] = {}
-    for location in locations:
-        names = nodes.setdefault(_place(location), [])
-        if location.get("node"):
-            names.append(repr(location["node"]))
-    places = [
-        (
-            f"{where} node{'s' if len(names) > 1 else ''} {', '.join(names)}"
-            if names
-            else where
-        )
-        for where, names in list(nodes.items())[:3]
-    ]
-    if len(nodes) > 3:
-        places.append(f"+{len(nodes) - 3} more")
-    view = anchor.get("view", "?")
-    return f"{view}: {', '.join(places) or anchor.get('label') or '?'}"
-
-
-def thread_text(thread: dict[str, Any]) -> str:
-    lines = [describe_thread(thread)]
-    where = thread["where"]
-    if where.get("outdated"):
-        lines.append("The code this points at has changed since the comment was made.")
-    for places in _same_source(where["locations"]):
-        lines += [
-            "",
-            anchor_label({"anchor": thread["anchor"], "where": {"locations": places}}),
-        ]
-        lines += [
-            f"  {number:>5}  {text}" for number, text in places[0].get("source") or []
-        ]
-    anchor = thread["anchor"]
-    if anchor.get("text") and anchor.get("view") == "code":
-        lines += ["", "Selected text when commented:"]
-        lines += [f"         {line}" for line in str(anchor["text"]).splitlines()]
-    lines.append("")
-    for message in thread["messages"]:
-        stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(message["at"]))
-        lines += [f"[{message['author']} · {stamp}]", message["body"], ""]
-    return "\n".join(lines)
-
-
-def _place(location: dict[str, Any]) -> str:
-    where = str(
-        location.get("path") or location.get("folder") or location.get("library", "?")
-    )
-    if location.get("start"):
-        where += f":{location['start']}"
-        if location.get("end") and location["end"] != location["start"]:
-            where += f"-{location['end']}"
-    if location.get("qual"):
-        where += f" ({location['qual']})"
-    return where
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="code-blueprints-agent",
@@ -168,99 +44,180 @@ def _parser() -> argparse.ArgumentParser:
         help="project folder the server is showing (default: here)",
     )
     commands = parser.add_subparsers(required=True, metavar="command")
-
-    def command(
-        name: str, run: Callable[..., None], text: str
-    ) -> argparse.ArgumentParser:
-        sub = commands.add_parser(name, help=text, description=text)
-        sub.set_defaults(run=run)
-        return sub
-
-    watch = command(
-        "watch",
-        _watch,
-        "Print one line per new comment, reply or resolution, starting with comments you have not seen. Runs until stopped.",
-    )
-    watch.add_argument("--once", action="store_true", help="exit after the first batch")
-    watch.add_argument("--json", action="store_true", help="print JSON lines")
-    listing = command("list", _list, "List comments, open ones first.")
-    listing.add_argument("--all", action="store_true", help="include resolved comments")
-    listing.add_argument("--json", action="store_true")
-    show = command("show", _show, "Show a comment thread with the code it points at.")
-    show.add_argument("id")
-    show.add_argument("--json", action="store_true")
-    reply = command(
-        "reply", _reply, "Reply to a comment. Use - to read the text from stdin."
-    )
-    reply.add_argument("id")
-    reply.add_argument("text")
-    for name, text in (
-        ("seen", "Mark comments as seen."),
-        ("working", "Mark comments as being worked on."),
-        ("done", "Mark comments as done, for the reviewer to resolve."),
-    ):
-        progress = command(name, _progress, text)
-        progress.add_argument("ids", nargs="+")
-        progress.add_argument("--note", help='short status, e.g. "updating plots.py"')
-        progress.set_defaults(state=name)
-    status = command(
-        "status",
-        _status,
-        "Set the status line shown to the reviewer; omit text to clear it.",
-    )
-    status.add_argument("text", nargs="?")
-    command("where", _where, "Show which server this folder talks to.")
-    query = command(
-        "query",
-        _query,
-        "Ask about the code's structure: report, tree [NAME], find TEXT, describe NAME, cohesion NAME, coupling A B, blueprint NAME. Names can be ids, paths, dotted modules or Class.method.",
-    )
-    query.add_argument("what", choices=sorted(_QUERY_ARGUMENTS))
-    query.add_argument("names", nargs="*")
-    query.add_argument("--depth", type=int, help="tree depth (default 2)")
-    query.add_argument("--top", type=int, help="pairs to list in the report")
-    query.add_argument(
-        "--tests", action="store_true", help="count tests as dependants in the report"
-    )
-    query.add_argument("--json", action="store_true")
+    for command in _commands():
+        sub = commands.add_parser(
+            command.name, help=command.text, description=command.text
+        )
+        sub.set_defaults(run=command.run)
+        command.arguments(sub)
     return parser
 
 
+_Run = Callable[[argparse.Namespace, Path, TextIO], None]
+_Arguments = Callable[[argparse.ArgumentParser], None]
+
+
+@dataclass(frozen=True)
+class _Command:
+    name: str
+    run: _Run
+    text: str
+    arguments: _Arguments
+
+
+def _commands() -> list[_Command]:
+    return [
+        _Command(
+            "watch",
+            _watch,
+            "Print one line per new comment, reply or resolution, starting with comments you have not seen. Runs until stopped.",
+            _watch_arguments,
+        ),
+        _Command("list", _list, "List comments, open ones first.", _list_arguments),
+        _Command(
+            "show",
+            _show,
+            "Show a comment thread with the code it points at.",
+            _show_arguments,
+        ),
+        _Command(
+            "reply",
+            _reply,
+            "Reply to a comment. Use - to read the text from stdin.",
+            _reply_arguments,
+        ),
+        *(
+            _Command(state, _progress, text, partial(_progress_arguments, state=state))
+            for state, text in _PROGRESS_STATES
+        ),
+        _Command(
+            "status",
+            _status,
+            "Set the status line shown to the reviewer; omit text to clear it.",
+            _status_arguments,
+        ),
+        _Command(
+            "where", _where, "Show which server this folder talks to.", _no_arguments
+        ),
+        _Command(
+            "query",
+            _query,
+            "Ask about the code's structure: report, tree [NAME], find TEXT, describe NAME, cohesion NAME, coupling A B, blueprint NAME. Names can be ids, paths, dotted modules or Class.method.",
+            _query_arguments,
+        ),
+    ]
+
+
+_PROGRESS_STATES = (
+    ("seen", "Mark comments as seen."),
+    ("working", "Mark comments as being worked on."),
+    ("done", "Mark comments as done, for the reviewer to resolve."),
+)
+
+
+def _watch_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument("--once", action="store_true", help="exit after the first batch")
+    sub.add_argument("--json", action="store_true", help="print JSON lines")
+
+
+def _list_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument("--all", action="store_true", help="include resolved comments")
+    sub.add_argument("--json", action="store_true")
+
+
+def _show_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument("id")
+    sub.add_argument("--json", action="store_true")
+
+
+def _reply_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument("id")
+    sub.add_argument("text")
+
+
+def _progress_arguments(sub: argparse.ArgumentParser, state: str) -> None:
+    sub.add_argument("ids", nargs="+")
+    sub.add_argument("--note", help='short status, e.g. "updating plots.py"')
+    sub.set_defaults(state=state)
+
+
+def _status_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument("text", nargs="?")
+
+
+def _no_arguments(sub: argparse.ArgumentParser) -> None:
+    pass
+
+
+def _query_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument("what", choices=sorted(_QUERY_ARGUMENTS))
+    sub.add_argument("names", nargs="*")
+    sub.add_argument("--depth", type=int, help="tree depth (default 2)")
+    sub.add_argument("--top", type=int, help="pairs to list in the report")
+    sub.add_argument(
+        "--tests", action="store_true", help="count tests as dependants in the report"
+    )
+    sub.add_argument("--json", action="store_true")
+
+
 def _watch(args: argparse.Namespace, root: Path, out: TextIO) -> None:
-    printed: set[tuple[str, int, str]] = set()
-    client: AgentClient | None = None
-    cursor = 0
-    lost = False
-    while True:
-        try:
-            if client is None:
-                client = connect(root)
-                listing = client.get("/api/comments")
-                cursor = listing["cursor"]
-                backlog = [
-                    thread
-                    for thread in listing["threads"]
-                    if not thread["resolved"]
-                    and not (thread["agent"] or {}).get("state")
-                ]
-                if lost:
-                    _emit(out, args, "reconnected", None, printed)
-                    lost = False
-                for thread in backlog:
-                    _emit(out, args, "unseen", thread, printed)
-                if backlog and args.once:
-                    return
-            answer = client.get("/api/comments/events", since=cursor, wait=WATCH_WAIT)
-        except (ConnectionError, AgentError) as error:
-            client = None
-            if not lost:
-                _emit(
-                    out, args, f"server unreachable, retrying ({error})", None, printed
-                )
-                lost = True
-            time.sleep(RETRY_SECONDS)
-            continue
-        cursor = answer["cursor"]
+    _Watcher(args, root, out).run()
+
+
+class _Watcher:
+    def __init__(self, args: argparse.Namespace, root: Path, out: TextIO) -> None:
+        self.args = args
+        self.root = root
+        self.out = out
+        self.printed: set[tuple[str, int, str]] = set()
+        self.client: AgentClient | None = None
+        self.cursor = 0
+        self.lost = False
+
+    def run(self) -> None:
+        while True:
+            try:
+                answer = self._next_answer()
+            except (ConnectionError, AgentError) as error:
+                self._lose(error)
+                continue
+            if answer is None or (self._report(answer) and self.args.once):
+                return
+
+    def _next_answer(self) -> dict[str, Any] | None:
+        if self.client is None:
+            self.client = connect(self.root)
+            if self._catch_up(self.client) and self.args.once:
+                return None
+        answer: dict[str, Any] = self.client.get(
+            "/api/comments/events", since=self.cursor, wait=WATCH_WAIT
+        )
+        return answer
+
+    def _catch_up(self, client: AgentClient) -> bool:
+        listing = client.get("/api/comments")
+        self.cursor = listing["cursor"]
+        backlog = [
+            thread
+            for thread in listing["threads"]
+            if not thread["resolved"] and not (thread["agent"] or {}).get("state")
+        ]
+        if self.lost:
+            self._emit("reconnected", None)
+            self.lost = False
+        for thread in backlog:
+            self._emit("unseen", thread)
+        return bool(backlog)
+
+    def _lose(self, error: Exception) -> None:
+        self.client = None
+        if not self.lost:
+            self._emit(f"server unreachable, retrying ({error})", None)
+            self.lost = True
+        time.sleep(RETRY_SECONDS)
+
+    def _report(self, answer: dict[str, Any]) -> int:
+        self.cursor = answer["cursor"]
         threads = {thread["id"]: thread for thread in answer["threads"]}
         shown = 0
         for event in answer["events"]:
@@ -268,9 +225,11 @@ def _watch(args: argparse.Namespace, root: Path, out: TextIO) -> None:
                 continue
             thread = threads.get(event["thread"])
             if thread is not None:
-                shown += _emit(out, args, _EVENT_WORDS[event["type"]], thread, printed)
-        if shown and args.once:
-            return
+                shown += self._emit(_EVENT_WORDS[event["type"]], thread)
+        return shown
+
+    def _emit(self, word: str, thread: dict[str, Any] | None) -> int:
+        return _emit(self.out, self.args, word, thread, self.printed)
 
 
 _EVENT_WORDS = {
@@ -357,19 +316,6 @@ def _where(args: argparse.Namespace, root: Path, out: TextIO) -> None:
         print(f"comparing: {status['diff']['spec']}", file=out)
 
 
-def _same_source(locations: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-    for location in locations:
-        key = (
-            location.get("path") or location.get("folder") or location.get("library"),
-            location.get("start"),
-            location.get("end"),
-            location.get("source") is None,
-        )
-        groups.setdefault(key, []).append(location)
-    return list(groups.values())
-
-
 _QUERY_ARGUMENTS: dict[str, tuple[str, ...]] = {
     "report": (),
     "tree": ("name",),
@@ -398,12 +344,6 @@ def _query(args: argparse.Namespace, root: Path, out: TextIO) -> None:
         params["tests"] = 1
     answer = connect(root).get(f"/api/query/{args.what}", **params)
     print(json.dumps(answer, indent=1) if args.json else answer["text"], file=out)
-
-
-def _excerpt(text: str) -> str:
-    flat = " ".join(text.split())
-    shortened = flat if len(flat) <= EXCERPT else flat[: EXCERPT - 1] + "…"
-    return json.dumps(shortened, ensure_ascii=False)
 
 
 if __name__ == "__main__":

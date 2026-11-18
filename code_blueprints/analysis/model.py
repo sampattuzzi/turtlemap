@@ -1,10 +1,6 @@
 from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass, field, fields
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from code_blueprints.languages.language import Language
 
 
 @dataclass(eq=False)
@@ -404,7 +400,6 @@ class ModuleCode:
     body: list[Stmt]
     doc: str | None
     doc_lines: tuple[int, int] | None
-    language: "Language"
     is_script: bool = False
 
 
@@ -460,6 +455,18 @@ def bound_names(definition: FunctionDecl | Function) -> frozenset[str]:
             names.update(node.captures)
         pending.extend(children(node))
     return frozenset(names)
+
+
+def decision_points(definition: FunctionDecl) -> int:
+    count = 0
+    for node in walk(definition):
+        if isinstance(
+            node, (If, For, While, Handler, Case, Conditional, Comprehension)
+        ):
+            count += 1
+        elif isinstance(node, Logical):
+            count += len(node.values) - 1
+    return count
 
 
 _LEAF_TYPES: tuple[object, ...] = (str, bool, int, object, str | None)

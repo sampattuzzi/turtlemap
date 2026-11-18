@@ -5,7 +5,7 @@ from typing import Any
 from code_blueprints.analysis import model as m
 from code_blueprints.analysis.symbols import class_fields, module_constants
 from code_blueprints.analysis.types import PinType, TypeResolver, TypeSystem
-from code_blueprints.analysis.workspace import (
+from code_blueprints.analysis.workspace.parsed import (
     ExternalRef,
     ParsedClass,
     ParsedModule,
@@ -127,7 +127,7 @@ class DependencyCollector:
         module_name, _, name = (
             binding.absolute + ("." + rest if rest else "")
         ).rpartition(".")
-        path = self.types.workspace.find_module(module_name, near=module.path)
+        path = self.types.workspace.index.find_module(module_name, near=module.path)
         target = self.types.workspace.module(path) if path else None
         if target is None or name not in self._constants_in(target):
             return None
@@ -295,18 +295,8 @@ class CodeDependencies:
             and workspace.parsed_class(receiver.ref) is not None
         ):
             return workspace.find_method(receiver.ref, func.attr)
-        if (
-            isinstance(func.value, m.Call)
-            and isinstance(func.value.func, m.Name)
-            and func.value.func.id == self.module.language.profile.super_name
-            and self.owner is not None
-        ):
-            for _, base in workspace.base_classes(self.owner):
-                if isinstance(base, SymbolRef):
-                    found = workspace.find_method(base, func.attr)
-                    if found is not None:
-                        return found
-            return None
+        if self._calls_super(func.value):
+            return self._inherited_method(func.attr)
         dotted = m.dotted_name(func)
         if dotted is None:
             return None
@@ -314,6 +304,24 @@ class CodeDependencies:
         if head in self.local_types or head in self.locals:
             return None
         return workspace.resolve(self.module, dotted)
+
+    def _calls_super(self, value: m.Expr) -> bool:
+        return (
+            isinstance(value, m.Call)
+            and isinstance(value.func, m.Name)
+            and value.func.id == self.module.language.profile.super_name
+            and self.owner is not None
+        )
+
+    def _inherited_method(self, name: str) -> Resolved | None:
+        workspace = self.collector.types.workspace
+        assert self.owner is not None
+        for _, base in workspace.base_classes(self.owner):
+            if isinstance(base, SymbolRef):
+                found = workspace.find_method(base, name)
+                if found is not None:
+                    return found
+        return None
 
     def _type_of(self, node: m.Expr) -> PinType | None:
         if isinstance(node, m.Name):

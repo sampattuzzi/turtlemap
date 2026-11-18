@@ -4,16 +4,16 @@ from pathlib import Path
 from typing import Any
 
 from code_blueprints.analysis.dependencies import DependencyCollector
-from code_blueprints.analysis.graph import build_function_graph
+from code_blueprints.analysis.blueprint.builder import build_function_graph
 from code_blueprints.analysis.outline import function_code, module_outline
 from code_blueprints.analysis.symbols import module_summary
 from code_blueprints.analysis.types import TypeSystem
-from code_blueprints.analysis.workspace import (
+from code_blueprints.analysis.workspace.parsed import (
     ParseFailure,
     ParsedModule,
-    Workspace,
     library_of,
 )
+from code_blueprints.analysis.workspace.workspace import Workspace
 
 
 class Project:
@@ -72,7 +72,7 @@ class Project:
         return module_summary(self.types, module) if module is not None else None
 
     def _module(self, path: str) -> ParsedModule | None:
-        if not self.workspace.contains(path):
+        if not self.workspace.index.contains(path):
             return None
         return self.workspace.module(path)
 
@@ -81,7 +81,7 @@ class Project:
         modules: list[dict[str, Any]] = []
         failures: list[dict[str, str]] = []
         collector = DependencyCollector(self.types)
-        for path in self.workspace.files:
+        for path in self.workspace.index.files:
             parsed = self.workspace.parsed(path)
             if isinstance(parsed, ParseFailure):
                 failures.append({"path": path, "message": parsed.message})

@@ -1,6 +1,7 @@
 from typing import Any
 
 from code_blueprints.analysis import model as m
+from code_blueprints.analysis.import_summary import module_imports
 from code_blueprints.analysis.types import (
     PinType,
     TypeResolver,
@@ -9,13 +10,12 @@ from code_blueprints.analysis.types import (
     literal_type,
     native,
 )
-from code_blueprints.analysis.workspace import (
+from code_blueprints.analysis.workspace.parsed import (
     ExternalRef,
     ParsedClass,
     ParsedFunction,
     ParsedModule,
     SymbolRef,
-    library_of,
 )
 
 _MAX_VALUE = 48
@@ -41,6 +41,7 @@ def module_summary(types: TypeSystem, module: ParsedModule) -> dict[str, Any]:
         "symbols": symbols,
         "constants": _constants(resolver, module),
         "imports": module_imports(types, module),
+        "lines": len(module.lines),
     }
     if module.language.name != "python":
         summary["lang"] = module.language.name
@@ -58,6 +59,7 @@ def function_summary(
         "qual": function.qualname,
         "line": node.line,
         "end": node.end_line or node.line,
+        "complexity": m.decision_points(node) + 1,
         "params": parameters(resolver, module, function),
         "returns": (
             resolver.annotation(node.returns).to_json()
@@ -117,65 +119,6 @@ def parameters(
     return out
 
 
-def module_imports(types: TypeSystem, module: ParsedModule) -> list[dict[str, Any]]:
-    workspace = types.workspace
-    grouped: dict[str, dict[str, Any]] = {}
-
-    def add(name: str, path: str | None, imported: str | None) -> None:
-        entry = grouped.setdefault(name, {"module": name, "path": path, "names": []})
-        if imported and imported not in entry["names"]:
-            entry["names"].append(imported)
-
-    for statement in module.import_statements:
-        if statement.whole:
-            for alias in statement.names:
-                path = workspace.find_module(alias.name, near=module.path)
-                if path is not None or not workspace.is_package(
-                    alias.name, near=module.path
-                ):
-                    add(alias.name, path, None)
-            continue
-        base = statement.module
-        if base is None:
-            continue
-        for alias in statement.names:
-            if alias.name == "*":
-                continue
-            submodule = (
-                workspace.find_module(f"{base}.{alias.name}", near=module.path)
-                if base
-                else None
-            )
-            if submodule is not None:
-                add(f"{base}.{alias.name}", submodule, None)
-                continue
-            path = workspace.find_module(base, near=module.path) if base else None
-            if path is None and (
-                statement.level > 0 or workspace.is_package(base, near=module.path)
-            ):
-                resolved = workspace.resolve_absolute(
-                    f"{base}.{alias.name}", near=module.path
-                )
-                if isinstance(resolved, SymbolRef):
-                    add(
-                        module_of_path(types, resolved.path),
-                        resolved.path,
-                        resolved.sym.split(".")[0],
-                    )
-                continue
-            add(base, path, alias.name)
-    out = list(grouped.values())
-    for entry in out:
-        if entry["path"] is None:
-            entry["lib"] = library_of(entry["module"])
-    return out
-
-
-def module_of_path(types: TypeSystem, path: str) -> str:
-    module = types.workspace.module(path)
-    return module.name if module else path
-
-
 def class_fields(
     types: TypeSystem, ref: SymbolRef
 ) -> list[tuple[str, PinType, str | None]]:
@@ -213,18 +156,7 @@ def _class_summaries(
     ref = SymbolRef(module.path, parsed.qualname)
     category = types.class_category(ref)
     is_enum = category == "enum"
-    bases: list[dict[str, str]] = []
-    external_bases: list[str] = []
-    for label, base in types.workspace.base_classes(ref):
-        if (
-            isinstance(base, SymbolRef)
-            and types.workspace.parsed_class(base) is not None
-        ):
-            bases.append(base.to_json())
-        elif isinstance(base, ExternalRef):
-            external_bases.append(
-                f"{base.module}.{base.name}" if base.name else base.module
-            )
+    bases, external_bases = _bases(types, ref)
     fields = class_fields(types, ref)
     summary: dict[str, Any] = {
         "kind": "enum" if is_enum else "class",
@@ -245,24 +177,50 @@ def _class_summaries(
         summary["stereo"] = stereo
     if external_bases:
         summary["extBases"] = external_bases
-    if is_enum:
-        summary["members"] = [[name, value or ""] for name, _, value in fields]
-        summary["fields"] = []
-    else:
-        summary["fields"] = [[name, pin.to_json()] for name, pin, _ in fields]
+    summary.update(_field_lists(fields, is_enum))
     doc = _first_paragraph(parsed.node.doc)
     if doc:
         summary["doc"] = doc
-    nested = [
-        child
-        for q, child in module.classes.items()
-        if q.startswith(parsed.qualname + ".")
-        and q.count(".") == parsed.qualname.count(".") + 1
-    ]
     out = [summary]
-    for child in nested:
+    for child in _nested_classes(module, parsed):
         out.extend(_class_summaries(types, resolver, module, child))
     return out
+
+
+def _bases(types: TypeSystem, ref: SymbolRef) -> tuple[list[dict[str, str]], list[str]]:
+    bases: list[dict[str, str]] = []
+    external_bases: list[str] = []
+    for _, base in types.workspace.base_classes(ref):
+        if (
+            isinstance(base, SymbolRef)
+            and types.workspace.parsed_class(base) is not None
+        ):
+            bases.append(base.to_json())
+        elif isinstance(base, ExternalRef):
+            external_bases.append(
+                f"{base.module}.{base.name}" if base.name else base.module
+            )
+    return bases, external_bases
+
+
+def _field_lists(
+    fields: list[tuple[str, PinType, str | None]], is_enum: bool
+) -> dict[str, list[list[Any]]]:
+    if is_enum:
+        return {
+            "members": [[name, value or ""] for name, _, value in fields],
+            "fields": [],
+        }
+    return {"fields": [[name, pin.to_json()] for name, pin, _ in fields]}
+
+
+def _nested_classes(module: ParsedModule, parsed: ParsedClass) -> list[ParsedClass]:
+    depth = parsed.qualname.count(".") + 1
+    return [
+        child
+        for q, child in module.classes.items()
+        if q.startswith(parsed.qualname + ".") and q.count(".") == depth
+    ]
 
 
 def _fields(
@@ -272,77 +230,105 @@ def _fields(
     parsed: ParsedClass,
     is_enum: bool,
 ) -> list[tuple[str, PinType, str | None]]:
-    seen: dict[str, tuple[PinType, str | None]] = {}
     own_type = types.class_type(SymbolRef(module.path, parsed.qualname))
-    receiver = module.language.profile.instance_receiver
+    collector = _FieldCollector(resolver, module, own_type if is_enum else None)
     for statement in parsed.node.body:
-        if (
-            isinstance(statement, m.Assign)
-            and statement.annotation is not None
-            and isinstance(statement.targets[0], m.Name)
-        ):
-            name = statement.targets[0].id
-            seen.setdefault(
-                name,
-                (
-                    resolver.annotation(statement.annotation),
-                    _value_text(module, statement.value),
-                ),
-            )
-        elif isinstance(statement, m.Assign) and statement.annotation is None:
-            for target in statement.targets:
-                if isinstance(target, m.Name) and not target.id.startswith("__"):
-                    if is_enum:
-                        seen.setdefault(
-                            target.id, (own_type, _value_text(module, statement.value))
-                        )
-                    elif not target.id.startswith("_") or target.id.isupper():
-                        seen.setdefault(
-                            target.id,
-                            (
-                                _value_type(resolver, statement.value),
-                                _value_text(module, statement.value),
-                            ),
-                        )
+        collector.class_statement(statement)
+    if not is_enum:
+        receiver = module.language.profile.instance_receiver
+        for method in _constructor_first(parsed):
+            collector.method(method, method.implicit_receiver or receiver)
+    return collector.fields()
+
+
+class _FieldCollector:
+    def __init__(
+        self, resolver: TypeResolver, module: ParsedModule, enum_type: PinType | None
+    ) -> None:
+        self.resolver = resolver
+        self.module = module
+        self.enum_type = enum_type
+        self.seen: dict[str, tuple[PinType, str | None]] = {}
+
+    def fields(self) -> list[tuple[str, PinType, str | None]]:
+        return [(name, pin, value) for name, (pin, value) in self.seen.items()]
+
+    def class_statement(self, statement: m.Stmt) -> None:
+        if isinstance(statement, m.Assign):
+            self._class_assign(statement)
         elif isinstance(statement, m.FunctionDef) and statement.function.is_property:
-            seen.setdefault(
-                statement.function.name,
-                (resolver.annotation(statement.function.returns), None),
-            )
-    if is_enum:
-        return [(name, pin, value) for name, (pin, value) in seen.items()]
+            returns = self.resolver.annotation(statement.function.returns)
+            self.seen.setdefault(statement.function.name, (returns, None))
+
+    def method(self, method: m.FunctionDecl, receiver: str) -> None:
+        parameter_types = _parameter_types(self.resolver, method)
+        for node in m.walk(method):
+            if isinstance(node, m.Assign):
+                self._method_assign(node, receiver, parameter_types)
+
+    def _class_assign(self, statement: m.Assign) -> None:
+        value = _value_text(self.module, statement.value)
+        if statement.annotation is not None:
+            target = statement.targets[0]
+            if isinstance(target, m.Name):
+                pin = self.resolver.annotation(statement.annotation)
+                self.seen.setdefault(target.id, (pin, value))
+            return
+        for target in statement.targets:
+            if isinstance(target, m.Name) and self._lists_class_name(target.id):
+                self.seen.setdefault(
+                    target.id, (self._class_value_type(statement), value)
+                )
+
+    def _lists_class_name(self, name: str) -> bool:
+        if name.startswith("__"):
+            return False
+        return self.enum_type is not None or not name.startswith("_") or name.isupper()
+
+    def _class_value_type(self, statement: m.Assign) -> PinType:
+        if self.enum_type is not None:
+            return self.enum_type
+        return _value_type(self.resolver, statement.value)
+
+    def _method_assign(
+        self, node: m.Assign, receiver: str, parameter_types: dict[str, PinType]
+    ) -> None:
+        if node.annotation is not None:
+            member = _receiver_attribute(node.targets[0], receiver)
+            if member is not None:
+                pin = self.resolver.annotation(node.annotation)
+                self.seen.setdefault(member.attr, (pin, None))
+            return
+        for target in node.targets:
+            member = _receiver_attribute(target, receiver)
+            if member is not None:
+                pin = _assigned_type(self.resolver, node.value, parameter_types)
+                self.seen.setdefault(member.attr, (pin, None))
+
+
+def _constructor_first(parsed: ParsedClass) -> list[m.FunctionDecl]:
     methods = [s.function for s in parsed.node.body if isinstance(s, m.FunctionDef)]
     methods.sort(key=lambda method: 0 if method.is_constructor else 1)
-    for method in methods:
-        param_types = {
-            parameter.name: resolver.annotation(parameter.annotation)
-            for parameter in method.params
-            if parameter.annotation is not None
-            and parameter.kind in ("positional_only", "positional", "keyword_only")
-        }
-        receiver_name = method.implicit_receiver or receiver
-        for node in m.walk(method):
-            if not isinstance(node, m.Assign):
-                continue
-            if node.annotation is not None:
-                target = node.targets[0]
-                if _is_receiver_attribute(target, receiver_name):
-                    assert isinstance(target, m.Member)
-                    seen.setdefault(
-                        target.attr, (resolver.annotation(node.annotation), None)
-                    )
-                continue
-            for target in node.targets:
-                if _is_receiver_attribute(target, receiver_name):
-                    assert isinstance(target, m.Member)
-                    value = node.value
-                    pin = (
-                        param_types.get(value.id, UNKNOWN)
-                        if isinstance(value, m.Name)
-                        else _value_type(resolver, value)
-                    )
-                    seen.setdefault(target.attr, (pin, None))
-    return [(name, pin, value) for name, (pin, value) in seen.items()]
+    return methods
+
+
+def _parameter_types(
+    resolver: TypeResolver, method: m.FunctionDecl
+) -> dict[str, PinType]:
+    return {
+        parameter.name: resolver.annotation(parameter.annotation)
+        for parameter in method.params
+        if parameter.annotation is not None
+        and parameter.kind in ("positional_only", "positional", "keyword_only")
+    }
+
+
+def _assigned_type(
+    resolver: TypeResolver, value: m.Expr | None, parameter_types: dict[str, PinType]
+) -> PinType:
+    if isinstance(value, m.Name):
+        return parameter_types.get(value.id, UNKNOWN)
+    return _value_type(resolver, value)
 
 
 def _constants(resolver: TypeResolver, module: ParsedModule) -> list[list[Any]]:
@@ -428,12 +414,14 @@ def _value_text(module: ParsedModule, value: m.Expr | None) -> str | None:
     return text if len(text) <= _MAX_VALUE else text[: _MAX_VALUE - 1] + "…"
 
 
-def _is_receiver_attribute(node: m.Expr, receiver: str) -> bool:
-    return (
+def _receiver_attribute(node: m.Expr, receiver: str) -> m.Member | None:
+    if (
         isinstance(node, m.Member)
         and isinstance(node.value, m.Name)
         and node.value.id == receiver
-    )
+    ):
+        return node
+    return None
 
 
 def _first_paragraph(doc: str | None) -> str | None:
