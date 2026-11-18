@@ -222,9 +222,11 @@ code-blueprints-agent done c3
 code-blueprints-agent status "running the tests"
 ```
 
-In Claude Code, run `code-blueprints-agent watch` under the Monitor tool: each
-line it prints arrives as a notification, starting with the comments the agent
-has not looked at yet. Re-arm it when it expires and nothing is lost.
+In Claude Code, run `code-blueprints-agent watch --once` as a background Bash
+command. It waits as long as it takes, then exits with the comments the agent
+has not looked at yet, which wakes the agent. Handle them, mark them working or
+done, and start it again; anything that arrived in between is reported straight
+away.
 
 `code-blueprints-mcp` offers the same through MCP over stdio, with a
 `comments_wait` tool to block until the reviewer says something:
