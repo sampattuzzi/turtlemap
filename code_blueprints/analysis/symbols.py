@@ -3,6 +3,11 @@ from typing import Any
 from code_blueprints.analysis import model as m
 from code_blueprints.analysis.import_summary import module_imports
 from code_blueprints.analysis.unpacking import UnpackedField, receiver_fields
+from code_blueprints.analysis.type_parameters import (
+    FoundParameter,
+    TypeParameters,
+    bound_names,
+)
 from code_blueprints.analysis.types import (
     PinType,
     TypeResolver,
@@ -24,15 +29,18 @@ _MAX_VALUE = 48
 
 def module_summary(types: TypeSystem, module: ParsedModule) -> dict[str, Any]:
     resolver = types.resolver(module)
+    generics = TypeParameters(types.workspace)
     symbols: list[dict[str, Any]] = []
     for name, qualname in module.top_level.items():
         if qualname in module.classes:
             symbols.extend(
-                _class_summaries(types, resolver, module, module.classes[qualname])
+                _class_summaries(
+                    types, resolver, module, module.classes[qualname], generics
+                )
             )
         elif qualname in module.functions:
             symbols.append(
-                function_summary(resolver, module, module.functions[qualname])
+                function_summary(resolver, module, module.functions[qualname], generics)
             )
     symbols.sort(key=lambda s: int(s["line"]))
     summary: dict[str, Any] = {
@@ -41,6 +49,10 @@ def module_summary(types: TypeSystem, module: ParsedModule) -> dict[str, Any]:
         "doc": _first_paragraph(module.code.doc),
         "symbols": symbols,
         "constants": _constants(resolver, module),
+        "typeVars": [
+            [found.parameter.name, found.line, _bound_type(types, found)]
+            for found in generics.declared(module).values()
+        ],
         "imports": module_imports(types, module),
         "lines": len(module.lines),
     }
@@ -50,7 +62,11 @@ def module_summary(types: TypeSystem, module: ParsedModule) -> dict[str, Any]:
 
 
 def function_summary(
-    resolver: TypeResolver, module: ParsedModule, function: ParsedFunction
+    resolver: TypeResolver,
+    module: ParsedModule,
+    function: ParsedFunction,
+    generics: TypeParameters | None = None,
+    inherited: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     node = function.node
     profile = module.language.profile
@@ -82,6 +98,15 @@ def function_summary(
         summary["decorators"] = decorators
     if node.anonymous:
         summary["anonymous"] = True
+    own = [
+        found.parameter.name
+        for found in (generics or TypeParameters(resolver.system.workspace)).mentioned(
+            module, _annotations(node)
+        )
+        if found.parameter.name not in inherited
+    ]
+    if own:
+        summary["typeParams"] = own
     return summary
 
 
@@ -152,8 +177,14 @@ def module_constants(module: ParsedModule) -> list[tuple[str, m.Assign]]:
 
 
 def _class_summaries(
-    types: TypeSystem, resolver: TypeResolver, module: ParsedModule, parsed: ParsedClass
+    types: TypeSystem,
+    resolver: TypeResolver,
+    module: ParsedModule,
+    parsed: ParsedClass,
+    generics: TypeParameters,
 ) -> list[dict[str, Any]]:
+    parameters = generics.mentioned(module, parsed.node.bases)
+    inherited = frozenset(found.parameter.name for found in parameters)
     ref = SymbolRef(module.path, parsed.qualname)
     category = types.class_category(ref)
     is_enum = category == "enum"
@@ -168,7 +199,7 @@ def _class_summaries(
         "end": parsed.node.end_line or parsed.node.line,
         "bases": bases,
         "methods": [
-            function_summary(resolver, module, module.functions[q])
+            function_summary(resolver, module, module.functions[q], generics, inherited)
             for q in parsed.methods.values()
             if q in module.functions
         ],
@@ -178,13 +209,17 @@ def _class_summaries(
         summary["stereo"] = stereo
     if external_bases:
         summary["extBases"] = external_bases
+    if parameters:
+        summary["typeParams"] = [
+            [found.parameter.name, _bound_type(types, found)] for found in parameters
+        ]
     summary.update(_field_lists(fields, is_enum))
     doc = _first_paragraph(parsed.node.doc)
     if doc:
         summary["doc"] = doc
     out = [summary]
     for child in _nested_classes(module, parsed):
-        out.extend(_class_summaries(types, resolver, module, child))
+        out.extend(_class_summaries(types, resolver, module, child, generics))
     return out
 
 
@@ -345,6 +380,26 @@ def _assigned_type(
     if isinstance(value, m.Name):
         return parameter_types.get(value.id, UNKNOWN)
     return _value_type(resolver, value)
+
+
+def _bound_type(types: TypeSystem, found: FoundParameter) -> dict[str, Any] | None:
+    names = bound_names(found.parameter)
+    if not names:
+        return None
+    resolver = types.resolver(found.module)
+    pins = [resolver.named(name) for name in names]
+    if len(pins) == 1:
+        return pins[0].to_json()
+    return PinType(" | ".join(pin.label for pin in pins), "any").to_json()
+
+
+def _annotations(node: m.FunctionDecl) -> list[m.TypeExpr]:
+    found = [
+        parameter.annotation
+        for parameter in node.params
+        if parameter.annotation is not None
+    ]
+    return [*found, node.returns] if node.returns is not None else found
 
 
 def _constants(resolver: TypeResolver, module: ParsedModule) -> list[list[Any]]:

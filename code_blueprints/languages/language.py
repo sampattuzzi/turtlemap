@@ -2,7 +2,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
-from code_blueprints.analysis.model import Assign, ModuleCode, Node, Pattern
+from code_blueprints.analysis.model import Assign, Expr, ModuleCode, Node, Pattern
 
 Locate = Callable[[str, str], str | None]
 
@@ -11,6 +11,13 @@ Locate = Callable[[str, str], str | None]
 class ImportBinding:
     absolute: str
     is_module: bool
+
+
+@dataclass(frozen=True)
+class TypeParameter:
+    name: str
+    bound: Expr | None
+    constraints: tuple[Expr, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -133,6 +140,9 @@ class Language:
 
     def is_constant(self, statement: Assign) -> bool:
         raise NotImplementedError
+
+    def type_parameter(self, statement: Assign) -> TypeParameter | None:
+        return None
 
     def case_label(self, pattern: Pattern) -> str:
         return f"case {self.text(pattern)}"

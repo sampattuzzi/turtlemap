@@ -9,6 +9,7 @@ from code_blueprints.languages.language import (
     Language,
     Locate,
     Lowered,
+    TypeParameter,
     stem_parts,
 )
 from code_blueprints.languages.python.definitions import doc_lines
@@ -84,7 +85,27 @@ class Python(Language):
         if statement.annotation is not None:
             return statement.value is not None
         bare = target.id.lstrip("_")
-        return bool(bare) and bare.isupper()
+        return bool(bare) and bare.isupper() and self.type_parameter(statement) is None
+
+    def type_parameter(self, statement: m.Assign) -> TypeParameter | None:
+        value = statement.value
+        if (
+            len(statement.targets) != 1
+            or not isinstance(statement.targets[0], m.Name)
+            or not isinstance(value, m.Call)
+        ):
+            return None
+        called = m.dotted_name(value.func) or ""
+        if called.rsplit(".", 1)[-1] not in _TYPE_PARAMETER_MAKERS:
+            return None
+        bound = next(
+            (keyword.value for keyword in value.keywords if keyword.arg == "bound"),
+            None,
+        )
+        return TypeParameter(statement.targets[0].id, bound, tuple(value.args[1:]))
+
+
+_TYPE_PARAMETER_MAKERS = frozenset({"TypeVar", "ParamSpec", "TypeVarTuple"})
 
 
 class _Renamer(ast.NodeTransformer):

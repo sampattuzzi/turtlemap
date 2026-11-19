@@ -5,7 +5,7 @@ export let FILES = {};
 export const FUNCTIONS = new Map();
 export const fnKey = (ref) => `${ref.path}::${ref.sym}`;
 export function lookup(ref) { if (!ref) return null; const f = FILES[ref.path]; return f ? f.index[ref.sym] || null : null; }
-export const KIND_ORDER = ['inherits', 'realizes', 'has', 'creates', 'calls', 'writes', 'reads', 'uses'];
+export const KIND_ORDER = ['inherits', 'realizes', 'bound', 'has', 'creates', 'calls', 'writes', 'reads', 'uses'];
 let NET_CACHE = null;
 export function setProject(overview) { OVERVIEW = overview; FILES = {}; NET_CACHE = null; }
 export function setDiff(diff) { DIFF = diff; }
@@ -48,6 +48,7 @@ function addProjectFile(add, root, path) {
     for (const m of s.methods || []) add(`m:${path}:${m.qual}`, 'method', m.name, c, { sym: m });
   }
   if (settings.constants) for (const [cn, ct, cv] of f.constants || []) add(`c:${path}:${cn}`, 'constant', cn, mod, { type: ct, value: cv });
+  for (const [tn, line, bound] of f.typeVars || []) add(`tv:${path}:${tn}`, 'typevar', tn, mod, { bound, line });
 }
 function addLibraries(add, root) {
   for (const lib of (OVERVIEW && OVERVIEW.libraries) || []) {

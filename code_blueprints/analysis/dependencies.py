@@ -4,6 +4,7 @@ from typing import Any
 
 from code_blueprints.analysis import model as m
 from code_blueprints.analysis.symbols import class_fields, module_constants
+from code_blueprints.analysis.type_parameters import TypeParameters, bound_names
 from code_blueprints.analysis.types import PinType, TypeResolver, TypeSystem
 from code_blueprints.analysis.workspace.parsed import (
     ExternalRef,
@@ -23,9 +24,23 @@ class DependencyCollector:
     _own_fields: dict[SymbolRef, dict[str, PinType]] = field(default_factory=dict)
     _constants: dict[str, frozenset[str]] = field(default_factory=dict)
     _constant_ids: dict[tuple[str, str], str | None] = field(default_factory=dict)
+    _generics: TypeParameters | None = None
+
+    @property
+    def generics(self) -> TypeParameters:
+        if self._generics is None:
+            self._generics = TypeParameters(self.types.workspace)
+        return self._generics
 
     def collect(self, module: ParsedModule) -> None:
         resolver = self.types.resolver(module)
+        for found in self.generics.declared(module).values():
+            for name in bound_names(found.parameter):
+                self.link(
+                    found.id,
+                    self.node_id(self.types.workspace.resolve(module, name)),
+                    "bound",
+                )
         for parsed in module.classes.values():
             self._collect_class(module, resolver, parsed)
         for function in module.functions.values():
@@ -145,6 +160,8 @@ class DependencyCollector:
     ) -> None:
         ref = SymbolRef(module.path, parsed.qualname)
         class_id = f"cls:{module.path}:{parsed.qualname}"
+        for found in self.generics.mentioned(module, parsed.node.bases):
+            self.link(class_id, found.id, "uses")
         for label, base in self.types.workspace.base_classes(ref):
             target = self.node_id(base)
             last = label.split("[")[0].rsplit(".", 1)[-1]
@@ -222,6 +239,12 @@ class CodeDependencies:
             )
         if node.returns is not None:
             self._use(self.resolver.annotation(node.returns))
+        signature = [
+            *(p.annotation for p in node.params if p.annotation is not None),
+            *([node.returns] if node.returns is not None else []),
+        ]
+        for found in self.collector.generics.mentioned(self.module, signature):
+            self.collector.link(self.source, found.id, "uses")
         outer = self.locals
         for statement in node.body:
             pending: deque[tuple[m.Node, frozenset[str]]] = deque([(statement, outer)])
@@ -260,6 +283,10 @@ class CodeDependencies:
 
     def _type_name(self, node: m.TypeName) -> None:
         if node.dotted.split(".")[0] in self.local_types:
+            return
+        parameter = self.collector.generics.find(self.module, node.dotted)
+        if parameter is not None:
+            self.collector.link(self.source, parameter.id, "uses")
             return
         constant = self.collector.constant_id(
             self.module, node.dotted

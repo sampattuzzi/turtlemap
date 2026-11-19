@@ -17,7 +17,7 @@
   --lit-bg: #141518;
   --code-bg: #141518;
   --code-hl: rgba(242, 163, 58, 0.16);
-  --exec: #f4f4f4; --rel-inherits: #e4e6ea; --rel-has: #e9b949; --rel-creates: #5b98ff; --rel-calls: #34c2b4; --rel-uses: #8f949c; --rel-reads: #9fc4e8; --rel-writes: #f08a5d;
+  --exec: #f4f4f4; --rel-inherits: #e4e6ea; --rel-has: #e9b949; --rel-creates: #5b98ff; --rel-calls: #34c2b4; --rel-uses: #8f949c; --rel-reads: #9fc4e8; --rel-writes: #f08a5d; --rel-bound: #b07cf0;
   --frame: rgba(255, 255, 255, 0.035);
   --frame-line: #33363c;
   --h-entry: #b03a3a; --h-pkg: #3d4654; --h-mod: #145e5e; --h-lib: #4a4d53; --h-struct: #1d4a86; --h-break: #2c5fa8; --h-make: #2c5fa8; --h-call: #187a7a; --h-method: #5a7a24;
@@ -42,7 +42,7 @@
     --fg: #23262b; --fg-dim: #5f646c; --accent: #b56a00;
     --node-body: rgba(252, 252, 249, 0.98); --node-border: #b7bbb2; --node-fg: #2a2d32; --node-dim: #656a72;
     --lit-bg: #eceee8; --code-bg: #f9f9f5; --code-hl: rgba(181, 106, 0, 0.15);
-    --exec: #2d3036; --rel-inherits: #33363b; --rel-has: #946c00; --rel-creates: #1f55c4; --rel-calls: #0d7a72; --rel-uses: #6b7078; --rel-reads: #2f6f9e; --rel-writes: #b4532a; --frame: rgba(0, 0, 0, 0.03); --frame-line: #c6c9c0;
+    --exec: #2d3036; --rel-inherits: #33363b; --rel-has: #946c00; --rel-creates: #1f55c4; --rel-calls: #0d7a72; --rel-uses: #6b7078; --rel-reads: #2f6f9e; --rel-writes: #b4532a; --rel-bound: #7443c4; --frame: rgba(0, 0, 0, 0.03); --frame-line: #c6c9c0;
     --t-bool: #c42b2b; --t-int: #00876f; --t-float: #4c8a12; --t-str: #b81d93; --t-bytes: #8a6c3e;
     --t-none: #6b7077; --t-time: #9c7700; --t-enum: #c9600c; --t-struct: #1f5ccc; --t-object: #6b7078;
     --t-map: #0e8a5c; --t-list: #1580a8; --t-class: #7443c4; --t-callable: #5444c4; --t-any: #6b7077;
@@ -55,7 +55,7 @@
   --fg: #23262b; --fg-dim: #5f646c; --accent: #b56a00;
   --node-body: rgba(252, 252, 249, 0.98); --node-border: #b7bbb2; --node-fg: #2a2d32; --node-dim: #656a72;
   --lit-bg: #eceee8; --code-bg: #f9f9f5; --code-hl: rgba(181, 106, 0, 0.15);
-  --exec: #2d3036; --rel-inherits: #33363b; --rel-has: #946c00; --rel-creates: #1f55c4; --rel-calls: #0d7a72; --rel-uses: #6b7078; --rel-reads: #2f6f9e; --rel-writes: #b4532a; --frame: rgba(0, 0, 0, 0.03); --frame-line: #c6c9c0;
+  --exec: #2d3036; --rel-inherits: #33363b; --rel-has: #946c00; --rel-creates: #1f55c4; --rel-calls: #0d7a72; --rel-uses: #6b7078; --rel-reads: #2f6f9e; --rel-writes: #b4532a; --rel-bound: #7443c4; --frame: rgba(0, 0, 0, 0.03); --frame-line: #c6c9c0;
   --t-bool: #c42b2b; --t-int: #00876f; --t-float: #4c8a12; --t-str: #b81d93; --t-bytes: #8a6c3e;
   --t-none: #6b7077; --t-time: #9c7700; --t-enum: #c9600c; --t-struct: #1f5ccc; --t-object: #6b7078;
   --t-map: #0e8a5c; --t-list: #1580a8; --t-class: #7443c4; --t-callable: #5444c4; --t-any: #6b7077;
@@ -67,7 +67,7 @@
   --fg: #e4e6ea; --fg-dim: #8f949c; --accent: #f2a33a;
   --node-body: rgba(35, 36, 40, 0.97); --node-border: #0c0d0f; --node-fg: #d7dae0; --node-dim: #8b9098;
   --lit-bg: #141518; --code-bg: #141518; --code-hl: rgba(242, 163, 58, 0.16);
-  --exec: #f4f4f4; --rel-inherits: #e4e6ea; --rel-has: #e9b949; --rel-creates: #5b98ff; --rel-calls: #34c2b4; --rel-uses: #8f949c; --rel-reads: #9fc4e8; --rel-writes: #f08a5d; --frame: rgba(255, 255, 255, 0.035); --frame-line: #33363c;
+  --exec: #f4f4f4; --rel-inherits: #e4e6ea; --rel-has: #e9b949; --rel-creates: #5b98ff; --rel-calls: #34c2b4; --rel-uses: #8f949c; --rel-reads: #9fc4e8; --rel-writes: #f08a5d; --rel-bound: #b07cf0; --frame: rgba(255, 255, 255, 0.035); --frame-line: #33363c;
   --t-bool: #e25454; --t-int: #2fd3a6; --t-float: #93d453; --t-str: #e45fc8; --t-bytes: #c9b38e;
   --t-none: #8a8f98; --t-time: #e5c64a; --t-enum: #ea8a48; --t-struct: #4a8df2; --t-object: #c3c7cf;
   --t-map: #31c28e; --t-list: #4fb8de; --t-class: #b07cf0; --t-callable: #9c84f2; --t-any: #8a8f98;
@@ -296,6 +296,12 @@ button { cursor: pointer; }
 .file-frame-title { font-family: var(--font-pin); padding: 10px 16px; color: var(--fg-dim); font-size: var(--node-size); }
 .rel { fill: none; stroke-width: 1.8; }
 .rel.k-inherits, .rel.k-realizes { stroke: var(--rel-inherits); }
+.rel.k-bound { stroke: var(--rel-bound); }
+.rel-label.k-bound { fill: var(--rel-bound); }
+.nb.leaf.k-typevar { background: color-mix(in srgb, var(--rel-bound) 12%, var(--node-body)); }
+.nb.leaf.k-typevar .tbadge { font-weight: 700; color: #fff; background: var(--rel-bound); border-radius: 3px; padding: 0 4px; font-size: 0.85em; }
+.nb.k-class > .tparams { position: absolute; bottom: calc(100% - 5px); right: -10px; display: flex; flex-direction: column; gap: 1px; font-family: var(--font-pin); font-size: 0.92em; background: color-mix(in srgb, var(--rel-bound) 16%, var(--node-body)); border: 1.5px dashed var(--rel-bound); border-radius: 5px; padding: 2px 8px; white-space: nowrap; z-index: 1; }
+.fnleaf .ttag { font-family: var(--font-pin); font-size: 0.82em; border: 1px solid color-mix(in srgb, var(--rel-bound) 60%, transparent); color: var(--rel-bound); border-radius: 4px; padding: 0 4px; }
 .rel.k-has { stroke: var(--rel-has); }
 .rel.k-creates { stroke: var(--rel-creates); }
 .rel.k-calls { stroke: var(--rel-calls); }

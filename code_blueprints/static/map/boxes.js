@@ -27,20 +27,21 @@ export function netLabel(id) {
   if (n.kind === 'field' || n.kind === 'member') return `${n.parent.name}.${n.name}`;
   if (n.kind === 'name') return `${n.name} (${n.parent.kind === 'libmodule' ? n.parent.name : n.parent.name})`;
   if (n.kind === 'package') return `${n.name}/`;
+  if (n.kind === 'typevar') return `${n.name} (type parameter)`;
   return n.name;
 }
 function opBlock(fnSym) {
   const params = fnSym.params.filter((p) => p[0] !== 'self');
   const hasReturn = fnSym.returns && fnSym.returns.cat !== 'none';
   return [
-    el('div', { class: 'sig-head' }, el('span', { class: 'uvis' }, visibility(fnSym.name)), el('span', { class: 'uop' }, plain(fnSym.name)), el('span', { class: 'go' }, '▸')),
+    el('div', { class: 'sig-head' }, el('span', { class: 'uvis' }, visibility(fnSym.name)), el('span', { class: 'uop' }, plain(fnSym.name)), fnSym.typeParams ? el('span', { class: 'ttag', title: 'Generic over these type parameters' }, `[${fnSym.typeParams.join(', ')}]`) : null, el('span', { class: 'go' }, '▸')),
     params.length ? el('div', { class: 'sig-params' }, params.map((p, i) => el('span', { class: 'sig-param', title: `${p[0]}: ${p[1].label}` }, el('span', { class: 'pdot', style: `background:var(--t-${p[1].cat})` }), plain(p[0]), i < params.length - 1 ? ',' : ''))) : null,
     hasReturn ? el('div', { class: 'sig-ret' }, el('span', { class: 'udim' }, '→ '), typeText(fnSym.returns)) : null,
   ];
 }
 export function summaryOf(n) {
   const counts = new Map();
-  const word = { package: 'package', module: 'module', class: 'class', function: 'function', method: 'method', field: 'field', member: 'choice', constant: 'constant', name: 'name', libmodule: 'module' };
+  const word = { package: 'package', module: 'module', class: 'class', function: 'function', method: 'method', field: 'field', member: 'choice', constant: 'constant', typevar: 'type parameter', name: 'name', libmodule: 'module' };
   for (const k of n.children) counts.set(word[k.kind], (counts.get(word[k.kind]) || 0) + 1);
   return [...counts].map(([w, c]) => plural(c, w)).join(' · ');
 }
@@ -57,6 +58,8 @@ export function netBoxEl(n, expanded, ctx, filter = null) {
     isOpen && hiddenKids ? el('span', { class: 'nhidden', title: 'Hidden because they have no dependency on the selected module' }, `${hiddenKids} unrelated hidden`) : null);
   head.addEventListener('click', (e) => { e.stopPropagation(); ctx.select(n.id); ctx.toggle(n.id); });
   box.append(head);
+  const corner = templateCorner(n);
+  if (corner) box.append(corner);
   if (!isOpen) { box.append(el('div', { class: 'nsum' }, summaryOf(n))); return box; }
   const inner = el('div', { class: 'ninner' });
   for (const k of shownKids) inner.append(netBoxEl(k, expanded, ctx, filter));
@@ -64,7 +67,7 @@ export function netBoxEl(n, expanded, ctx, filter = null) {
   return box;
 }
 function leafBoxEl(n, ctx) {
-  const stripe = { method: '--h-method', function: '--h-call', field: '--h-break', member: '--h-enum', constant: '--h-var', name: '--h-lit' }[n.kind] || '--h-lit';
+  const stripe = { method: '--h-method', function: '--h-call', field: '--h-break', member: '--h-enum', constant: '--h-var', typevar: '--rel-bound', name: '--h-lit' }[n.kind] || '--h-lit';
   const isFn = n.kind === 'method' || n.kind === 'function';
   const leaf = el('div', { class: `nb leaf k-${n.kind}${isFn ? ' fnleaf' : ''}${n.diff ? ` diff-${n.diff}` : ''}`, 'data-id': n.id, style: `--stripe: var(${stripe})`, title: n.sym ? 'Open its dataflow view' : netLabel(n.id) }, diffBadge(n.diff), leafParts(n, isFn));
   leaf.addEventListener('click', (e) => { e.stopPropagation(); if (n.sym) ctx.go(refOf(n.sym)); else ctx.select(n.id); });
@@ -75,7 +78,13 @@ function leafParts(n, isFn) {
   if (n.kind === 'field') return [el('span', { class: 'uvis' }, visibility(n.name)), el('span', {}, plain(n.name)), el('span', { class: 'udim' }, ':'), typeText(n.type)];
   if (n.kind === 'member') return [el('span', {}, n.name), el('span', { class: 'udim' }, ` = ${n.value}`)];
   if (n.kind === 'constant') return [el('span', {}, plain(n.name)), el('span', { class: 'udim' }, ':'), typeText(n.type), el('span', { class: 'udim' }, ` = ${n.value}`)];
+  if (n.kind === 'typevar') return [el('span', { class: 'tbadge', title: 'Type parameter: stands for one type, the same wherever it appears' }, 'T'), el('span', {}, n.name), n.bound ? el('span', { class: 'udim' }, ':') : null, n.bound ? typeText(n.bound) : el('span', { class: 'udim' }, 'any type')];
   return [el('span', { class: 'uicon' }, /^[a-z_]/.test(n.name) ? 'ƒ' : 'C'), el('span', {}, n.name)];
+}
+function templateCorner(n) {
+  const params = n.kind === 'class' && n.sym && n.sym.typeParams;
+  if (!params || !params.length) return null;
+  return el('div', { class: 'tparams', title: 'Type parameters this class is generic over' }, params.map(([name, bound]) => el('div', {}, el('span', {}, name), bound ? el('span', { class: 'udim' }, ' : ') : null, bound ? typeText(bound) : null)));
 }
 function boxHeadColour(n) {
   if (n.kind === 'package') return '--h-pkg';
@@ -99,7 +108,7 @@ export function layoutNet(n, boxEl, edges, N = net()) {
   const box = new MapBoxLayout(n, inner, N);
   box.layoutChildren(edges);
   const { pairs, skips, weights } = box.linkKids(edges);
-  box.rank = rankColumns(box.kids, weights, (k) => ['field', 'member', 'constant'].includes(k.node.kind));
+  box.rank = rankColumns(box.kids, weights, (k) => ['field', 'member', 'constant', 'typevar'].includes(k.node.kind));
   box.addRoutes(pairs);
   box.stackColumns(skips);
   box.relax();
