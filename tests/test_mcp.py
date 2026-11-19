@@ -4,16 +4,16 @@ from typing import Any
 
 import pytest
 
-from code_blueprints.mcp import main
+from turtlemap.mcp import main
 from tests.conftest import Running
 
 
 @pytest.fixture
 def agent_env(running: Running, monkeypatch: pytest.MonkeyPatch) -> Running:
     monkeypatch.setenv(
-        "CODE_BLUEPRINTS_URL", f"http://127.0.0.1:{running.server.server_address[1]}"
+        "TURTLEMAP_URL", f"http://127.0.0.1:{running.server.server_address[1]}"
     )
-    monkeypatch.setenv("CODE_BLUEPRINTS_TOKEN", running.host.agent_token)
+    monkeypatch.setenv("TURTLEMAP_TOKEN", running.host.agent_token)
     return running
 
 

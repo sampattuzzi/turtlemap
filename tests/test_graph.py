@@ -2,10 +2,10 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-from code_blueprints.analysis.blueprint.canvas import MAX_NODES
-from code_blueprints.analysis.blueprint.builder import build_function_graph
-from code_blueprints.analysis.types import TypeSystem
-from code_blueprints.analysis.workspace.workspace import Workspace
+from turtlemap.analysis.blueprint.canvas import MAX_NODES
+from turtlemap.analysis.blueprint.builder import build_function_graph
+from turtlemap.analysis.types import TypeSystem
+from turtlemap.analysis.workspace.workspace import Workspace
 
 REALISTIC_MODULE = """
     import dataclasses

@@ -5,16 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from code_blueprints.agent import main
+from turtlemap.agent import main
 from tests.conftest import Running
 
 
 @pytest.fixture
 def agent_env(running: Running, monkeypatch: pytest.MonkeyPatch) -> Running:
     monkeypatch.setenv(
-        "CODE_BLUEPRINTS_URL", f"http://127.0.0.1:{running.server.server_address[1]}"
+        "TURTLEMAP_URL", f"http://127.0.0.1:{running.server.server_address[1]}"
     )
-    monkeypatch.setenv("CODE_BLUEPRINTS_TOKEN", running.host.agent_token)
+    monkeypatch.setenv("TURTLEMAP_TOKEN", running.host.agent_token)
     return running
 
 
@@ -83,7 +83,7 @@ def test_watch_starts_with_unseen_comments(agent_env: Running) -> None:
 
     assert code == 0
     assert text.startswith(f"unseen: {thread_id} [open, agent:unseen]")
-    assert text.rstrip().endswith(f"code-blueprints-agent show {thread_id}")
+    assert text.rstrip().endswith(f"turtlemap-agent show {thread_id}")
 
 
 def test_watch_wakes_on_a_new_comment(agent_env: Running) -> None:
@@ -117,13 +117,13 @@ def test_watch_skips_comments_already_seen(agent_env: Running) -> None:
 def test_says_how_to_start_a_server_when_none_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.delenv("CODE_BLUEPRINTS_URL", raising=False)
+    monkeypatch.delenv("TURTLEMAP_URL", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 
     code, _ = run_agent("--root", str(tmp_path), "list")
 
     assert code == 1
-    assert "code-blueprints <folder> --no-open" in capsys.readouterr().err
+    assert "turtlemap <folder> --no-open" in capsys.readouterr().err
 
 
 def test_queries_the_structure_as_text(agent_env: Running) -> None:

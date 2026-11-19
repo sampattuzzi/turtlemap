@@ -11,11 +11,11 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from code_blueprints.analysis.project import Project
-from code_blueprints.review.comments import CommentStore
-from code_blueprints.projects.seen import SeenStore
-from code_blueprints.projects.host import ProjectHost
-from code_blueprints.web.server import start_server
+from turtlemap.analysis.project import Project
+from turtlemap.review.comments import CommentStore
+from turtlemap.projects.seen import SeenStore
+from turtlemap.projects.host import ProjectHost
+from turtlemap.web.server import start_server
 
 TOKEN = "user-token"
 SOURCE = "class Square:\n    def area(self, side: float) -> float:\n        return side * side\n"

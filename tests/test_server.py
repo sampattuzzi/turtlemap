@@ -12,10 +12,10 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from code_blueprints.projects.comparison import head_project
-from code_blueprints.projects.host import ProjectHost
-from code_blueprints.projects.seen import SeenStore
-from code_blueprints.web.server import start_server
+from turtlemap.projects.comparison import head_project
+from turtlemap.projects.host import ProjectHost
+from turtlemap.projects.seen import SeenStore
+from turtlemap.web.server import start_server
 
 TOKEN = "secret-token"
 
@@ -288,7 +288,7 @@ def make_held_head(monkeypatch: pytest.MonkeyPatch, hold_call: int) -> HeldHead:
             held.finished.set()
         return result
 
-    monkeypatch.setattr("code_blueprints.projects.host.head_project", hold)
+    monkeypatch.setattr("turtlemap.projects.host.head_project", hold)
     return held
 
 
