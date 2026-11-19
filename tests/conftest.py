@@ -23,6 +23,15 @@ SOURCE = "class Square:\n    def area(self, side: float) -> float:\n        retu
 ProjectFactory = Callable[[dict[str, str]], Project]
 
 
+@pytest.fixture(autouse=True)
+def private_user_folders(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folders = tmp_path_factory.mktemp("user-folders")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(folders / "config"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(folders / "cache"))
+
+
 @pytest.fixture
 def make_project(tmp_path: Path) -> ProjectFactory:
     def make(files: dict[str, str]) -> Project:
