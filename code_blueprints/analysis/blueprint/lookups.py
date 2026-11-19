@@ -146,7 +146,7 @@ class TypeLookups:
             module = self.workspace.module(ancestor.path)
             if parsed is None or module is None:
                 continue
-            for name, member in members_of(parsed.node, module).items():
+            for name, member in members_of(parsed.node, module, self.workspace).items():
                 members.setdefault(name, member)
         self._members[ref] = members
         return members

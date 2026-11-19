@@ -566,3 +566,17 @@ def feeds(
         edge["from"] == source["id"] and edge["to"] == target["id"]
         for edge in graph["edges"]
     )
+
+
+def test_lists_fields_assigned_by_unpacking(make_project: ProjectFactory) -> None:
+    project = make_project({"web/src/pair.ts": """
+        export class Pair {
+          constructor(items: number[]) {
+            [this.first, this.second] = items;
+          }
+        }
+    """})
+
+    pair = symbol(project.overview(), "web/src/pair.ts", "Pair")
+
+    assert [name for name, _ in pair["fields"]] == ["first", "second"]

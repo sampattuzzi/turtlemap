@@ -418,3 +418,51 @@ def test_picks_up_edits_after_reload(make_project: ProjectFactory) -> None:
     assert [s["name"] for s in project.overview()["modules"][0]["symbols"]] == [
         "second"
     ]
+
+
+def test_lists_fields_assigned_by_unpacking(make_project: ProjectFactory) -> None:
+    project = make_project({"src/sim/steps.py": """
+        class Step:
+            pass
+
+
+        def compile_steps(size: int) -> tuple[Step, Step]:
+            return Step(), Step()
+
+
+        class Simulator:
+            def __init__(self, size: int, label: str) -> None:
+                self.step, self.step_with_jacobian = compile_steps(size)
+                self.size, self.label = size, label
+                self.left, self.right = divmod(size, 2)
+
+            def run(self) -> Step:
+                return self.step
+    """})
+    overview = project.overview()
+    simulator = symbol(overview, "src/sim/steps.py", "Simulator")
+
+    assert [(name, pin["label"]) for name, pin in simulator["fields"]] == [
+        ("step", "Step"),
+        ("step_with_jacobian", "Step"),
+        ("size", "int"),
+        ("label", "str"),
+        ("left", "Any"),
+        ("right", "Any"),
+    ]
+    assert (
+        "m:src/sim/steps.py:Simulator.__init__",
+        "f:src/sim/steps.py:Simulator.step_with_jacobian",
+        "writes",
+    ) in edges(overview)
+    run = project.function("src/sim/steps.py", "Simulator.run")
+    assert run is not None
+    outputs = [pin for node in run["graph"]["nodes"] for pin in node["outs"]]
+    assert {
+        "name": "step",
+        "type": {
+            "label": "Step",
+            "cat": "object",
+            "ref": {"path": "src/sim/steps.py", "sym": "Step"},
+        },
+    } in outputs

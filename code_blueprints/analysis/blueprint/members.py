@@ -2,7 +2,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 from code_blueprints.analysis import model as m
+from code_blueprints.analysis.unpacking import receiver_fields
 from code_blueprints.analysis.workspace.parsed import ParsedModule
+from code_blueprints.analysis.workspace.workspace import Workspace
 
 
 @dataclass(frozen=True)
@@ -12,7 +14,9 @@ class Member:
     is_method: bool = False
 
 
-def members_of(cls: m.ClassDecl, module: ParsedModule) -> dict[str, Member]:
+def members_of(
+    cls: m.ClassDecl, module: ParsedModule, workspace: Workspace
+) -> dict[str, Member]:
     members: dict[str, Member] = {}
     for statement in cls.body:
         if (
@@ -43,6 +47,8 @@ def members_of(cls: m.ClassDecl, module: ParsedModule) -> dict[str, Member]:
     if initializer is not None:
         for name, annotation in _initializer_assignments(initializer, module):
             members.setdefault(name, Member(annotation, module))
+        for name, member in _unpacked_assignments(initializer, module, workspace):
+            members.setdefault(name, member)
     return members
 
 
@@ -73,3 +79,24 @@ def _initializer_assignments(
                     if isinstance(node.value, m.Name)
                     else None
                 )
+
+
+def _unpacked_assignments(
+    initializer: m.FunctionDecl, module: ParsedModule, workspace: Workspace
+) -> Iterator[tuple[str, Member]]:
+    receiver = (
+        initializer.implicit_receiver or module.language.profile.instance_receiver
+    )
+    parameters = {
+        parameter.name: parameter.annotation for parameter in initializer.params
+    }
+    for node in m.walk(initializer):
+        if not isinstance(node, m.Assign):
+            continue
+        for field in receiver_fields(node, receiver, module, workspace):
+            if field.annotation is not None:
+                yield field.name, Member(field.annotation[0], field.annotation[1])
+            elif isinstance(field.value, m.Name):
+                yield field.name, Member(parameters.get(field.value.id), module)
+            else:
+                yield field.name, Member(None, module)

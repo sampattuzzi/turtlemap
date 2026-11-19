@@ -2,6 +2,7 @@ from typing import Any
 
 from code_blueprints.analysis import model as m
 from code_blueprints.analysis.import_summary import module_imports
+from code_blueprints.analysis.unpacking import UnpackedField, receiver_fields
 from code_blueprints.analysis.types import (
     PinType,
     TypeResolver,
@@ -304,6 +305,21 @@ class _FieldCollector:
             if member is not None:
                 pin = _assigned_type(self.resolver, node.value, parameter_types)
                 self.seen.setdefault(member.attr, (pin, None))
+        for field in receiver_fields(
+            node, receiver, self.module, self.resolver.system.workspace
+        ):
+            pin = self._unpacked_type(field, parameter_types)
+            self.seen.setdefault(field.name, (pin, None))
+
+    def _unpacked_type(
+        self, field: UnpackedField, parameter_types: dict[str, PinType]
+    ) -> PinType:
+        if field.annotation is not None:
+            part, owner = field.annotation
+            return self.resolver.system.resolver(owner).annotation(part)
+        if field.value is not None:
+            return _assigned_type(self.resolver, field.value, parameter_types)
+        return UNKNOWN
 
 
 def _constructor_first(parsed: ParsedClass) -> list[m.FunctionDecl]:
