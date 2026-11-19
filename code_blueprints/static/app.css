@@ -87,6 +87,7 @@ button { cursor: pointer; }
 }
 .brand { font-weight: 600; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .brand small { font-weight: 400; color: var(--fg-dim); }
+.brand-mark { width: 30px; height: 30px; flex-shrink: 0; }
 .btn { border: 1px solid var(--line); background: var(--chrome-2); border-radius: 6px; padding: 4px 10px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .btn:hover { border-color: var(--fg-dim); }
 .btn:disabled { opacity: 0.4; cursor: default; }
