@@ -64,15 +64,27 @@ Open a project folder and you get three views:
   node named after the variable, with the expression written out and one input
   per local it reads. Library maths such as `np.sin` or `len` is folded in;
   calls into your own code and reads from your own classes stay as their own
-  nodes. The condition of an `if` or `while` is written into the branch, loop
-  or select node in the same way. A function made inside another (a nested
+  nodes. A loop is a frame around its body, like a callback: the items and
+  exec come in on its header, each item and the start pin come out of the
+  strip below it, and **then** carries on once the loop is done. An `if` (or
+  `match`, or `switch`) is a frame of stacked lanes, one per arm, each headed
+  by its condition with the inputs wired straight into the names in it; a
+  lane's chain starts at the ▶ on its top-left, and **then** carries on after
+  the branch. An `if` gives back no value, so only a conditional expression
+  (`a if c else b`) becomes a Select. `continue`, `break`, `return` and
+  `raise` end their lane. When you zoom into a lane or loop and its header
+  scrolls away, a breadcrumb in the top-left lists the frames you are in and
+  their conditions. A function made inside another (a nested
   `def`, a lambda, an arrow function) is drawn as a frame around its own
   body: its parameters and start pin come out of the header, the function
   itself leaves from the header's right edge, and values it captures are wired
-  straight in. A variable that is shared and changes (a module variable that
-  something reassigns, or a local a closure captures and that is assigned more
-  than once) becomes a node of its own with a double wire: Get reads it at
-  that moment, and Set, `++` or `+=` write it as steps. An async call that is
+  straight in. A variable whose value crosses a frame (set in a lane or loop
+  and read after it, carried from one pass of a loop to the next, appended to
+  or otherwise changed inside a loop or a nested function, or a module
+  variable something reassigns) is one node, placed in the exec chain where
+  it is first set and showing that first value, or *unset* when a branch or
+  loop is what sets it. Faint dotted reference wires run from it to every Get
+  that reads it and every Set, `+=` or method call that changes it. An async call that is
   not awaited is marked as such and gives back a Promise or Coroutine.
 
 When you hover over a box on the map or a node in a blueprint, every line
@@ -345,7 +357,7 @@ whichever layout the cog menu has selected.
 | `analysis/symbols.py` | Summarises each module: classes, fields (including ones assigned to `self`), methods, functions and constants |
 | `analysis/import_summary.py` | Summarises each module's imports for the map |
 | `analysis/dependencies.py` | Builds the dependency lines for the map, including field reads, writes and method calls through typed objects, whether held in a variable, a field or the result of a call such as `Thing(...).run()` |
-| `analysis/blueprint/` | Builds the dataflow and execution graph for one function. `builder.py` walks the statements; `statements/` handles bindings, control flow, loops, data regions and the entry node; `evaluation/` turns expressions into nodes (calls, attributes, operations, constructions) and `folding.py` there decides which expressions fold into one node; `scope.py` tracks what each name holds; `callees.py` works out what a call reaches; `lookups.py` finds pin types; `canvas.py` is the graph being drawn; `printer.py` prints folded expressions |
+| `analysis/blueprint/` | Builds the dataflow and execution graph for one function. `builder.py` walks the statements; `statements/` handles bindings, control flow (lanes), loops and the entry node; `variables.py` decides which names become variable nodes and where; `evaluation/` turns expressions into nodes (calls, attributes, operations, constructions) and `folding.py` there decides which expressions fold into one node; `scope.py` tracks what each name holds; `callees.py` works out what a call reaches; `lookups.py` finds pin types; `canvas.py` is the graph being drawn; `printer.py` prints folded expressions |
 | `analysis/outline.py` | Builds the folded source outline shown under the map |
 | `analysis/project.py` | Ties the analysis together for the server |
 | `analysis/structure.py` | Answers structure questions from the map: describe, cohesion, coupling, instability, report, and what is too large |

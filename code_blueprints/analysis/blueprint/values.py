@@ -49,6 +49,7 @@ class Value:
     annotation: tuple[m.TypeExpr, ParsedModule] | None = field(
         default=None, compare=False
     )
+    reference: bool = field(default=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -66,18 +67,7 @@ class Folded:
     lines: list[str]
 
 
-@dataclass(frozen=True, eq=False)
-class PendingSelect:
-    condition: Value
-    when_true: "Binding"
-    when_false: "Binding"
-    line: int
-
-
-Binding = Value | PendingSelect
-
-
-Environment = dict[str, Binding]
+Environment = dict[str, Value]
 
 
 def select_type(when_true: Value, when_false: Value) -> PinType:

@@ -13,9 +13,8 @@ from code_blueprints.analysis.blueprint.canvas import (
     MAX_NODES,
     Graph,
     GraphNode,
-    Tail,
 )
-from code_blueprints.analysis.blueprint.captures import shared_and_changing
+from code_blueprints.analysis.blueprint.variables import find_variables
 from code_blueprints.analysis.blueprint.callees import Callees
 from code_blueprints.analysis.blueprint.evaluation.expressions import Expressions
 from code_blueprints.analysis.blueprint.lookups import TypeLookups
@@ -39,6 +38,9 @@ class BuildContext:
         self.function = function
         self.frame = frame
         self.graph: Graph = parent.graph if parent is not None else Graph(MAX_NODES)
+        self.variables = find_variables(
+            function.node, module.language.profile.receiver_names
+        )
         self.lookups: TypeLookups = (
             parent.lookups if parent is not None else TypeLookups(types, module)
         )
@@ -48,7 +50,7 @@ class BuildContext:
             m.bound_names(function.node),
             parent=parent.scope if parent is not None else None,
             frame=frame.id if frame is not None else None,
-            cells=shared_and_changing(function.node),
+            variables=self.variables.names,
         )
         self.flow = Flow(self.graph)
         self.expressions = Expressions(
@@ -60,8 +62,6 @@ class BuildContext:
             function.node,
         )
         self.calls = self.expressions.calls
-        self.carried: frozenset[str] = frozenset()
-        self.loop_exits: list[list[Tail]] = []
         self.parameter_annotations = {
             parameter.name: parameter.annotation
             for parameter in function.node.params

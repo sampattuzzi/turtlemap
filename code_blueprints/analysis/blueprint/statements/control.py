@@ -1,77 +1,103 @@
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 
 from code_blueprints.analysis import model as m
 from code_blueprints.analysis.blueprint.canvas import GraphNode, Tail
-from code_blueprints.analysis.blueprint.code_shapes import contains_return
-from code_blueprints.analysis.blueprint.scope import merge
+from code_blueprints.analysis.blueprint.statements.bindings import Bindings
 from code_blueprints.analysis.blueprint.statements.context import BuildContext
-from code_blueprints.analysis.blueprint.statements.regions import DataRegions
 from code_blueprints.analysis.blueprint.text import LABEL_LIMIT, short_name, shorten
-from code_blueprints.analysis.blueprint.values import BOOL, Environment, Value
+from code_blueprints.analysis.blueprint.values import BOOL, Environment, Folded, Value
 from code_blueprints.analysis.types import UNKNOWN
+
+FIRST_SET_BY_BRANCH = "first set by the branch"
+
+
+CONDITION_LIMIT = 80
 
 
 class ControlFlow:
     def __init__(
         self,
         context: BuildContext,
-        regions: DataRegions,
+        bindings: Bindings,
         run: Callable[[Sequence[m.Stmt]], None],
     ) -> None:
         self.context = context
-        self.regions = regions
+        self.bindings = bindings
         self.run = run
 
     def if_statement(self, statement: m.If) -> None:
-        if self.regions.is_data_block([statement]) and not contains_return([statement]):
-            self.regions.merge_if(statement)
-        else:
-            self._branch_if(statement)
-
-    def _branch_if(self, statement: m.If) -> None:
-        node, condition = self._branch_node(statement)
-        self.context.flow.step(node)
-        saved = dict(self.context.scope.env)
-        true_arm = self._arm(node, "True", statement.body)
-        self.context.scope.restore(dict(saved))
-        false_arm = self._arm(node, "False", statement.orelse)
-        self.context.flow.resume(true_arm.tails + false_arm.tails)
-        if not true_arm.tails and false_arm.tails:
-            self.context.scope.restore(false_arm.env)
-        elif true_arm.tails and not false_arm.tails:
-            self.context.scope.restore(true_arm.env)
-        else:
-            if condition is None:
-                condition = (
-                    self.context.graph.output(node, "condition", BOOL)
-                    if _differ(true_arm.env, false_arm.env)
-                    else Value(BOOL)
+        arms = _arms(statement)
+        self.bindings.declare_ahead(statement, FIRST_SET_BY_BRANCH)
+        conditions = [
+            self._condition(test, first=index == 0) if test is not None else None
+            for index, (test, _) in enumerate(arms)
+        ]
+        branch = self.context.graph.add("branch", "Branch", statement.line)
+        self.context.flow.step(branch)
+        lanes: list[tuple[GraphNode, Sequence[m.Stmt]]] = []
+        earlier: list[str] = []
+        for index, ((test, body), condition) in enumerate(zip(arms, conditions)):
+            lane = self._lane(branch, self._word(index, test), statement.line)
+            if test is not None and condition is not None:
+                text = self._condition_text(test)
+                self._show_condition(lane, condition, text)
+                lane.reach = f"{lane.title} {text}"
+                earlier.append(text)
+            else:
+                lane.reach = f"{lane.title} · " + self.context.profile.conjunction.join(
+                    self.context.profile.negation.format(text) for text in earlier
                 )
-            self.context.scope.restore(
-                merge(condition, true_arm.env, false_arm.env, statement.line)
-            )
+            lanes.append((lane, body))
+        self._run_lanes(branch, lanes, falls_through=arms[-1][0] is not None)
 
-    def _branch_node(self, statement: m.If) -> tuple[GraphNode, Value | None]:
-        if self.context.expressions.folding.folds(statement.test, named=True):
-            node = self.context.expressions.folding.inline_condition(
-                statement.test,
-                lambda: self.context.graph.add(
-                    "branch", "Branch", statement.line, exec_outs=["True", "False"]
-                ),
-            )
-            return node, None
-        condition = self.context.expressions.value(statement.test, exec_candidate=True)
-        node = self.context.graph.add(
-            "branch", "Branch", statement.line, exec_outs=["True", "False"]
-        )
-        self.context.graph.connect(node, "condition", condition, BOOL)
-        return node, condition
+    def _condition(self, test: m.Expr, *, first: bool) -> Folded | Value:
+        folding = self.context.expressions.folding
+        if folding.folds(test, named=True):
+            return folding.fold(test)
+        return self.context.expressions.value(test, exec_candidate=first)
 
-    def _arm(self, node: GraphNode, label: str, body: Sequence[m.Stmt]) -> "_Arm":
-        self.context.flow.resume([(node, label)])
-        self.run(body)
-        return _Arm(self.context.flow.tails, self.context.scope.env)
+    def _show_condition(
+        self, lane: GraphNode, condition: Folded | Value, text: str
+    ) -> None:
+        if isinstance(condition, Folded):
+            self.context.expressions.folding.write(lane, condition)
+            return
+        lane.expression = [text]
+        self.context.graph.connect(lane, text, condition, BOOL)
+
+    def _condition_text(self, test: m.Expr) -> str:
+        return shorten(" ".join(self.context.text(test).split()), CONDITION_LIMIT)
+
+    def _word(self, index: int, test: m.Expr | None) -> str:
+        profile = self.context.profile
+        if test is None:
+            return profile.else_word
+        return profile.if_word if index == 0 else profile.elif_word
+
+    def _lane(self, branch: GraphNode, title: str, line: int) -> GraphNode:
+        with self.context.graph.inside(branch.id):
+            return self.context.graph.add("lane", title, line, exec_outs=["start"])
+
+    def _run_lanes(
+        self,
+        branch: GraphNode,
+        lanes: Sequence[tuple[GraphNode, Sequence[m.Stmt]]],
+        *,
+        falls_through: bool,
+        bind: Callable[[GraphNode, int], None] = lambda lane, index: None,
+    ) -> None:
+        saved = dict(self.context.scope.env)
+        finished = falls_through
+        for index, (lane, body) in enumerate(lanes):
+            self.context.scope.restore(dict(saved))
+            self.context.flow.resume([(lane, "start")])
+            with self.context.graph.inside(lane.id):
+                bind(lane, index)
+                self.run(body)
+            finished = finished or bool(self.context.flow.tails)
+        self.context.scope.restore(saved)
+        branch.exec_out = finished
+        self.context.flow.resume([(branch, "then")] if finished else [])
 
     def try_statement(self, statement: m.Try) -> None:
         labels = self._try_labels(statement)
@@ -188,28 +214,37 @@ class ControlFlow:
         return last[:1].isupper()
 
     def match(self, statement: m.Match) -> None:
+        self.bindings.declare_ahead(statement, FIRST_SET_BY_BRANCH)
         subject = self.context.expressions.value(statement.subject, exec_candidate=True)
-        labels = [self._case_label(case) for case in statement.cases]
+        subject_text = self._condition_text(statement.subject)
         exhaustive = any(
             case.pattern.catch_all and case.guard is None for case in statement.cases
         )
-        node = self.context.graph.add(
+        branch = self.context.graph.add(
             "branch",
-            f"{self.context.profile.match_title} {self.context.text(statement.subject)}",
+            f"{self.context.profile.match_title} {subject_text}",
             statement.line,
-            exec_outs=labels if exhaustive else [*labels, "No match"],
         )
-        branches = node.exec_outs or labels
-        self.context.graph.connect(node, "subject", subject)
-        self.context.flow.step(node)
-        saved = dict(self.context.scope.env)
-        tails: list[Tail] = [] if exhaustive else [(node, branches[-1])]
-        env: Environment = dict(saved)
-        for case, label in zip(statement.cases, branches):
-            tails = tails + self._run_case(case, node, label, saved)
-            env.update(self.context.scope.env)
-        self.context.flow.resume(tails)
-        self.context.scope.restore(env)
+        self.context.graph.connect(branch, "subject", subject)
+        self.context.flow.step(branch)
+        lanes: list[tuple[GraphNode, Sequence[m.Stmt]]] = []
+        for case in statement.cases:
+            lane = self._lane(branch, self._case_label(case), case.line)
+            lane.reach = f"{branch.title} · {lane.title}"
+            lanes.append((lane, case.body))
+
+        def bind(lane: GraphNode, index: int) -> None:
+            case = statement.cases[index]
+            for name in case.pattern.captures:
+                self.bindings.assign_name(
+                    name,
+                    self.context.graph.output(lane, name, UNKNOWN),
+                    case.line,
+                )
+            if case.guard is not None:
+                self.context.expressions.value(case.guard)
+
+        self._run_lanes(branch, lanes, falls_through=not exhaustive, bind=bind)
 
     def _case_label(self, case: m.Case) -> str:
         guard = f" if {self.context.text(case.guard)}" if case.guard else ""
@@ -217,28 +252,15 @@ class ControlFlow:
             self.context.language.case_label(case.pattern) + guard, LABEL_LIMIT
         )
 
-    def _run_case(
-        self, case: m.Case, node: GraphNode, label: str, saved: Environment
-    ) -> list[Tail]:
-        self.context.scope.restore(dict(saved))
-        for name in case.pattern.captures:
-            self.context.scope.bind(
-                name, self.context.graph.output(node, name, UNKNOWN)
-            )
-        if case.guard is not None:
-            self.context.expressions.value(case.guard)
-        self.context.flow.resume([(node, label)])
-        self.run(case.body)
-        return self.context.flow.tails
 
-
-@dataclass(frozen=True)
-class _Arm:
-    tails: list[Tail]
-    env: Environment
-
-
-def _differ(true_env: Environment, false_env: Environment) -> bool:
-    return any(
-        name in false_env and true_env[name] != false_env[name] for name in true_env
-    )
+def _arms(statement: m.If) -> list[tuple[m.Expr | None, Sequence[m.Stmt]]]:
+    arms: list[tuple[m.Expr | None, Sequence[m.Stmt]]] = [
+        (statement.test, statement.body)
+    ]
+    orelse = statement.orelse
+    while len(orelse) == 1 and isinstance(orelse[0], m.If):
+        arms.append((orelse[0].test, orelse[0].body))
+        orelse = orelse[0].orelse
+    if orelse:
+        arms.append((None, orelse))
+    return arms

@@ -15,6 +15,12 @@ MAX_NODES = 250
 _TITLE_LIMIT = 60
 
 
+FRAME_KINDS = frozenset({"closure", "loop", "branch", "lane"})
+
+
+STRIP_KINDS = frozenset({"closure", "loop", "lane"})
+
+
 _NOTE_LIMIT = 160
 
 
@@ -51,6 +57,7 @@ class GraphNode:
     exec_outs: list[str] | None = None
     expression: list[str] | None = None
     parent: str | None = None
+    reach: str | None = None
 
     def output(self, name: str) -> Pin | None:
         return next((pin for pin in self.outs if pin.name == name), None)
@@ -82,6 +89,8 @@ class GraphNode:
             out["expr"] = list(self.expression)
         if self.parent is not None:
             out["parent"] = self.parent
+        if self.reach is not None:
+            out["reach"] = self.reach
         return out
 
 
@@ -102,6 +111,24 @@ class Graph:
 
     def node(self, node_id: str) -> GraphNode:
         return self._by_id[node_id]
+
+    def encloses(self, outer: str | None, inner: str | None) -> bool:
+        current = inner
+        while current is not None:
+            if current == outer:
+                return True
+            current = self._by_id[current].parent
+        return outer is None
+
+    def frame_of(self, value: Value) -> str | None:
+        if value.node is None:
+            return self.frame
+        node = self._by_id[value.node]
+        if node.kind in STRIP_KINDS and not (
+            node.kind == "closure" and node.outs and node.outs[0].name == value.pin
+        ):
+            return node.id
+        return node.parent
 
     @contextmanager
     def inside(self, frame: str | None) -> Iterator[None]:
@@ -182,7 +209,7 @@ class Graph:
                 unique,
                 pin_type or value.type,
                 value.literal if value.node is None else None,
-                cell,
+                cell or value.reference,
             )
         )
         if value.node is not None and value.pin is not None:
@@ -201,7 +228,7 @@ class Graph:
     ) -> Value:
         unique = unused_name(name, {pin.name for pin in node.outs})
         node.outs.append(Pin(unique, pin_type, cell=cell))
-        return Value(pin_type, node.id, unique, annotation=annotation)
+        return Value(pin_type, node.id, unique, annotation=annotation, reference=cell)
 
     def link(self, source: GraphNode, label: str, target: GraphNode) -> None:
         if label == "then":
@@ -213,7 +240,7 @@ class Graph:
         self.moment += 1
 
     def strip_exec_when_only_returns(self, head: GraphNode) -> None:
-        frame = head.id if head.kind == "closure" else None
+        frame = head.id if head.kind in FRAME_KINDS else None
         members = [node for node in self.nodes if node.parent == frame]
         if any(
             node.kind not in ("entry", "return") and (node.exec_in or node.exec_out)

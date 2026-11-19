@@ -140,7 +140,7 @@ class Calls:
             dotted = m.dotted_name(function)
             if dotted is not None and not self._scope.is_local(dotted.split(".")[0]):
                 return self._callees.global_callee(dotted, call.line)
-            return self._callees.method(function, self._evaluate(function.value))
+            return self._callees.method(function, self._receiver(function))
         receiver = self._evaluate(function)
         signature = self._signature_of(receiver)
         if signature is not None:
@@ -154,6 +154,18 @@ class Calls:
             receiver=receiver,
             receiver_name="callable",
         )
+
+    def _receiver(self, function: m.Member) -> Value:
+        base = function.value
+        if (
+            isinstance(base, m.Name)
+            and function.attr not in self._profile.pure_methods
+            and self._scope.is_variable(base.id)
+        ):
+            reference = self._scope.known_reference(base.id, function.line)
+            if reference is not None:
+                return reference
+        return self._evaluate(base)
 
     def _signature_of(self, value: Value) -> Signature | None:
         return self._graph.signatures.get(value.node) if value.node else None

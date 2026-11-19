@@ -14,7 +14,6 @@ from code_blueprints.analysis.blueprint.canvas import (
 from code_blueprints.analysis.blueprint.statements.context import BuildContext
 from code_blueprints.analysis.blueprint.scope import Scope
 from code_blueprints.analysis.blueprint.statements.bindings import Bindings
-from code_blueprints.analysis.blueprint.statements.regions import DataRegions
 from code_blueprints.analysis.blueprint.statements.control import ControlFlow
 from code_blueprints.analysis.blueprint.statements.entry import EntryNode
 from code_blueprints.analysis.blueprint.statements.loops import Loops
@@ -34,10 +33,9 @@ class _FunctionGraphBuilder:
     def __init__(self, context: BuildContext) -> None:
         self.context = context
         self.bindings = Bindings(self.context)
-        self.regions = DataRegions(self.context, self.bindings)
         self.entry = EntryNode(self.context)
-        self.control = ControlFlow(self.context, self.regions, self._run_nested)
-        self.loops = Loops(self.context, self.bindings, self._run_nested)
+        self.control = ControlFlow(self.context, self.bindings, self._run_block)
+        self.loops = Loops(self.context, self.bindings, self._run_block)
         self.closures = Closures(self.context, self.bindings, self._run_closure)
         self.context.expressions.nested = self.closures
         self._truncated = False
@@ -47,7 +45,7 @@ class _FunctionGraphBuilder:
         entry = self.entry.node()
         self.context.flow.resume([(entry, "then")])
         try:
-            self._run_block(self.context.function.node.body, function_level=True)
+            self._run_block(self.context.function.node.body)
         except GraphFull:
             self._mark_truncated()
         self.context.graph.strip_exec_when_only_returns(entry)
@@ -64,27 +62,25 @@ class _FunctionGraphBuilder:
             if self.context.graph.nodes
             else self.context.function.node.line
         )
-        marker = self.context.graph.add_unbounded(
-            "return",
-            "Truncated",
-            last_line,
-            note=f"Graph stopped after {MAX_NODES} nodes",
+        tails = self.context.flow.tails
+        frame = (
+            (tails[0][0].id if tails[0][1] == "start" else tails[0][0].parent)
+            if tails
+            else None
         )
+        with self.context.graph.inside(frame):
+            marker = self.context.graph.add_unbounded(
+                "return",
+                "Truncated",
+                last_line,
+                note=f"Graph stopped after {MAX_NODES} nodes",
+            )
         if any(node.exec_in or node.exec_out for node in self.context.graph.nodes):
             self.context.flow.step(marker)
 
-    def _run_block(self, statements: Sequence[m.Stmt], *, function_level: bool) -> None:
-        for index, statement in enumerate(statements):
-            rest = statements[index:]
-            if isinstance(statement, m.If) and self.regions.starts_return_region(
-                rest, function_level=function_level
-            ):
-                self.regions.return_region(rest)
-                return
+    def _run_block(self, statements: Sequence[m.Stmt]) -> None:
+        for statement in statements:
             self._statement(statement)
-
-    def _run_nested(self, statements: Sequence[m.Stmt]) -> None:
-        self._run_block(statements, function_level=False)
 
     def _run_closure(self, context: BuildContext) -> None:
         frame = context.frame
@@ -93,7 +89,7 @@ class _FunctionGraphBuilder:
         builder.entry.bind_parameters(frame)
         context.flow.resume([(frame, "start")])
         with context.graph.inside(frame.id):
-            builder._run_block(context.function.node.body, function_level=True)
+            builder._run_block(context.function.node.body)
         context.graph.strip_exec_when_only_returns(frame)
 
     def _statement(self, statement: m.Stmt) -> None:
@@ -137,7 +133,7 @@ class _FunctionGraphBuilder:
             _handler(m.Assert, bindings.assert_statement),
             _handler(m.Delete, bindings.delete),
             _handler(m.Break, loops.break_statement),
-            _handler(m.Continue, lambda s: flow.resume([])),
+            _handler(m.Continue, loops.continue_statement),
             _handler(m.Global, lambda s: scope.declare_globals(s.names)),
             _handler(m.FunctionDef, self.closures.define),
             _handler(m.ClassDef, lambda s: _define(scope, s)),
@@ -172,7 +168,7 @@ class _FunctionGraphBuilder:
         self.context.flow.step(node)
         for target, value in bindings:
             self.bindings.bind(target, value, statement.line)
-        self._run_block(statement.body, function_level=False)
+        self._run_block(statement.body)
 
     def _native_labels(self, graph: dict[str, Any]) -> None:
         labels = self.context.profile.literal_labels

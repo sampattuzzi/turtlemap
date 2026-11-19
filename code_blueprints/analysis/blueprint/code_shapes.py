@@ -1,5 +1,3 @@
-from collections.abc import Sequence
-
 from code_blueprints.analysis import model as m
 
 
@@ -45,27 +43,3 @@ def flat_targets(target: m.Expr) -> list[m.Expr]:
     if isinstance(target, m.Sequence):
         return [leaf for element in target.elements for leaf in flat_targets(element)]
     return [target]
-
-
-def contains_return(statements: Sequence[m.Stmt]) -> bool:
-    pending: list[m.Node] = list(statements)
-    while pending:
-        node = pending.pop()
-        if isinstance(node, m.Return):
-            return True
-        if isinstance(node, (m.FunctionDef, m.ClassDef, m.Function)):
-            continue
-        pending.extend(m.children(node))
-    return False
-
-
-def always_terminates(statements: Sequence[m.Stmt]) -> bool:
-    return any(_terminates(statement) for statement in statements)
-
-
-def _terminates(statement: m.Stmt) -> bool:
-    if isinstance(statement, (m.Return, m.Raise)):
-        return True
-    if isinstance(statement, m.If):
-        return always_terminates(statement.body) and always_terminates(statement.orelse)
-    return False

@@ -25,7 +25,7 @@ function freshGraph(fnSym) {
 export function shapeSVG(tp, connected = true, cell = false) {
   if (!tp) return `<svg viewBox="0 0 12 12"><path d="M1.5 1.5h5l4 4.5-4 4.5h-5z" style="fill:${connected ? 'var(--exec)' : 'none'};stroke:var(--exec)" stroke-width="1.4" stroke-linejoin="round"/></svg>`;
   const c = `var(--t-${tp.cat})`;
-  if (cell) return `<svg viewBox="0 0 12 12"><rect x="1.2" y="1.2" width="9.6" height="9.6" rx="1.5" style="fill:none;stroke:${c}" stroke-width="1.6"/><rect x="4" y="4" width="4" height="4" style="fill:${connected ? c : 'none'};stroke:${c}" stroke-width="1"/></svg>`;
+  if (cell) return `<svg viewBox="0 0 12 12"><rect x="1.6" y="1.6" width="8.8" height="8.8" rx="1.6" style="fill:none;stroke:color-mix(in srgb, ${c} 55%, #5f646d)" stroke-width="1.8"/></svg>`;
   return `<svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.2" style="fill:${connected ? c : 'none'};stroke:${c}" stroke-width="1.8"/></svg>`;
 }
 function pinEl(side, key, name, tp, opts = {}) {
@@ -38,11 +38,14 @@ function pinEl(side, key, name, tp, opts = {}) {
 }
 export const OPEN_ICON = '<svg width="11" height="11" viewBox="0 0 12 12"><rect x="1" y="3.5" width="7.5" height="7.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4 1h7v7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
 export const KIND = {
-  loop: ['--h-branch', 'Loop'], entry: ['--h-entry', 'Start of the function'], break: ['--h-break', 'Read fields'], make: ['--h-make', 'Build a value'], call: ['--h-call', 'Call a function in this project'],
+  loop: ['--h-loop', 'Loop'], entry: ['--h-entry', 'Start of the function'], break: ['--h-break', 'Read fields'], make: ['--h-make', 'Build a value'], call: ['--h-call', 'Call a function in this project'],
   method: ['--h-method', 'Call a method'], ext: ['--h-ext', 'Library call'], op: ['--h-op', 'Operator'], expr: ['--h-op', 'Work out a value'], lit: ['--h-lit', 'Fixed value'], var: ['--h-var', 'Module variable'],
   select: ['--h-select', 'Pick one value'], branch: ['--h-branch', 'Branch'], return: ['--h-return', 'Give back'], raise: ['--h-raise', 'Raise an error'], set: ['--h-set', 'Store a value'],
   get: ['--h-var', 'Read a variable now'], closure: ['--h-closure', 'A function made here'],
+  lane: ['--h-lane', 'One way through the branch'], jump: ['--h-raise', 'Leave this pass of the loop'],
 };
+const FRAME_KINDS = new Set(['closure', 'loop', 'branch', 'lane']);
+export const isFrame = (n) => FRAME_KINDS.has(n.kind);
 function targetChanged(n) {
   if (!DIFF || !n.target || n.kind === 'entry') return false;
   const sym = lookup(n.target);
@@ -51,7 +54,7 @@ function targetChanged(n) {
   return pins.some((pin) => DIFF.status[`f:${n.target.path}:${n.target.sym}.${pin.name.split('.')[0]}`]);
 }
 function expressionEl(n, path) { return codeBlockEl(n.expr, n.ins, path); }
-function codeBlockEl(lines, ins, path) {
+function codeBlockEl(lines, ins, path, pins = null) {
   const names = ins.map((pin) => pin.name).sort((a, b) => b.length - a.length);
   const colours = new Map(ins.map((pin) => [pin.name, `var(--t-${pin.type ? pin.type.cat : 'any'})`]));
   const pattern = names.length ? new RegExp(`(?<![\\w.])(${names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![\\w(])`, 'y') : null;
@@ -59,7 +62,13 @@ function codeBlockEl(lines, ins, path) {
     if (!pattern) return null;
     pattern.lastIndex = at;
     const match = pattern.exec(text);
-    return match ? { end: at + match[1].length, node: el('span', { class: 'expr-input', style: `color:${colours.get(match[1])}` }, match[1]) } : null;
+    if (!match) return null;
+    const name = match[1], word = el('span', { class: 'expr-input', style: `color:${colours.get(name)}` }, name);
+    if (!pins || pins.used.has(name)) return { end: at + name.length, node: word };
+    pins.used.add(name);
+    const pin = ins.find((p) => p.name === name);
+    const shape = el('span', { class: 'shape', html: shapeSVG(pin.type, pins.connected.has(name), pin.cell) });
+    return { end: at + name.length, node: el('span', { class: 'expr-pin', 'data-pin': `in:${name}`, title: `${name}: ${pin.type.label}` }, shape, word) };
   };
   const paint = codePainter(input, path);
   return el('div', { class: 'expr' }, lines.map((line, i) => el('div', {}, ...paint(line, i))));
@@ -77,9 +86,32 @@ function closureEl(n, connectedOuts, state) {
   wrap.append(el('div', { class: 'box closure-frame' }, head, strip));
   return wrap;
 }
+function frameEl(n, connectedIns, connectedOuts, state, path) {
+  const wrap = el('div', { class: `k-frame k-${n.kind}${state ? ` diff-${state}` : ''}`, 'data-node': n.id });
+  const head = el('div', { class: 'head', style: `--hc: var(${KIND[n.kind][0]})` }, diffBadge(state));
+  if (n.kind === 'lane') head.append(pinEl('out', 'start', '', null));
+  else if (n.execIn) head.append(pinEl('in', 'exec-in', '', null));
+  const pins = { used: new Set(), connected: connectedIns };
+  const condition = n.expr ? codeBlockEl(n.expr, n.ins, path, pins) : null;
+  for (const p of n.ins) if (!pins.used.has(p.name)) head.append(pinEl('in', `in:${p.name}`, p.name, p.type, { lit: p.lit, connected: connectedIns.has(p.name) || p.lit != null, diff: p.diff, cell: p.cell }));
+  head.append(el('span', { class: 'title' }, plain(n.title)));
+  if (condition) head.append(condition);
+  if (n.kind !== 'lane') head.append(el('span', { class: 'grow' }), n.execOut ? el('span', { class: 'then' }, 'then') : null, n.execOut ? pinEl('out', 'then', '', null) : null);
+  const box = el('div', { class: 'box frame-box' }, head);
+  const starts = n.kind === 'loop' && (n.execOuts || []).includes('start');
+  if (starts || (n.kind !== 'branch' && n.outs.length)) {
+    const strip = el('div', { class: 'strip' });
+    for (const o of n.outs) strip.append(pinEl('out', `out:${o.name}`, o.name, o.type, { connected: connectedOuts.has(o.name), diff: o.diff }));
+    if (starts) strip.append(pinEl('out', 'start', '', null));
+    box.append(strip);
+  }
+  wrap.append(box);
+  return wrap;
+}
 function nodeEl(n, ctx, connectedIns, connectedOuts, path) {
   const state = n.diff || (targetChanged(n) ? 'modified' : null);
   if (n.kind === 'closure') return closureEl(n, connectedOuts, state);
+  if (isFrame(n)) return frameEl(n, connectedIns, connectedOuts, state, path);
   const wrap = el('div', { class: `k-${n.kind}${state ? ` diff-${state}` : ''}`, 'data-node': n.id });
   const box = el('div', { class: 'box' });
   wrap.append(box);
@@ -129,14 +161,22 @@ export function buildFunctionScene(fnSym, ctx) {
   }
   const doc = fnSym.doc ? scene.add(el('div', { class: 'doc-note' }, fnSym.doc)) : null;
   scene.measure();
-  for (const v of byId.values()) if (v.data.kind === 'closure') { v.headW = v.w; v.headH = v.h; }
+  for (const v of byId.values()) if (isFrame(v.data)) { v.headW = v.w; v.headH = v.h; }
   const { routes, dummies, routeKey } = framedLayout(g, byId, (v) => scene.measureNode(v));
   scene.dummies = dummies;
   for (const e of g.edges) Object.assign(scene.wire(byId.get(e.from), `out:${e.fp}`, byId.get(e.to), `in:${e.tp}`, e.cell ? 'cell' : null, e.type), { via: routes.get(routeKey(e)), diff: e.diff });
   for (const e of g.exec) Object.assign(scene.wire(byId.get(e.from), e.fp, byId.get(e.to), 'exec-in', 'exec'), { via: routes.get(routeKey(e)), diff: e.diff });
   if (doc) { const entry = byId.get(g.nodes[0]); doc.x = entry.x; doc.y = Math.min(...[...byId.values()].map((v) => v.y)) - doc.h - 20; }
   scene.finish();
+  scene.crumbs = (view) => crumbsAt(scene, view);
   return scene;
+}
+function crumbsAt(scene, view) {
+  const x = view.x + view.w / 2, y = view.y + view.h / 2;
+  const around = scene.nodes.filter((v) => ['loop', 'lane', 'closure'].includes(v.data.kind) && x >= v.x && x <= v.x + v.w && y >= v.y && y <= v.y + v.h).sort((a, b) => b.w * b.h - a.w * a.h);
+  const inner = around[around.length - 1];
+  if (!inner || (inner.y >= view.y && inner.x >= view.x)) return null;
+  return around.map((v) => el('div', { class: `crumb-line crumb-${v.data.kind}` }, v.data.kind === 'loop' ? '↻ ' : v.data.kind === 'lane' ? '↳ ' : 'ƒ ', plain(v.data.reach || v.data.title)));
 }
 function connectedPins(edges, nodeOf, pinOf) {
   const connected = new Map();

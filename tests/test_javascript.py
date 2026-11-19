@@ -431,7 +431,12 @@ def test_builds_blueprints_for_every_kind_of_statement(
     switch = next(
         node for node in graph["graph"]["nodes"] if node["title"] == "Switch total"
     )
-    assert switch["execOuts"] == ["case 1, 2", "default"]
+    lanes = [
+        node
+        for node in graph["graph"]["nodes"]
+        if node["kind"] == "lane" and node.get("parent") == switch["id"]
+    ]
+    assert [lane["title"] for lane in lanes] == ["case 1, 2", "default"]
 
 
 def test_keeps_callback_parameters_inside_their_callback(

@@ -118,6 +118,9 @@ PRICING_MODULE = """
 """
 
 
+FRAME_KINDS = ("closure", "loop", "branch", "lane")
+
+
 def make_workspace(
     tmp_path: Path, files: dict[str, str]
 ) -> tuple[Workspace, TypeSystem]:
@@ -219,11 +222,15 @@ def expect_frames_hold_their_wires(graph: dict[str, Any]) -> None:
         chain: list[str | None] = []
         frame = nodes[node_id].get("parent")
         while frame is not None:
-            assert nodes[frame]["kind"] == "closure"
+            assert nodes[frame]["kind"] in FRAME_KINDS
             chain.append(frame)
             frame = nodes[frame].get("parent")
         return [*chain, None]
 
+    for node in graph["nodes"]:
+        parent = node.get("parent")
+        if parent is not None and nodes[parent]["kind"] == "branch":
+            assert node["kind"] == "lane", node
     for edge in graph["exec"]:
         target_frame = frames_around(edge["to"])[0]
         if edge["fp"] == "start":
@@ -319,7 +326,7 @@ def test_wires_variables_from_the_pin_that_produced_them(tmp_path: Path) -> None
     assert source_of(graph, returned, "int") == (twice["id"], "")
 
 
-def test_turns_if_return_into_select(tmp_path: Path) -> None:
+def test_draws_an_early_return_inside_its_lane(tmp_path: Path) -> None:
     graph = make_graph(
         tmp_path,
         """
@@ -332,23 +339,28 @@ def test_turns_if_return_into_select(tmp_path: Path) -> None:
         "pick",
     )
 
-    select = the_node(graph, "Select")
+    lane = the_node(graph, "if")
     entry = nodes_of_kind(graph, "entry")[0]
-    assert select["expr"] == ["current is None"]
-    assert source_of(graph, select, "current") == (
+    early, late = nodes_of_kind(graph, "return")
+    assert lane["expr"] == ["current is None"]
+    assert lane["parent"] == the_node(graph, "Branch")["id"]
+    assert early["parent"] == lane["id"]
+    assert source_of(graph, early, "value") == (entry["id"], "fallback")
+    assert source_of(graph, late, "value") == (
         the_node(graph, "Break estimate")["id"],
         "value",
     )
-    assert source_of(graph, select, "if true") == (entry["id"], "fallback")
-    assert source_of(graph, select, "if false") == (
-        the_node(graph, "Break estimate")["id"],
-        "value",
-    )
-    assert source_of(graph, the_node(graph, "Return"), "value") == (select["id"], "")
-    assert nodes_of_kind(graph, "branch") == []
+    assert exec_order(graph) == [
+        "pick -then-> Branch",
+        "if -start-> Return",
+        "Branch -then-> Return",
+    ]
+    assert nodes_of_kind(graph, "select") == []
 
 
-def test_merges_assignments_from_both_branches_into_a_select(tmp_path: Path) -> None:
+def test_sets_a_variable_in_each_lane_and_reads_it_after_the_branch(
+    tmp_path: Path,
+) -> None:
     graph = make_graph(
         tmp_path,
         """
@@ -362,25 +374,39 @@ def test_merges_assignments_from_both_branches_into_a_select(tmp_path: Path) -> 
         "label",
     )
 
-    select = the_node(graph, "Select")
-    assert input_pin(select, "if true")["lit"] == '"many"'
-    assert input_pin(select, "if false")["lit"] == '"one"'
-    assert graph["exec"] == []
+    variable = the_node(graph, "text")
+    stores = nodes_of_kind(graph, "set")
+    assert input_pin(variable, "value")["lit"] == "unset"
+    assert variable["note"] == "first set by the branch"
+    assert [input_pin(store, "value")["lit"] for store in stores] == ['"many"', '"one"']
+    assert [store["parent"] for store in stores] == [
+        the_node(graph, "if")["id"],
+        the_node(graph, "else")["id"],
+    ]
+    for node in [*stores, the_node(graph, "Get")]:
+        assert source_of(graph, node, "text") == (variable["id"], "text")
+    assert source_of(graph, the_node(graph, "Return"), "str") == (
+        the_node(graph, "Get")["id"],
+        "text",
+    )
+    assert exec_order(graph)[:2] == ["label -then-> text", "text -then-> Branch"]
+    assert nodes_of_kind(graph, "select") == []
 
 
-def test_pure_function_has_no_exec_wires(tmp_path: Path) -> None:
+def test_keeps_a_conditional_expression_as_a_select_without_exec(
+    tmp_path: Path,
+) -> None:
     graph = make_graph(
         tmp_path,
         """
         def choose(a, c, y, z):
             x = a.b
-            if c:
-                return y
-            return z
+            return y if c else z
     """,
         "choose",
     )
 
+    assert len(nodes_of_kind(graph, "select")) == 1
     assert graph["exec"] == []
     assert not any(node.get("execIn") or node.get("execOut") for node in graph["nodes"])
 
@@ -424,7 +450,7 @@ def test_keeps_pure_builtins_and_methods_off_the_exec_line(tmp_path: Path) -> No
     assert exec_order(graph) == ["shout -then-> print", "print -then-> Return"]
 
 
-def test_branches_when_an_if_has_side_effects(tmp_path: Path) -> None:
+def test_gives_each_arm_of_an_if_its_own_lane(tmp_path: Path) -> None:
     graph = make_graph(
         tmp_path,
         """
@@ -442,13 +468,18 @@ def test_branches_when_an_if_has_side_effects(tmp_path: Path) -> None:
     )
 
     branch = the_node(graph, "Branch")
-    assert branch["execOuts"] == ["True", "False"]
+    lanes = nodes_of_kind(graph, "lane")
+    assert "execOuts" not in branch and branch["outs"] == []
+    assert [lane["title"] for lane in lanes] == ["if", "else"]
+    assert [lane["reach"] for lane in lanes] == [
+        "if user.muted",
+        "else · not (user.muted)",
+    ]
     assert exec_order(graph) == [
         "notify -then-> Branch",
-        "Branch -True-> log",
-        "Branch -False-> user.send",
-        "log -then-> Return",
-        "user.send -then-> Return",
+        "if -start-> log",
+        "else -start-> user.send",
+        "Branch -then-> Return",
     ]
 
 
@@ -471,12 +502,12 @@ def test_ends_the_exec_path_at_an_early_raise(tmp_path: Path) -> None:
     assert input_pin(raised, "message")["lit"] == '"negative"'
     assert exec_order(graph) == [
         "check -then-> Branch",
-        "Branch -True-> Raise ValueError",
-        "Branch -False-> record",
+        "if -start-> Raise ValueError",
+        "Branch -then-> record",
     ]
 
 
-def test_loops_run_the_body_from_the_loop_body_label(tmp_path: Path) -> None:
+def test_runs_a_loop_body_inside_the_loop_frame(tmp_path: Path) -> None:
     graph = make_graph(
         tmp_path,
         """
@@ -489,16 +520,22 @@ def test_loops_run_the_body_from_the_loop_body_label(tmp_path: Path) -> None:
         "total",
     )
 
-    loop = the_node(graph, "For each price")
-    assert loop["execOuts"] == ["Loop body", "Completed"]
+    loop = the_node(graph, "For each price in prices")
+    variable = the_node(graph, "running")
+    added = the_node(graph, "+=")
+    assert loop["execOuts"] == ["start"]
     assert [pin["type"]["label"] for pin in loop["outs"]] == ["float"]
+    assert added["parent"] == loop["id"]
+    assert source_of(graph, added, "running") == (variable["id"], "running")
+    assert source_of(graph, added, "value") == (loop["id"], "price")
     assert exec_order(graph) == [
-        "total -then-> For each price",
-        "For each price -Loop body-> Set running +=",
-        "For each price -Completed-> Return",
+        "total -then-> running",
+        "running -then-> For each price in prices",
+        "For each price in prices -start-> +=",
+        "For each price in prices -then-> Return",
     ]
     assert source_of(graph, the_node(graph, "Return"), "float") == (
-        the_node(graph, "Set running +=")["id"],
+        the_node(graph, "Get")["id"],
         "running",
     )
 
@@ -891,7 +928,7 @@ def test_folds_unnamed_multi_step_expressions_into_a_check(tmp_path: Path) -> No
     assert nodes_of_kind(graph, "op") == []
 
 
-def test_writes_an_inline_if_condition_into_the_branch(tmp_path: Path) -> None:
+def test_writes_an_inline_if_condition_into_the_lane(tmp_path: Path) -> None:
     graph = make_graph(
         tmp_path,
         """
@@ -906,15 +943,12 @@ def test_writes_an_inline_if_condition_into_the_branch(tmp_path: Path) -> None:
         "guard",
     )
 
-    branch = the_node(graph, "Branch")
-    assert branch["expr"] == ["count > limit and not done"]
-    assert [pin["name"] for pin in branch["ins"]] == ["count", "limit", "done"]
+    lane = the_node(graph, "if")
+    assert lane["expr"] == ["count > limit and not done"]
+    assert [pin["name"] for pin in lane["ins"]] == ["count", "limit", "done"]
     assert nodes_of_kind(graph, "op") == []
     assert nodes_of_kind(graph, "expr") == []
-    assert source_of(graph, the_node(graph, "Select"), "condition") == (
-        branch["id"],
-        "condition",
-    )
+    assert nodes_of_kind(graph, "select") == []
 
 
 def test_writes_a_while_condition_into_the_loop(tmp_path: Path) -> None:
@@ -1078,7 +1112,7 @@ def test_draws_a_nested_function_as_a_frame_around_its_body(tmp_path: Path) -> N
     assert [pin["name"] for pin in frame["outs"]] == ["function", "name"]
     assert frame["outs"][0]["type"]["label"] == "(name) ⇒ None"
     assert {"from": frame["id"], "fp": "start", "to": printed["id"]} in graph["exec"]
-    assert "parent" not in the_node(graph, "For each name")
+    assert "parent" not in the_node(graph, "For each name in names")
 
 
 def test_calls_a_nested_function_through_its_function_pin(tmp_path: Path) -> None:
@@ -1140,14 +1174,16 @@ def test_shares_a_captured_local_that_changes_through_one_variable(
         "make_counter",
     )
     variable = the_node(graph, "count")
-    store = the_node(graph, "Set")
+    entry = nodes_of_kind(graph, "entry")[0]
     bump = the_node(graph, "+=")
     read = the_node(graph, "Get")
     assert variable["outs"][0]["cell"] is True
     assert variable["outs"][0]["type"]["label"] == "int"
+    assert source_of(graph, variable, "value") == (entry["id"], "start")
     assert "parent" not in variable
+    assert nodes_of_kind(graph, "set") == [bump]
     assert bump["parent"] == read["parent"] == the_node(graph, "bump")["id"]
-    for node in (store, bump, read):
+    for node in (bump, read):
         assert source_of(graph, node, "count") == (variable["id"], "count")
         assert input_pin(node, "count")["cell"] is True
 
@@ -1213,3 +1249,184 @@ def test_notes_an_async_call_that_is_not_awaited(tmp_path: Path) -> None:
     assert started["note"] == "not awaited"
     assert started["outs"][0]["type"]["label"] == "Coroutine"
     assert awaited["note"] == "awaits"
+
+
+HEATING = """
+    from dataclasses import dataclass
+
+    @dataclass
+    class Room:
+        occupied: bool
+        comfort: float
+        setback: float
+        min_temp: float
+        max_temp: float
+
+    def boost_offset(boost: bool) -> float:
+        return 1.5 if boost else 0.0
+
+    def clamp(value: float, low: float, high: float) -> float:
+        return max(low, min(value, high))
+
+    def heating_plan(rooms: list[Room], outdoor: float, boost: bool) -> list[float]:
+        setpoints = []
+        for room in rooms:
+            if room.occupied and outdoor < 5:
+                target = room.comfort + boost_offset(boost)
+            else:
+                target = room.setback
+            setpoints.append(clamp(target, room.min_temp, room.max_temp))
+        return setpoints
+"""
+
+
+def test_places_a_variable_first_set_by_a_branch_just_before_it(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(tmp_path, HEATING, "heating_plan")
+
+    loop = the_node(graph, "For each room in rooms")
+    target = next(
+        node for node in nodes_of_kind(graph, "var") if node["title"] == "target"
+    )
+    assert target["parent"] == loop["id"]
+    assert input_pin(target, "value")["lit"] == "unset"
+    assert "For each room in rooms -start-> target" in exec_order(graph)
+    assert "target -then-> Branch" in exec_order(graph)
+    assert the_node(graph, "Branch")["parent"] == loop["id"]
+
+
+def test_appends_to_an_outer_list_through_its_reference(tmp_path: Path) -> None:
+    graph = make_graph(tmp_path, HEATING, "heating_plan")
+
+    setpoints = the_node(graph, "setpoints")
+    append = the_node(graph, "setpoints.append")
+    assert input_pin(setpoints, "value")["lit"] == "[]"
+    assert "parent" not in setpoints
+    assert source_of(graph, append, "self") == (setpoints["id"], "setpoints")
+    assert input_pin(append, "self")["cell"] is True
+    assert exec_order(graph)[:2] == [
+        "heating_plan -then-> setpoints",
+        "setpoints -then-> For each room in rooms",
+    ]
+
+
+def test_reads_fields_inside_the_frame_that_owns_the_value(tmp_path: Path) -> None:
+    graph = make_graph(tmp_path, HEATING, "heating_plan")
+
+    breaks = nodes_of_kind(graph, "break")
+    assert len(breaks) == 1
+    assert breaks[0]["parent"] == the_node(graph, "For each room in rooms")["id"]
+
+
+def test_ends_a_lane_at_continue_and_break(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def first_big(values: list[int]) -> None:
+            for value in values:
+                if value < 0:
+                    continue
+                if value > 100:
+                    break
+                report(value)
+
+        def report(value):
+            pass
+    """,
+        "first_big",
+    )
+
+    for title in ("Continue", "Break"):
+        jump = the_node(graph, title)
+        assert jump["kind"] == "jump"
+        assert jump.get("execIn") is True
+        assert "execOut" not in jump and "execOuts" not in jump
+    assert exec_order(graph)[-1] == "Branch -then-> report"
+
+
+def test_stacks_elif_and_else_as_lanes_of_one_branch(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def size(n: int) -> str:
+            if n < 10:
+                return "small"
+            elif n < 100:
+                return "medium"
+            else:
+                return "large"
+    """,
+        "size",
+    )
+
+    branch = the_node(graph, "Branch")
+    lanes = nodes_of_kind(graph, "lane")
+    assert [lane["title"] for lane in lanes] == ["if", "elif", "else"]
+    assert {lane["parent"] for lane in lanes} == {branch["id"]}
+    assert lanes[2]["reach"] == "else · not (n < 10) and not (n < 100)"
+    assert "execOut" not in branch
+
+
+def test_draws_match_cases_as_lanes_with_their_captures(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def describe(point) -> str:
+            match point:
+                case (x, 0):
+                    return f"on the x axis at {x}"
+                case _:
+                    return "elsewhere"
+    """,
+        "describe",
+    )
+
+    branch = the_node(graph, "Match point")
+    lanes = nodes_of_kind(graph, "lane")
+    assert [pin["name"] for pin in branch["ins"]] == ["subject"]
+    assert [lane["title"] for lane in lanes] == ["case [x, 0]", "case _"]
+    assert [pin["name"] for pin in lanes[0]["outs"]] == ["x"]
+    assert "execOut" not in branch
+
+
+def test_shows_a_while_condition_on_the_loop_header(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def countdown(start: int) -> int:
+            steps = 0
+            while start - steps > 0:
+                steps += 1
+            return steps
+    """,
+        "countdown",
+    )
+
+    loop = the_node(graph, "While")
+    assert loop["expr"] == ["start - steps > 0"]
+    assert loop["execOuts"] == ["start"]
+    assert the_node(graph, "+=")["parent"] == loop["id"]
+
+
+def test_reaches_a_list_built_up_in_a_loop_by_reference(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def collect(names: list[str], log) -> list[str]:
+            found = list(names[:1])
+            for name in names:
+                log.info(name)
+                found.append(name)
+            return found
+    """,
+        "collect",
+    )
+
+    [variable] = nodes_of_kind(graph, "var")
+    assert variable["title"] == "found"
+    assert source_of(graph, the_node(graph, "found.append"), "self") == (
+        variable["id"],
+        "found",
+    )
+    assert "cell" not in input_pin(the_node(graph, "log.info"), "self")

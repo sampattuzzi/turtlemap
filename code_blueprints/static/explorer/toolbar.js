@@ -17,7 +17,7 @@ function legendInto(container) {
   const rows = [['bool', 'bool'], ['int', 'int'], ['float', 'float'], ['str', 'str, Path'], ['enum', 'Enum'], ['struct', 'dataclass / model'], ['object', 'object'], ['map', 'dict, Mapping'], ['list', 'list, tuple'], ['callable', 'callable'], ['time', 'datetime'], ['none', 'None / unknown']];
   container.append(el('div', { class: 'legend-row' }, el('span', { class: 'shape', html: shapeSVG(null) }), el('span', {}, 'execution order ', el('small', {}, 'white wire'))));
   for (const [cat, code] of rows) container.append(el('div', { class: 'legend-row' }, el('span', { class: 'shape', html: shapeSVG({ cat }) }), el('small', {}, code)));
-  container.append(el('div', { class: 'legend-row' }, el('span', { class: 'shape', html: shapeSVG({ cat: 'int' }, true, true) }), el('span', {}, 'the variable itself ', el('small', {}, 'double wire, for variables that are shared and change'))));
+  container.append(el('div', { class: 'legend-row' }, el('span', { class: 'shape', html: shapeSVG({ cat: 'int' }, true, true) }), el('span', {}, 'the variable itself ', el('small', {}, 'dotted wire, to a variable that is set in one place and read or changed in another'))));
 }
 function popoverButton(label, cls, fill) {
   const btn = el('button', { class: 'btn' }, label);

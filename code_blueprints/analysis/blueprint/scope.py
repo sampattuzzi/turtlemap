@@ -3,14 +3,12 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from code_blueprints.analysis.blueprint.callees import external_name
-from code_blueprints.analysis.blueprint.canvas import Graph, GraphNode
+from code_blueprints.analysis.blueprint.canvas import Graph, GraphNode, Pin
 from code_blueprints.analysis.blueprint.lookups import TypeLookups
 from code_blueprints.analysis.blueprint.values import (
     BOOL,
     CALLABLE,
-    Binding,
     Environment,
-    PendingSelect,
     Value,
     select_type,
 )
@@ -27,7 +25,7 @@ class Scope:
         *,
         parent: "Scope | None" = None,
         frame: str | None = None,
-        cells: frozenset[str] = frozenset(),
+        variables: frozenset[str] = frozenset(),
     ) -> None:
         self._lookups = lookups
         self._workspace = lookups.workspace
@@ -40,16 +38,15 @@ class Scope:
         self.local_names = local_names
         self.local_functions: set[str] = set()
         self.declared_globals: set[str] = set()
-        self._cell_names = cells
-        self._cells: dict[str, Value] = {}
+        self._variable_names = variables
+        self._declared: dict[str, tuple[Value, str | None]] = {}
         self._reads: dict[tuple[str, str | None, int], Value] = {}
-        self._materialized: dict[PendingSelect, Value] = {}
         self._globals: dict[str, Value] = {}
 
     def restore(self, env: Environment) -> None:
         self.env = env
 
-    def bind(self, name: str, value: Binding) -> None:
+    def bind(self, name: str, value: Value) -> None:
         self.env[name] = value
 
     def forget(self, name: str) -> None:
@@ -62,13 +59,14 @@ class Scope:
         self.local_functions.add(name)
 
     def value_of(self, name: str, line: int) -> Value:
-        cell = self.cell(name, line)
-        if cell is not None:
-            return self.read(cell, name, line)
+        declared = self.declared(name)
+        if declared is not None:
+            return self.read(declared, name, line)
         if name in self.env:
-            value = self.materialize(self.env[name])
-            self.env[name] = value
-            return value
+            return self.env[name]
+        reference = self.reference(name, line)
+        if reference is not None:
+            return self.read(reference, name, line)
         if name in self.local_functions:
             return Value(CALLABLE, literal=name)
         if self._owns(name):
@@ -86,26 +84,45 @@ class Scope:
         return self.global_value(name, line)
 
     def is_local(self, name: str) -> bool:
-        if self._owns(name) or self.is_cell(name):
+        if self._owns(name) or self.is_variable(name):
             return True
         return self.parent is not None and self.parent.is_local(name)
 
-    def is_cell(self, name: str) -> bool:
-        if name in self._cell_names:
+    def is_variable(self, name: str) -> bool:
+        if name in self._variable_names:
             return True
         if self._owns(name):
             return False
         if self.parent is not None:
-            return self.parent.is_cell(name)
+            return self.parent.is_variable(name)
         return name in self._lookups.reassigned_globals
 
-    def cell(self, name: str, line: int) -> Value | None:
-        if not self.is_cell(name):
+    def owns_variable(self, name: str) -> bool:
+        return name in self._variable_names
+
+    def declared(self, name: str) -> Value | None:
+        found = self._declared.get(name)
+        if found is None:
             return None
-        if name in self._cell_names:
-            return self._own_cell(name, line)
+        value, frame = found
+        return value if self._graph.encloses(frame, self._graph.frame) else None
+
+    def declare(self, name: str, reference: Value) -> None:
+        self._declared[name] = (reference, self._graph.frame)
+        self.env.pop(name, None)
+
+    def known_reference(self, name: str, line: int) -> Value | None:
+        if name in self._variable_names:
+            return self.declared(name)
+        return self.reference(name, line)
+
+    def reference(self, name: str, line: int) -> Value | None:
+        if not self.is_variable(name):
+            return None
+        if name in self._variable_names:
+            return self.declared(name) or self._undeclared(name, line)
         if self.parent is not None:
-            return self.parent.cell(name, line)
+            return self.parent.reference(name, line)
         return self._cached_variable(
             f"cell:{name}",
             line,
@@ -115,38 +132,38 @@ class Scope:
         )
 
     def settle(self, name: str, pin_type: PinType) -> None:
-        cell = self._cells.get(name)
-        if cell is None or cell.node is None or cell.pin is None:
+        found = self._declared.get(name)
+        if found is None or found[0].node is None or found[0].pin is None:
             if self.parent is not None and not self._owns(name):
                 self.parent.settle(name, pin_type)
             return
-        if cell.type.cat != "any" or pin_type.cat in ("any", "none"):
+        reference, frame = found
+        if reference.type.cat != "any" or pin_type.cat in ("any", "none"):
             return
-        pin = self._graph.node(cell.node).output(cell.pin)
-        if pin is not None:
-            pin.type = pin_type
-        self._cells[name] = replace(cell, type=pin_type)
+        assert reference.node is not None and reference.pin is not None
+        node = self._graph.node(reference.node)
+        for pin in [node.output(reference.pin), _input(node, "value")]:
+            if pin is not None and pin.type.cat == "any":
+                pin.type = pin_type
+        self._declared[name] = (replace(reference, type=pin_type), frame)
 
-    def read(self, cell: Value, name: str, line: int) -> Value:
+    def read(self, reference: Value, name: str, line: int) -> Value:
         key = (name, self._graph.frame, self._graph.moment)
         cached = self._reads.get(key)
         if cached is not None:
             return cached
         node = self._graph.add("get", "Get", line)
-        self._graph.connect(node, name, cell, cell=True)
-        value = self._graph.output(node, name, cell.type)
+        self._graph.connect(node, name, reference)
+        value = self._graph.output(node, name, reference.type)
         self._reads[key] = value
         return value
 
-    def _own_cell(self, name: str, line: int) -> Value:
-        cached = self._cells.get(name)
-        if cached is not None:
-            return cached
+    def _undeclared(self, name: str, line: int) -> Value:
         with self._graph.inside(self.frame):
-            node = self._graph.add("var", name, line, note="captured local")
-        value = self._graph.output(node, name, UNKNOWN, cell=True)
-        self._cells[name] = value
-        return value
+            node = self._graph.add("var", name, line, note="set later")
+            reference = self._graph.output(node, name, UNKNOWN, cell=True)
+            self.declare(name, reference)
+        return reference
 
     def _owns(self, name: str) -> bool:
         return (
@@ -204,17 +221,6 @@ class Scope:
             dotted, line, lambda: self._graph.add("var", dotted, line), UNKNOWN
         )
 
-    def materialize(self, binding: Binding) -> Value:
-        if isinstance(binding, Value):
-            return binding
-        cached = self._materialized.get(binding)
-        if cached is None:
-            when_true = self.materialize(binding.when_true)
-            when_false = self.materialize(binding.when_false)
-            cached = self.select(binding.condition, when_true, when_false, binding.line)
-            self._materialized[binding] = cached
-        return cached
-
     def select(
         self, condition: Value, when_true: Value, when_false: Value, line: int
     ) -> Value:
@@ -263,19 +269,5 @@ class Scope:
         return value
 
 
-def merge(
-    condition: Value,
-    true_env: Environment,
-    false_env: Environment,
-    line: int,
-) -> Environment:
-    merged: Environment = {}
-    for name in [*true_env, *(name for name in false_env if name not in true_env)]:
-        when_true, when_false = true_env.get(name), false_env.get(name)
-        if when_true is None or when_false is None or when_true == when_false:
-            present = when_true if when_true is not None else when_false
-            if present is not None:
-                merged[name] = present
-            continue
-        merged[name] = PendingSelect(condition, when_true, when_false, line)
-    return merged
+def _input(node: GraphNode, name: str) -> Pin | None:
+    return next((pin for pin in node.ins if pin.name == name), None)

@@ -10,6 +10,8 @@ from code_blueprints.analysis.blueprint.values import Value
 from code_blueprints.analysis.types import UNKNOWN, PinType
 from code_blueprints.analysis.workspace.parsed import ParsedModule, SymbolRef
 
+_BaseKey = tuple[str | None, str | None, str | None, str | None]
+
 
 class AttributeReads:
     def __init__(
@@ -25,8 +27,8 @@ class AttributeReads:
         self._graph = graph
         self._evaluate = evaluate
         self._attribute_counts = _attribute_counts(function)
-        self._breaks: dict[tuple[str | None, str | None, str | None], GraphNode] = {}
-        self._getters: dict[tuple[str | None, str | None, str | None, str], Value] = {}
+        self._breaks: dict[_BaseKey, GraphNode] = {}
+        self._getters: dict[tuple[_BaseKey, str], Value] = {}
 
     def read(self, expression: m.Member) -> Value:
         attributes, base = _split_attribute(expression)
@@ -110,13 +112,15 @@ class AttributeReads:
     def _getter_read(
         self, base: Value, base_name: str, attribute: str, getter: SymbolRef, line: int
     ) -> Value:
-        key = (base.node, base.pin, base.literal, attribute)
+        frame = self._graph.frame_of(base)
+        key = (_base_key(base, frame), attribute)
         cached = self._getters.get(key)
         if cached is not None:
             return cached
-        node = self._graph.add(
-            "method", f"{base_name}.{attribute}", line, target=getter
-        )
+        with self._graph.inside(frame):
+            node = self._graph.add(
+                "method", f"{base_name}.{attribute}", line, target=getter
+            )
         self._graph.connect(node, self._lookups.profile.instance_receiver, base)
         value = self._graph.output(node, attribute, self._returned_by(getter))
         self._getters[key] = value
@@ -139,19 +143,25 @@ class AttributeReads:
         annotation: tuple[m.TypeExpr, ParsedModule] | None,
         line: int,
     ) -> Value:
-        key = (base.node, base.pin, base.literal)
+        frame = self._graph.frame_of(base)
+        key = _base_key(base, frame)
         node = self._breaks.get(key)
         if node is None:
             label = _type_name(base.type) or base_name
-            node = self._graph.add(
-                "break", f"Break {label}", line, target=base.type.ref
-            )
+            with self._graph.inside(frame):
+                node = self._graph.add(
+                    "break", f"Break {label}", line, target=base.type.ref
+                )
             self._graph.connect(node, base_name, base)
             self._breaks[key] = node
         existing = node.output(attribute)
         if existing is not None:
             return Value(existing.type, node.id, existing.name)
         return self._graph.output(node, attribute, pin_type, annotation)
+
+
+def _base_key(base: Value, frame: str | None) -> _BaseKey:
+    return (frame, base.node, base.pin, base.literal)
 
 
 def _split_attribute(expression: m.Member) -> tuple[list[str], m.Expr]:

@@ -11,6 +11,8 @@ export class Viewport {
     this.settleTimer = null;
     this.cullFrame = null;
     this.gestures = new PointerGestures(this);
+    this.crumb = el('div', { class: 'crumb', hidden: true });
+    host.append(this.crumb);
     host.append(el('div', { class: 'zoom-ctl' }, this.pct,
       el('button', { class: 'btn small', title: 'Zoom out (Ctrl or ⌘ + scroll, or pinch)', onclick: () => this.zoomCentre(1 / 1.2) }, '−'),
       el('button', { class: 'btn small', title: 'Zoom in (Ctrl or ⌘ + scroll, or pinch)', onclick: () => this.zoomCentre(1.2) }, '+'),
@@ -39,6 +41,12 @@ export class Viewport {
       this.cull();
     }
     this.edges.redraw();
+    this.showCrumbs();
+  }
+  showCrumbs() {
+    const lines = this.scene && this.scene.crumbs ? this.scene.crumbs({ x: -this.x / this.s, y: -this.y / this.s, w: this.host.clientWidth / this.s, h: this.host.clientHeight / this.s }) : null;
+    this.crumb.hidden = !lines || !lines.length;
+    if (lines) this.crumb.replaceChildren(...lines);
   }
   glideTo(p) {
     const W = this.host.clientWidth, H = this.host.clientHeight;

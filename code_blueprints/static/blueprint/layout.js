@@ -85,14 +85,15 @@ function blueprintRanks(g) {
   };
   g.nodes.forEach((n) => rankOf(n));
   for (const n of g.nodes) if (placedByUse(n)) rank.set(n, Math.max(forwardRank(n, realPreds.get(n) || [], (p) => rank.get(p)) ?? 1, backwardRank(realSuccs.get(n) || [], rank)));
-  pushPastFrames(g.nodes.filter(placedByUse), realSuccs, rank);
+  pushPastSources(g.nodes.filter(placedByUse), realSuccs, rank);
   for (const n of g.nodes) if (rank.get(n) === null) rank.set(n, backwardRank(realSuccs.get(n) || [], rank));
+  pushPastSources(g.nodes, realSuccs, rank);
   const maxR = Math.max(...rank.values());
   for (const n of g.nodes) if (n.kind === 'return' && !(realSuccs.get(n) || []).length) rank.set(n, maxR);
   return rank;
 }
-function pushPastFrames(frames, succs, rank) {
-  const pending = [...frames];
+function pushPastSources(sources, succs, rank) {
+  const pending = [...sources];
   let guard = 0;
   while (pending.length && guard++ < 100000) {
     const n = pending.pop();

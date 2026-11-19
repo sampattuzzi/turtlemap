@@ -1,7 +1,10 @@
 import { layered } from './layout.js';
 const FRAME_PAD = 22;
+const LANE_PAD = 14;
+const FRAMES = new Set(['closure', 'loop', 'branch', 'lane']);
+const isFrame = (n) => FRAMES.has(n.kind);
 export function framedLayout(g, byId, remeasure) {
-  if (!g.nodes.some((n) => n.kind === 'closure')) {
+  if (!g.nodes.some(isFrame)) {
     const { routes, dummies } = layered(g, byId);
     return { routes, dummies, routeKey: plainRouteKey };
   }
@@ -11,38 +14,57 @@ export function framedLayout(g, byId, remeasure) {
   const routes = new Map(), routeKeys = new Map(), frameDummies = new Map();
   const standIns = new Map();
   const standIn = (n) => {
-    if (n.kind !== 'closure') return n;
-    if (!standIns.has(n)) standIns.set(n, { id: n.id, kind: 'closure', title: n.title, ins: [], outs: n.outs });
+    if (!isFrame(n)) return n;
+    if (!standIns.has(n)) standIns.set(n, n.kind === 'closure' ? { id: n.id, kind: 'closure', title: n.title, ins: [], outs: n.outs } : { id: n.id, kind: n.kind, title: n.title, ins: n.ins, outs: [], execIn: n.execIn, execOut: n.execOut });
     return standIns.get(n);
   };
   const contentOf = (frameId) => {
     const out = [];
-    for (const n of members.get(frameId) || []) { out.push(n); if (n.kind === 'closure') out.push(...contentOf(n.id)); }
+    for (const n of members.get(frameId) || []) { out.push(n); if (isFrame(n)) out.push(...contentOf(n.id)); }
     return out;
   };
-  const framesUnder = (frameId) => [frameId, ...(members.get(frameId) || []).filter((n) => n.kind === 'closure').flatMap((n) => framesUnder(n.id))];
+  const framesUnder = (frameId) => [frameId, ...(members.get(frameId) || []).filter(isFrame).flatMap((n) => framesUnder(n.id))];
+  const headerPin = (frame, pin) => frame.kind === 'closure' && pin === frame.outs[0].name;
   const shiftContent = (frameId, dx, dy) => {
     for (const n of contentOf(frameId)) { const v = byId.get(n); v.x += dx; v.y += dy; }
     for (const f of framesUnder(frameId)) for (const d of frameDummies.get(f) || []) { d.x += dx; d.y += dy; }
   };
+  const stackLanes = (branch) => {
+    const lanes = members.get(branch.id) || [];
+    for (const lane of lanes) layoutFrame(lane.id);
+    const bv = byId.get(branch);
+    const width = Math.max(bv.headW, ...lanes.map((lane) => byId.get(lane).w));
+    let y = bv.headH;
+    for (const lane of lanes) {
+      const lv = byId.get(lane);
+      lv.el.style.width = `${width}px`;
+      remeasure(lv);
+      lv.x = 0; lv.y = y;
+      shiftContent(lane.id, 0, y);
+      y += lv.h;
+    }
+    bv.el.style.width = `${width}px`; bv.el.style.height = `${y}px`;
+    remeasure(bv);
+  };
   const layoutFrame = (frameId) => {
     const own = members.get(frameId) || [];
-    for (const n of own) if (n.kind === 'closure') layoutFrame(n.id);
+    const frame = frameId ? byNodeId.get(frameId) : null;
+    if (frame && frame.kind === 'branch') { stackLanes(frame); return; }
+    for (const n of own) if (isFrame(n)) layoutFrame(n.id);
     const views = new Map(byId);
     const sub = { nodes: [], edges: [], exec: [] };
-    const frame = frameId ? byNodeId.get(frameId) : null;
     let head = null;
     if (frame) {
       const fv = byId.get(frame);
       head = { id: `${frame.id}#head`, kind: 'entry', execOut: true, ins: [], outs: [] };
       const pins = { then: fv.pins.start };
-      for (const [key, pin] of Object.entries(fv.pins)) if (key.startsWith('out:') && key !== `out:${frame.outs[0].name}`) pins[key] = pin;
+      for (const [key, pin] of Object.entries(fv.pins)) if (key.startsWith('out:') && !headerPin(frame, key.slice(4))) pins[key] = pin;
       views.set(head, { w: fv.headW, h: fv.headH, x: 0, y: 0, pins });
       sub.nodes.push(head);
     }
     for (const n of own) { const s = standIn(n); views.set(s, byId.get(n)); sub.nodes.push(s); }
     const memberOf = (n) => { let cur = n; while (cur && frameOf(cur, byNodeId) !== frameId) cur = byNodeId.get(cur.parent); return cur || null; };
-    const sourceOf = (n, pin) => (frame && n === frame && pin !== frame.outs[0].name ? head : memberOf(n));
+    const sourceOf = (n, pin) => (frame && n === frame && !headerPin(frame, pin) ? head : memberOf(n));
     for (const e of g.edges) {
       const a = sourceOf(e.from, e.fp), b = memberOf(e.to);
       if (!a || !b || (a !== head && a !== e.from) || (a === b && b !== e.to)) continue;
@@ -57,7 +79,7 @@ export function framedLayout(g, byId, remeasure) {
       routeKeys.set(e, `${from.id}|out:${e.fp}|${to.id}|in:${tp}`);
     }
     for (const e of g.exec) {
-      const a = frame && e.from === frame ? head : memberOf(e.from), b = memberOf(e.to);
+      const a = frame && e.from === frame && e.fp === 'start' ? head : memberOf(e.from), b = memberOf(e.to);
       if (!a || !b || b !== e.to || (a !== head && a !== e.from)) continue;
       const fp = a === head ? 'then' : e.fp;
       const from = a === head ? head : standIn(a);
@@ -68,7 +90,7 @@ export function framedLayout(g, byId, remeasure) {
     const placed = layered(sub, views);
     for (const [key, via] of placed.routes) routes.set(key, via);
     frameDummies.set(frameId, placed.dummies);
-    for (const n of own) if (n.kind === 'closure') { const v = byId.get(n); shiftContent(n.id, v.x, v.y); }
+    for (const n of own) if (isFrame(n)) { const v = byId.get(n); shiftContent(n.id, v.x, v.y); }
     if (frame) fitFrame(frame, own, placed.dummies);
   };
   const fitFrame = (frame, own, dummies) => {
@@ -76,12 +98,14 @@ export function framedLayout(g, byId, remeasure) {
     const boxes = [...own.map((n) => byId.get(n)), ...dummies];
     if (boxes.length) {
       const x0 = Math.min(...boxes.map((b) => b.x)), y0 = Math.min(...boxes.map((b) => b.y));
-      const dx = FRAME_PAD - x0, dy = fv.headH + FRAME_PAD - y0;
-      for (const n of own) { const v = byId.get(n); v.x += dx; v.y += dy; if (n.kind === 'closure') shiftContent(n.id, dx, dy); }
+      const pad = frame.kind === 'lane' ? LANE_PAD : FRAME_PAD;
+      const dx = pad + (frame.kind === 'lane' ? 12 : 0) - x0, dy = fv.headH + pad - y0;
+      for (const n of own) { const v = byId.get(n); v.x += dx; v.y += dy; if (isFrame(n)) shiftContent(n.id, dx, dy); }
       for (const d of dummies) { d.x += dx; d.y += dy; }
     }
-    const w = Math.max(fv.headW, ...boxes.map((b) => b.x + b.w + FRAME_PAD));
-    const h = Math.max(fv.headH, ...boxes.map((b) => b.y + b.h + FRAME_PAD));
+    const pad = frame.kind === 'lane' ? LANE_PAD : FRAME_PAD;
+    const w = Math.max(fv.headW, ...boxes.map((b) => b.x + b.w + pad));
+    const h = Math.max(fv.headH + (frame.kind === 'lane' ? 10 : 0), ...boxes.map((b) => b.y + b.h + pad));
     fv.el.style.width = `${w}px`; fv.el.style.height = `${h}px`;
     remeasure(fv);
   };

@@ -12,6 +12,13 @@ from code_blueprints.analysis.blueprint.code_shapes import assigned_names
 from code_blueprints.analysis.blueprint.code_shapes import flat_targets
 from code_blueprints.analysis.blueprint.text import LABEL_LIMIT
 from code_blueprints.analysis.blueprint.statements.context import BuildContext
+from code_blueprints.analysis.blueprint.canvas import Pin
+from code_blueprints.analysis.blueprint.variables import (
+    Compound,
+    stored_names,
+)
+
+UNSET = "unset"
 
 
 class Bindings:
@@ -96,21 +103,55 @@ class Bindings:
             self.context.flow.step(node)
 
     def assign_name(self, name: str, value: Value, line: int) -> None:
-        cell = self.context.scope.cell(name, line)
-        if cell is not None:
-            self.context.scope.settle(name, value.type)
-            cell = self.context.scope.cell(name, line) or cell
+        scope = self.context.scope
+        if scope.is_variable(name):
+            reference = scope.known_reference(name, line)
+            if reference is None:
+                self.declare(name, value, line)
+                return
+            scope.settle(name, value.type)
+            reference = scope.known_reference(name, line) or reference
             node = self.context.graph.add("set", "Set", line)
-            self.context.graph.connect(node, name, cell, cell=True)
+            self.context.graph.connect(node, name, reference)
             self.context.graph.connect(node, "value", value)
             self.context.flow.step(node)
             return
-        if name in self.context.carried or name in self.context.scope.declared_globals:
+        if name in scope.declared_globals:
             node = self.context.graph.add("set", f"Set {name}", line)
             self.context.graph.connect(node, "value", value)
             self.context.flow.step(node)
             value = self.context.graph.output(node, name, value.type, value.annotation)
-        self.context.scope.bind(name, value)
+        scope.bind(name, value)
+
+    def declare(
+        self, name: str, value: Value | None, line: int, note: str | None = None
+    ) -> Value:
+        graph = self.context.graph
+        node = graph.add("var", name, line, note=note if value is None else None)
+        if value is not None:
+            graph.connect(node, "value", value)
+        else:
+            node.ins.append(Pin("value", UNKNOWN, UNSET))
+        self.context.flow.step(node)
+        reference = graph.output(
+            node, name, value.type if value is not None else UNKNOWN, cell=True
+        )
+        self.context.scope.declare(name, reference)
+        return reference
+
+    def declare_ahead(self, statement: Compound, note: str) -> None:
+        scope = self.context.scope
+        stored = stored_names(statement)
+        for name in self.context.variables.declared_ahead_of(statement):
+            if scope.declared(name) is None and (name in stored or name in scope.env):
+                self.declare(name, scope.env.get(name), statement.line, note)
+
+    def reference(self, name: str, line: int) -> Value | None:
+        scope = self.context.scope
+        if scope.owns_variable(name) and scope.declared(name) is None:
+            if name in scope.env:
+                return self.declare(name, scope.env[name], line)
+        return scope.reference(name, line)
 
     def _unpack(self, value: Value, target: m.Sequence, line: int) -> list[Value]:
         node = self.context.graph.add("op", "Unpack", line)
@@ -128,7 +169,7 @@ class Bindings:
             self.context.scope.value_of(expression.target.id, expression.line)
             if expression.gives_old
             and isinstance(expression.target, m.Name)
-            and not self.context.scope.is_cell(expression.target.id)
+            and not self.context.scope.is_variable(expression.target.id)
             else None
         )
         after = self._augmented(
@@ -140,10 +181,10 @@ class Bindings:
         self, statement: m.Node, target: m.Expr, symbol: str, operand: m.Expr, out: str
     ) -> Value:
         if isinstance(target, m.Name):
-            cell = self.context.scope.cell(target.id, statement.line)
-            if cell is not None:
+            reference = self.reference(target.id, statement.line)
+            if reference is not None:
                 return self._write_through(
-                    statement, target.id, cell, symbol, operand, out
+                    statement, target.id, reference, symbol, operand, out
                 )
         value = self.context.expressions.value(operand)
         if isinstance(target, m.Name):
@@ -180,7 +221,7 @@ class Bindings:
         self,
         statement: m.Node,
         name: str,
-        cell: Value,
+        reference: Value,
         symbol: str,
         operand: m.Expr,
         out: str,
@@ -188,11 +229,13 @@ class Bindings:
         step = _step_title(self.context.text(statement))
         value = None if step is not None else self.context.expressions.value(operand)
         node = self.context.graph.add("set", step or f"{symbol}=", statement.line)
-        self.context.graph.connect(node, name, cell, cell=True)
+        self.context.graph.connect(node, name, reference)
         if value is not None:
             self.context.graph.connect(node, "value", value)
         self.context.flow.step(node)
-        return self.context.graph.output(node, out or name, cell.type)
+        if not out:
+            return Value(reference.type)
+        return self.context.graph.output(node, out, reference.type)
 
     def delete(self, statement: m.Delete) -> None:
         for target in statement.targets:

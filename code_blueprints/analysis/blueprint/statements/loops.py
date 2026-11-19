@@ -5,8 +5,11 @@ from code_blueprints.analysis.blueprint.canvas import GraphNode
 from code_blueprints.analysis.blueprint.code_shapes import flat_targets
 from code_blueprints.analysis.blueprint.statements.bindings import Bindings
 from code_blueprints.analysis.blueprint.statements.context import BuildContext
-from code_blueprints.analysis.blueprint.values import BOOL
+from code_blueprints.analysis.blueprint.text import LABEL_LIMIT, shorten
+from code_blueprints.analysis.blueprint.values import BOOL, Value
 from code_blueprints.analysis.types import UNKNOWN
+
+FIRST_SET_BY_LOOP = "first set by the loop"
 
 
 class Loops:
@@ -21,15 +24,15 @@ class Loops:
         self.run = run
 
     def for_loop(self, statement: m.For) -> None:
+        self.bindings.declare_ahead(statement, FIRST_SET_BY_LOOP)
         items = self.context.expressions.value(statement.iter, exec_candidate=True)
         targets = flat_targets(statement.target)
-        title = ", ".join(self.bindings.target_label(target) for target in targets)
-        node = self.context.graph.add(
-            "loop",
-            f"For each {title}",
+        names = ", ".join(self.bindings.target_label(target) for target in targets)
+        source = shorten(self.context.text(statement.iter), LABEL_LIMIT)
+        node = self._loop_node(
+            f"For each {names} in {source}",
             statement.line,
-            exec_outs=["Loop body", "Completed"],
-            note="async for" if statement.is_async else None,
+            "async for" if statement.is_async else None,
         )
         self.context.graph.connect(node, "items", items)
         element = self.context.lookups.element(items) if len(targets) == 1 else UNKNOWN
@@ -38,53 +41,58 @@ class Loops:
             for target in targets
         ]
         self.context.flow.step(node)
-        for target, output in zip(targets, outputs):
-            if isinstance(target, m.Name):
-                self.context.scope.bind(target.id, output)
-            else:
-                self.bindings.bind(target, output, statement.line)
-        self._loop_body(node, statement.body, statement.orelse)
+        self._body(node, statement.body, list(zip(targets, outputs)), statement.line)
+        self.run(statement.orelse)
 
     def while_loop(self, statement: m.While) -> None:
-        if self.context.expressions.folding.folds(statement.test, named=True):
-            node = self.context.expressions.folding.inline_condition(
-                statement.test,
-                lambda: self.context.graph.add(
-                    "loop",
-                    "While",
-                    statement.line,
-                    exec_outs=["Loop body", "Completed"],
-                ),
+        self.bindings.declare_ahead(statement, FIRST_SET_BY_LOOP)
+        folding = self.context.expressions.folding
+        if folding.folds(statement.test, named=True):
+            node = folding.inline_condition(
+                statement.test, lambda: self._loop_node("While", statement.line)
             )
         else:
-            condition = self.context.expressions.value(statement.test)
-            node = self.context.graph.add(
-                "loop",
-                f"While {self.context.text(statement.test)}",
+            condition = self.context.expressions.value(
+                statement.test, exec_candidate=True
+            )
+            node = self._loop_node(
+                f"While {shorten(self.context.text(statement.test), LABEL_LIMIT)}",
                 statement.line,
-                exec_outs=["Loop body", "Completed"],
             )
             self.context.graph.connect(node, "condition", condition, BOOL)
         self.context.flow.step(node)
-        self._loop_body(node, statement.body, statement.orelse)
+        self._body(node, statement.body, [], statement.line)
+        self.run(statement.orelse)
 
     def break_statement(self, statement: m.Break) -> None:
-        if self.context.loop_exits:
-            self.context.loop_exits[-1].extend(self.context.flow.tails)
+        self._jump("Break", statement.line)
+
+    def continue_statement(self, statement: m.Continue) -> None:
+        self._jump("Continue", statement.line)
+
+    def _jump(self, title: str, line: int) -> None:
+        self.context.flow.step(self.context.graph.add("jump", title, line))
         self.context.flow.resume([])
 
-    def _loop_body(
-        self, node: GraphNode, body: Sequence[m.Stmt], orelse: Sequence[m.Stmt]
+    def _loop_node(self, title: str, line: int, note: str | None = None) -> GraphNode:
+        node = self.context.graph.add(
+            "loop", title, line, exec_outs=["start"], note=note
+        )
+        node.exec_out = True
+        return node
+
+    def _body(
+        self,
+        node: GraphNode,
+        body: Sequence[m.Stmt],
+        targets: list[tuple[m.Expr, Value]],
+        line: int,
     ) -> None:
-        carried = self.context.carried
-        self.context.carried = carried | frozenset(self.context.scope.env)
-        self.context.loop_exits.append([])
-        self.context.flow.resume([(node, "Loop body")])
-        try:
+        saved = dict(self.context.scope.env)
+        self.context.flow.resume([(node, "start")])
+        with self.context.graph.inside(node.id):
+            for target, output in targets:
+                self.bindings.bind(target, output, line)
             self.run(body)
-        finally:
-            exits = self.context.loop_exits.pop()
-            self.context.carried = carried
-        self.context.flow.resume([(node, "Completed")])
-        self.run(orelse)
-        self.context.flow.resume(self.context.flow.tails + exits)
+        self.context.scope.restore(saved)
+        self.context.flow.resume([(node, "then")])

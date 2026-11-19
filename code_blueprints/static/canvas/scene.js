@@ -76,9 +76,9 @@ export class Scene {
       const pa = w.a.pins[w.ak], pb = w.b.pins[w.bk];
       if (!pa || !pb) continue;
       const path = svg('path', { d: routedPath(w.a.x + pa.dx, w.a.y + pa.dy, w.b.x + pb.dx, w.b.y + pb.dy, (w.via || []).map((d) => ({ x: d.x, y: d.y + d.pins.d.dy, w: d.w }))), class: `wire ${w.cls || ''}${w.diff ? ` wire-${w.diff}` : ''}` });
-      if (!w.cls || w.cls === 'cell') path.style.stroke = `var(--t-${w.type ? w.type.cat : 'any'})`;
+      if (!w.cls) path.style.stroke = `var(--t-${w.type ? w.type.cat : 'any'})`;
+      if (w.cls === 'cell') path.style.stroke = `color-mix(in srgb, var(--t-${w.type ? w.type.cat : 'any'}) 45%, #5f646d)`;
       w.path = path; this.svg.append(path);
-      if (w.cls === 'cell') { w.core = svg('path', { d: path.getAttribute('d'), class: 'wire-core' }); this.svg.append(w.core); }
     }
     this.wires.forEach((w, i) => { if (w.path) { w.hit = svg('path', { d: w.path.getAttribute('d'), class: 'wire-hit', 'data-wire': i }); this.svg.append(w.hit); } });
   }
@@ -88,7 +88,6 @@ export class Scene {
       if (!w.path) continue;
       if (!w.box) w.box = pathBox(w.path);
       setCulled(w.path, w, !overlaps(w.box, view));
-      if (w.core) w.core.style.display = w.culled ? 'none' : '';
       w.hit.style.display = w.culled ? 'none' : '';
     }
   }

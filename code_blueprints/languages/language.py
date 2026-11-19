@@ -99,6 +99,11 @@ class Profile:
     class_label: str = "type"
     handler_word: str = "except"
     match_title: str = "Match"
+    if_word: str = "if"
+    elif_word: str = "elif"
+    else_word: str = "else"
+    negation: str = "not ({})"
+    conjunction: str = " and "
     spread_prefix: str = "*"
     mapping_spread_prefix: str = "**"
     follows_star_imports: bool = False
