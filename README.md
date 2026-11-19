@@ -80,8 +80,8 @@ blueprints.
 - **⧉ on a call** unfolds the called function in place. **Go into** makes it
   the whole view.
 - **Hover over a wire** to see both ends and its full type.
-- **Maths stays readable.** `north = cos(lat) * sin(dec) - …` is one node named
-  `north`, with the expression written out.
+- **Maths stays readable.** `total = price * quantity * (1 + tax)` is one node
+  named `total`, with the expression written out.
 - **Nested functions and lambdas** are frames drawn around their own body.
 - **Shared variables that change** get a node of their own, with Get and Set
   steps.
@@ -317,3 +317,10 @@ that (the map, blueprints and queries) works only on the model.
 | `app.py` | The `turtlemap` command |
 | `agent.py`, `mcp.py` | The `turtlemap-agent` and `turtlemap-mcp` commands |
 | `config.py` | Where settings and caches are kept |
+
+## License
+
+Turtlemap is free software under the
+[GNU Affero General Public License v3.0 or later](LICENSE). If you run a
+changed version for other people over a network, you must offer them its
+source.

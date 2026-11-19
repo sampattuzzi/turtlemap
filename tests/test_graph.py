@@ -822,31 +822,31 @@ def test_writes_a_named_calculation_as_one_node(tmp_path: Path) -> None:
         import numpy as np
 
 
-        def sun_position(latitude: float, declination: float, hour_angle: float) -> float:
-            north = np.cos(latitude) * np.sin(declination) - np.sin(
-                latitude
-            ) * np.cos(declination) * np.cos(hour_angle)
-            return north
+        def arm_reach(rotation: float, inclination: float, turn_angle: float) -> float:
+            ahead = np.cos(rotation) * np.sin(inclination) - np.sin(
+                rotation
+            ) * np.cos(inclination) * np.cos(turn_angle)
+            return ahead
     """,
-        "sun_position",
+        "arm_reach",
     )
 
-    node = the_node(graph, "north")
+    node = the_node(graph, "ahead")
     entry = nodes_of_kind(graph, "entry")[0]
     assert len(graph["nodes"]) == 3
     assert node["kind"] == "expr"
     assert node["expr"] == [
-        "np.cos(latitude) * np.sin(declination)",
-        "- np.sin(latitude)",
-        "  * np.cos(declination)",
-        "  * np.cos(hour_angle)",
+        "np.cos(rotation) * np.sin(inclination)",
+        "- np.sin(rotation)",
+        "  * np.cos(inclination)",
+        "  * np.cos(turn_angle)",
     ]
     assert [pin["name"] for pin in node["ins"]] == [
-        "latitude",
-        "declination",
-        "hour_angle",
+        "rotation",
+        "inclination",
+        "turn_angle",
     ]
-    assert source_of(graph, node, "hour_angle") == (entry["id"], "hour_angle")
+    assert source_of(graph, node, "turn_angle") == (entry["id"], "turn_angle")
     assert node["outs"][0]["type"]["cat"] == "float"
 
 

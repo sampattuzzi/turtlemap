@@ -2,7 +2,8 @@
 name = "turtlemap"
 version = "0.1.0"
 description = "Browse a Python, JavaScript or TypeScript codebase as blueprint-style dependency maps and dataflow graphs"
-authors = ["Adia"]
+authors = ["Turtlemap contributors"]
+license = "AGPL-3.0-or-later"
 readme = "README.md"
 packages = [{ include = "turtlemap" }]
 
