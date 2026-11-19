@@ -1,4 +1,4 @@
-# Code Blueprints
+# Turtlemap
 
 Browse a Python, JavaScript or TypeScript codebase as dependency maps and
 Unreal-style dataflow blueprints, in the browser. See [README.md](README.md) for what it does and how
@@ -10,7 +10,7 @@ it is put together.
 poetry install --with dev
 poetry run mypy .
 poetry run pytest tests
-poetry run code-blueprints .
+poetry run turtlemap .
 ```
 
 [.github/workflows/ci.yml](.github/workflows/ci.yml) is the source of truth for
@@ -32,6 +32,6 @@ what CI runs.
   front end in `languages/` parses it (`ast` for Python, tree-sitter for
   JavaScript and TypeScript) into the model in `analysis/model.py`, and the
   rest of the analysis works only on that model.
-- **Check UI changes in a real browser.** `poetry run code-blueprints . --no-open`
+- **Check UI changes in a real browser.** `poetry run turtlemap . --no-open`
   prints the address; drive it with Playwright and look at the result, and try
   a large project as well as a small one.

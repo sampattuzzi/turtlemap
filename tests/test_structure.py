@@ -1,8 +1,8 @@
 import pytest
 
-from code_blueprints.analysis.project import Project
-from code_blueprints.analysis.metrics.code_graph import QueryError
-from code_blueprints.analysis.structure import Structure
+from turtlemap.analysis.project import Project
+from turtlemap.analysis.metrics.code_graph import QueryError
+from turtlemap.analysis.structure import Structure
 from tests.conftest import ProjectFactory
 
 ACCOUNT = """

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from code_blueprints.review.comments import AGENT, USER, CommentError, CommentStore
+from turtlemap.review.comments import AGENT, USER, CommentError, CommentStore
 
 ANCHOR = {"view": "code", "path": "shop/models.py", "start": 3, "end": 4}
 

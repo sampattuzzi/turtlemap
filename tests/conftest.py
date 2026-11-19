@@ -11,16 +11,25 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from code_blueprints.analysis.project import Project
-from code_blueprints.review.comments import CommentStore
-from code_blueprints.projects.seen import SeenStore
-from code_blueprints.projects.host import ProjectHost
-from code_blueprints.web.server import start_server
+from turtlemap.analysis.project import Project
+from turtlemap.review.comments import CommentStore
+from turtlemap.projects.seen import SeenStore
+from turtlemap.projects.host import ProjectHost
+from turtlemap.web.server import start_server
 
 TOKEN = "user-token"
 SOURCE = "class Square:\n    def area(self, side: float) -> float:\n        return side * side\n"
 
 ProjectFactory = Callable[[dict[str, str]], Project]
+
+
+@pytest.fixture(autouse=True)
+def private_user_folders(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folders = tmp_path_factory.mktemp("user-folders")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(folders / "config"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(folders / "cache"))
 
 
 @pytest.fixture

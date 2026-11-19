@@ -1,6 +1,6 @@
 from typing import Callable
 
-from code_blueprints.analysis.project import Project
+from turtlemap.analysis.project import Project
 
 ProjectFactory = Callable[[dict[str, str]], Project]
 

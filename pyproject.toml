@@ -1,10 +1,10 @@
 [tool.poetry]
-name = "code-blueprints"
+name = "turtlemap"
 version = "0.1.0"
 description = "Browse a Python, JavaScript or TypeScript codebase as blueprint-style dependency maps and dataflow graphs"
 authors = ["Adia"]
 readme = "README.md"
-packages = [{ include = "code_blueprints" }]
+packages = [{ include = "turtlemap" }]
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.14"
@@ -16,9 +16,9 @@ pytest = "^8.3"
 mypy = "^1.13"
 
 [tool.poetry.scripts]
-code-blueprints = "code_blueprints.app:main"
-code-blueprints-agent = "code_blueprints.agent:main"
-code-blueprints-mcp = "code_blueprints.mcp:main"
+turtlemap = "turtlemap.app:main"
+turtlemap-agent = "turtlemap.agent:main"
+turtlemap-mcp = "turtlemap.mcp:main"
 
 [tool.mypy]
 strict = true
