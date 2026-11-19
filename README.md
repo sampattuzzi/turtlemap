@@ -24,7 +24,7 @@ or a recent one, on the start screen. To try it on itself, run
 | `--port N` | Use a fixed port instead of a free one |
 | `--no-open` | Print the address instead of opening your browser |
 
-## Three views
+## Two views
 
 ### The map
 
@@ -46,18 +46,33 @@ and **uses**.
 - **Select a module** to hide every module that is not linked to it.
   **✕ Show all** brings them back.
 - **Libraries** are one box each, and the standard library gets one box.
-- **Show** in the corner hides test files or constants.
 
 The code panel under the map shows the real source, folded to match what you
 have opened.
 
-### The data model
+### Filters
 
-Press **▦ Data** for an entity–relationship diagram of your dataclasses,
-models and enums.
+Press **⚲ Filter** to choose which kinds of box and line the map shows.
 
-- Each class lists its fields. A line joins a field to the class it holds.
-- The ends of each line show how many:
+- **Presets** set both at once:
+
+  | Preset | Boxes | Lines |
+  |---|---|---|
+  | Everything | all of them | all of them |
+  | Data | data classes, enums and their fields | has a field of, inherits, implements |
+  | Inheritance | classes, interfaces and type parameters | inherits, implements, stands for |
+  | Execution | functions, methods and the classes that hold them, libraries | calls, creates |
+
+- **Tick or untick** any kind of box or line, and the preset becomes
+  *Custom*. **↺** goes back to the preset you started from. Hover over a line
+  kind and press **only** to show just that kind.
+- **Click a line in the Key** to show or hide that kind too.
+- **Hidden boxes** are removed, and packages and modules shrink to what is
+  left. Choose **fade** to keep them in place, greyed out.
+- **Keep boxes a shown line touches** keeps a hidden box, faded, when a line
+  you show starts or ends there, so no line ends in nothing.
+- **Tests** hides test files and the libraries only they use.
+- **Has a field of** lines end in a mark for how many the field holds:
 
   | End | Means |
   |---|---|
@@ -65,10 +80,11 @@ models and enums.
   | Circle and bar | zero or one (`Optional`) |
   | Crow's foot | many (a list, set, tuple or dict) |
 
-- Classes that link to each other are grouped together.
-- The view opens on the package you were looking at. Pick another in the list
-  at the top.
-- A project with more than 250 data classes asks you to pick a package first.
+- Classes that only show fields open by themselves.
+- The chip in the corner says which filter is on. **✕** goes back to
+  Everything.
+- Finding a box the filter hides shows it anyway, until you change the filter.
+- Each project remembers its own filter.
 
 ### The blueprint
 

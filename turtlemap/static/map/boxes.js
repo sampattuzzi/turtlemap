@@ -46,21 +46,22 @@ export function summaryOf(n) {
   return [...counts].map(([w, c]) => plural(c, w)).join(' · ');
 }
 export function netBoxEl(n, expanded, ctx, filter = null) {
-  if (!n.children.length) return leafBoxEl(n, ctx);
+  if (!n.children.length && !n.pruned) return leafBoxEl(n, ctx);
+  const bare = !n.children.length;
   const isOpen = expanded.has(n.id);
   const stereo = boxStereotype(n);
   const title = n.kind === 'package' ? `${n.name}/` : n.name;
   const shownKids = filter ? n.children.filter((k) => filter.visible(k)) : n.children;
   const hiddenKids = n.children.length - shownKids.length;
-  const box = el('div', { class: `nb k-${n.kind} ${isOpen ? 'open' : ''} ${n.diff ? `diff-${n.diff}` : ''} ${filter && filter.unit === n.id ? 'focused' : ''}`, 'data-id': n.id, style: `--hc: var(${boxHeadColour(n)})` });
-  const head = el('div', { class: 'nhead', title: isOpen ? 'Collapse' : 'Expand' }, el('span', { class: 'chev' }, isOpen ? '▾' : '▸'), diffBadge(n.diff),
+  const box = el('div', { class: `nb k-${n.kind} ${isOpen ? 'open' : ''}${bare ? ' bare' : ''}${n.faded ? ' faded' : ''} ${n.diff ? `diff-${n.diff}` : ''} ${filter && filter.unit === n.id ? 'focused' : ''}`, 'data-id': n.id, style: `--hc: var(${boxHeadColour(n)})` });
+  const head = el('div', { class: 'nhead', title: bare ? null : isOpen ? 'Collapse' : 'Expand' }, bare ? null : el('span', { class: 'chev' }, isOpen ? '▾' : '▸'), diffBadge(n.diff),
     stereo ? el('span', { class: 'stereo' }, `«${stereo}»`) : null, el('span', { class: 'ntitle' }, title),
     isOpen && hiddenKids ? el('span', { class: 'nhidden', title: 'Hidden because they have no dependency on the selected module' }, `${hiddenKids} unrelated hidden`) : null);
   head.addEventListener('click', (e) => { e.stopPropagation(); ctx.select(n.id); ctx.toggle(n.id); });
   box.append(head);
   const corner = templateCorner(n);
   if (corner) box.append(corner);
-  if (!isOpen) { box.append(el('div', { class: 'nsum' }, summaryOf(n))); return box; }
+  if (!isOpen) { if (!bare) box.append(el('div', { class: 'nsum' }, summaryOf(n))); return box; }
   const inner = el('div', { class: 'ninner' });
   for (const k of shownKids) inner.append(netBoxEl(k, expanded, ctx, filter));
   box.append(inner);
@@ -69,7 +70,7 @@ export function netBoxEl(n, expanded, ctx, filter = null) {
 function leafBoxEl(n, ctx) {
   const stripe = { method: '--h-method', function: '--h-call', field: '--h-break', member: '--h-enum', constant: '--h-var', typevar: '--rel-bound', name: '--h-lit' }[n.kind] || '--h-lit';
   const isFn = n.kind === 'method' || n.kind === 'function';
-  const leaf = el('div', { class: `nb leaf k-${n.kind}${isFn ? ' fnleaf' : ''}${n.diff ? ` diff-${n.diff}` : ''}`, 'data-id': n.id, style: `--stripe: var(${stripe})`, title: n.sym ? 'Open its dataflow view' : netLabel(n.id) }, diffBadge(n.diff), leafParts(n, isFn));
+  const leaf = el('div', { class: `nb leaf k-${n.kind}${isFn ? ' fnleaf' : ''}${n.faded ? ' faded' : ''}${n.diff ? ` diff-${n.diff}` : ''}`, 'data-id': n.id, style: `--stripe: var(${stripe})`, title: n.sym ? 'Open its dataflow view' : netLabel(n.id) }, diffBadge(n.diff), leafParts(n, isFn));
   leaf.addEventListener('click', (e) => { e.stopPropagation(); if (n.sym) ctx.go(refOf(n.sym)); else ctx.select(n.id); });
   return leaf;
 }

@@ -1,13 +1,14 @@
 import { DIFF, clearNetCache, isTestPath, net } from '../core/data.js';
+import { showAnyway } from '../core/filters.js';
 import { saveSettings, settings } from '../core/settings.js';
 export function resetNet() { clearNetCache(); FOCUS_CACHE.clear(); }
 export function revealHidden(ids) {
   const N = net();
   const missing = ids.filter((id) => !N.nodes.has(id));
   if (!missing.length) return;
-  if (missing.some((id) => id.startsWith('c:'))) settings.constants = true;
-  if (missing.some((id) => isTestPath(id.slice(id.indexOf(':') + 1).split(':')[0]))) settings.tests = true;
-  saveSettings(); resetNet();
+  if (missing.some((id) => isTestPath(id.slice(id.indexOf(':') + 1).split(':')[0]))) { settings.tests = true; saveSettings(); }
+  showAnyway(missing);
+  resetNet();
 }
 const UNIT_KINDS = new Set(['module', 'libmodule']);
 export function focusUnitOf(id) {
