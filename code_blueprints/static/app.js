@@ -16,7 +16,9 @@ function screen(...kids) {
   app.innerHTML = '';
   document.getElementById('measure').innerHTML = '';
   explorerApi = null;
-  app.append(el('div', { class: 'screen' }, el('div', { class: 'screen-card' }, el('div', { class: 'brand big' }, 'Code Blueprints'), ...kids)));
+  app.append(el('div', { class: 'screen' }, el('div', { class: 'screen-card' }, el('h1', { class: 'wordmark' },
+    el('img', { class: 'on-dark', src: 'wordmark-dark.svg', alt: 'Turtlemap: dependencies all the way down' }),
+    el('img', { class: 'on-light', src: 'wordmark-light.svg', alt: 'Turtlemap: dependencies all the way down' })), ...kids)));
 }
 async function showWelcome(message) {
   let capabilities = { recent: [] };
@@ -93,7 +95,7 @@ async function boot() {
     const status = await api('/api/status');
     if (!status.open) showWelcome(); else waitForProject();
   } catch (error) {
-    screen(el('p', { class: 'error-text' }, `Cannot reach the Code Blueprints server: ${error.message}`));
+    screen(el('p', { class: 'error-text' }, `Cannot reach the Turtlemap server: ${error.message}`));
   }
 }
 let booted = false;

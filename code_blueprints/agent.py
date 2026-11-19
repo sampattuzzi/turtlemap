@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None, out: TextIO | None = None) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="code-blueprints-agent",
-        description="Read and answer Code Blueprints review comments, and query the code map.",
+        description="Read and answer Turtlemap review comments, and query the code map.",
     )
     parser.add_argument(
         "--root",

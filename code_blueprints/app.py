@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     url = f"{address}/?t={token}"
     registry.publish(address, host.agent_token)
     signal.signal(signal.SIGTERM, _stop)
-    print(f"Code Blueprints is running at {url}", flush=True)
+    print(f"Turtlemap is running at {url}", flush=True)
     print("Press Ctrl+C to stop.", flush=True)
     if not args.no_open:
         webbrowser.open(url)

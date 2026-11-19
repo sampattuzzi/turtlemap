@@ -13,7 +13,7 @@ DEFAULT_PROTOCOL = "2025-06-18"
 SERVER_INFO = {"name": "code-blueprints", "version": "0.1.0"}
 WAIT_LIMIT = 25
 INSTRUCTIONS = (
-    "Code Blueprints shows this project as a dependency map and dataflow blueprints, "
+    "Turtlemap shows this project as a dependency map and dataflow blueprints, "
     "and the reviewer leaves comments on it. Call comments_wait to block until the "
     "reviewer says something, then comment_show, mark it working with a short note, do "
     "the work, reply, and mark it done. Only the reviewer resolves comments. The "
@@ -102,9 +102,7 @@ class Session:
         except AgentError as error:
             return _text(str(error), error=True)
         except ConnectionError as error:
-            return _text(
-                f"Cannot reach the Code Blueprints server ({error})", error=True
-            )
+            return _text(f"Cannot reach the Turtlemap server ({error})", error=True)
 
     def _retry(self, send: Callable[[AgentClient], Any]) -> Any:
         if self._client is None:
@@ -123,7 +121,7 @@ def main(
 ) -> int:
     parser = argparse.ArgumentParser(
         prog="code-blueprints-mcp",
-        description="MCP server (stdio) for Code Blueprints comments and structure queries.",
+        description="MCP server (stdio) for Turtlemap comments and structure queries.",
     )
     parser.add_argument(
         "--root", default=".", help="project folder the server is showing"

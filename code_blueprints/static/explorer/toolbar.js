@@ -95,7 +95,7 @@ export function shell(root, { extraButtons, onPick, onSettings, onCompared }) {
   const left = el('div', { class: 'panel left' });
   const right = el('div', { class: 'panel right' });
   root.append(el('div', { class: 'topbar' },
-    el('div', { class: 'brand' }, 'Code Blueprints', el('small', {}, OVERVIEW ? OVERVIEW.name : '')),
+    el('div', { class: 'brand' }, el('img', { class: 'brand-mark', src: 'logo.svg', alt: 'Turtlemap' }), el('small', {}, OVERVIEW ? OVERVIEW.name : '')),
     el('button', { class: 'btn phone-only', onclick: () => { left.hidden = !left.hidden; } }, 'Files'),
     ...extraButtons,
     el('button', { class: 'btn', title: 'Find a file or symbol (/)', 'data-find': true, onclick: () => openPalette(onPick) }, '⌕ Find'),

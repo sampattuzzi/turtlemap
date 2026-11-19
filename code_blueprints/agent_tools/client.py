@@ -48,7 +48,7 @@ def connect(root: Path) -> AgentClient:
     info = find_server(root)
     if info is None:
         raise AgentError(
-            f"No Code Blueprints server is running for {root}. "
+            f"No Turtlemap server is running for {root}. "
             "Start one with: code-blueprints <folder> --no-open"
         )
     return AgentClient(info)

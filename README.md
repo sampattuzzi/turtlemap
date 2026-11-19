@@ -1,4 +1,4 @@
-# Code Blueprints
+<h1 align="center"><img src="docs/logo-dark.svg" alt="Turtlemap: dependencies all the way down" width="560"></h1>
 
 A local web app for reading a Python, JavaScript or TypeScript codebase as
 pictures instead of text. It was
