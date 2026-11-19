@@ -1148,7 +1148,7 @@ function shell(root, { extraButtons, onPick, onSettings }) {
   const left = el('div', { class: 'panel left' });
   const right = el('div', { class: 'panel right' });
   root.append(el('div', { class: 'topbar' },
-    el('div', { class: 'brand' }, el('img', { class: 'brand-mark', src: 'logo.svg', alt: '' }), 'Code Blueprints', el('small', {}, OVERVIEW ? OVERVIEW.name : '')),
+    el('div', { class: 'brand' }, el('img', { class: 'brand-mark', src: 'logo.svg', alt: 'Turtlemap' }), el('small', {}, OVERVIEW ? OVERVIEW.name : '')),
     el('button', { class: 'btn phone-only', onclick: () => { left.hidden = !left.hidden; } }, 'Files'),
     ...extraButtons,
     el('button', { class: 'btn', title: 'Find a file or symbol (/)', 'data-find': true, onclick: () => openPalette(onPick) }, '⌕ Find'),
@@ -1418,7 +1418,7 @@ function screen(...kids) {
   app.innerHTML = '';
   document.getElementById('measure').innerHTML = '';
   explorerApi = null;
-  app.append(el('div', { class: 'screen' }, el('div', { class: 'screen-card' }, el('div', { class: 'brand big' }, 'Code Blueprints'), ...kids)));
+  app.append(el('div', { class: 'screen' }, el('div', { class: 'screen-card' }, el('div', { class: 'brand big' }, el('img', { class: 'brand-mark', src: 'logo.svg', alt: '' }), 'Turtlemap'), ...kids)));
 }
 async function showWelcome(message) {
   let capabilities = { recent: [] };
@@ -1485,7 +1485,7 @@ async function boot() {
     const status = await api('/api/status');
     if (!status.open) showWelcome(); else waitForProject();
   } catch (error) {
-    screen(el('p', { class: 'error-text' }, `Cannot reach the Code Blueprints server: ${error.message}`));
+    screen(el('p', { class: 'error-text' }, `Cannot reach the Turtlemap server: ${error.message}`));
   }
 }
 let booted = false;

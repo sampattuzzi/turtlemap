@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     token = secrets.token_urlsafe(18)
     server = start_server(host, token, args.port)
     url = f"http://127.0.0.1:{server.server_address[1]}/?t={token}"
-    print(f"Code Blueprints is running at {url}", flush=True)
+    print(f"Turtlemap is running at {url}", flush=True)
     print("Press Ctrl+C to stop.", flush=True)
     if not args.no_open:
         webbrowser.open(url)
