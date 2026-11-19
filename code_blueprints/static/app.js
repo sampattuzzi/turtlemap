@@ -1418,7 +1418,9 @@ function screen(...kids) {
   app.innerHTML = '';
   document.getElementById('measure').innerHTML = '';
   explorerApi = null;
-  app.append(el('div', { class: 'screen' }, el('div', { class: 'screen-card' }, el('div', { class: 'brand big' }, el('img', { class: 'brand-mark', src: 'logo.svg', alt: '' }), 'Turtlemap'), ...kids)));
+  app.append(el('div', { class: 'screen' }, el('div', { class: 'screen-card' }, el('h1', { class: 'wordmark' },
+    el('img', { class: 'on-dark', src: 'wordmark-dark.svg', alt: 'Turtlemap: dependencies all the way down' }),
+    el('img', { class: 'on-light', src: 'wordmark-light.svg', alt: 'Turtlemap: dependencies all the way down' })), ...kids)));
 }
 async function showWelcome(message) {
   let capabilities = { recent: [] };

@@ -317,10 +317,17 @@ button { cursor: pointer; }
 .tree { padding-bottom: 6px; }
 .tree-item.folder { cursor: pointer; color: var(--fg-dim); }
 .tree-item.folder:hover { color: var(--fg); }
-.screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--chrome); overflow: auto; padding: 24px 16px; }
-.screen-card { width: min(560px, 100%); display: flex; flex-direction: column; gap: 14px; }
-.brand.big { font-size: 1.9em; font-weight: 700; letter-spacing: -0.01em; gap: 12px; }
-.brand.big .brand-mark { width: 48px; height: 48px; }
+.screen { position: fixed; inset: 0; display: flex; background: var(--chrome); overflow: auto; padding: 24px 16px; }
+.screen-card { width: min(560px, 100%); margin: auto; display: flex; flex-direction: column; gap: 14px; }
+.wordmark { margin: 0 0 6px; line-height: 0; }
+.wordmark img { width: min(420px, 100%); height: auto; }
+.wordmark .on-light { display: none; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .wordmark .on-dark { display: none; }
+  :root:not([data-theme="dark"]) .wordmark .on-light { display: inline; }
+}
+:root[data-theme="light"] .wordmark .on-dark { display: none; }
+:root[data-theme="light"] .wordmark .on-light { display: inline; }
 .lede { color: var(--fg); line-height: 1.55; margin: 0; }
 .muted { color: var(--fg-dim); margin: 0; min-height: 1.2em; }
 .error-text { color: var(--h-raise, #e5534b); margin: 0; }
