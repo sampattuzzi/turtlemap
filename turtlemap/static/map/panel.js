@@ -1,11 +1,14 @@
-import { DIFF, OVERVIEW, net } from '../core/data.js';
+import { DIFF, OVERVIEW, isTestPath, net } from '../core/data.js';
 import { el, speak } from '../core/dom.js';
 import { codePainter } from '../core/highlight.js';
-import { ensureOutline, outlineFor } from '../core/project.js';
+import { ensureOutline, outlineFor, shortFile } from '../core/project.js';
+import { focusUnitOf } from './focus.js';
 import { fileDiff } from '../core/review.js';
-import { DIFF_SIGN, DIFF_WORD, diffBadge, netLabel, plural, refOf, summaryOf } from './boxes.js';
+import { DIFF_SIGN, DIFF_WORD, diffBadge, moduleFileName, moduleNodeOf, netLabel, plural, refOf, summaryOf } from './boxes.js';
 function moduleOf(id) { const c = net().chain(id); const m = c.find((n) => n.kind === 'module' || n.kind === 'libmodule'); return m ? m.name : null; }
 const PANEL_MODULES = 30;
+const PANEL_LINKS = 8;
+const UNIT_KINDS = new Set(['package', 'module', 'library', 'libmodule']);
 let refreshTimer = null;
 function refreshSoon(refresh) {
   if (!refresh || refreshTimer) return;
@@ -63,7 +66,7 @@ export function netPanel(container, selId, ctx, effective) {
   const panel = el('div', { class: 'code-panel' }, ex);
   container.append(panel);
   const n = selId ? net().nodes.get(selId) : null;
-  if (n) explainMapNode(ex, n, selId);
+  if (n) explainMapNode(ex, n, selId, ctx);
   else if (DIFF) explainComparison(ex, ctx);
   else explainFoldedCode(ex);
   const cv = el('div', { class: 'code-view folded' });
@@ -72,11 +75,52 @@ export function netPanel(container, selId, ctx, effective) {
   panel.append(cv);
   const hl = cv.querySelector('.hl'); if (hl) requestAnimationFrame(() => hl.scrollIntoView({ block: 'nearest' }));
 }
-function explainMapNode(ex, n, selId) {
+function explainMapNode(ex, n, selId, ctx) {
   const what = n.children.length ? summaryOf(n) : n.sym ? `${n.sym.params.filter((p) => p[0] !== 'self').length} parameters` : n.type ? n.type.label : '';
   const text = `${netLabel(selId)}. ${n.kind}${moduleOf(selId) ? ` in ${moduleOf(selId)}` : ''}. ${what}.`;
   ex.append(el('div', { class: 'kind' }, n.kind), el('h2', {}, netLabel(selId)), el('p', {}, what));
   ex.append(el('div', { class: 'actions' }, el('button', { class: 'btn small', onclick: () => speak(text) }, '🔊 Read aloud')));
+  const { usedBy, uses } = linksAcross(n);
+  linkSection(ex, 'Used by', usedBy, ctx);
+  linkSection(ex, 'Uses', uses, ctx);
+}
+function linksAcross(n) {
+  const N = net();
+  const inside = (id) => N.chain(id).includes(n);
+  const end = UNIT_KINDS.has(n.kind) ? focusUnitOf : (id) => id;
+  const usedBy = new Map(), uses = new Map();
+  for (const e of N.edges) {
+    const from = inside(e.from), to = inside(e.to);
+    if (from && !to) addLink(uses, end(e.to), e.kinds);
+    else if (to && !from) addLink(usedBy, end(e.from), e.kinds);
+  }
+  return { usedBy: sortedLinks(usedBy), uses: sortedLinks(uses) };
+}
+function addLink(links, id, kinds) {
+  if (!links.has(id)) links.set(id, { node: net().nodes.get(id), module: moduleNodeOf(id), kinds: new Set() });
+  kinds.forEach((k) => links.get(id).kinds.add(k));
+}
+function sortedLinks(links) {
+  const pathOf = (l) => (l.module ? l.module.path : '\uffff');
+  return [...links.values()].sort((a, b) => Number(isTestPath(pathOf(a))) - Number(isTestPath(pathOf(b))) || pathOf(a).localeCompare(pathOf(b)) || linkName(a).localeCompare(linkName(b)));
+}
+function linkSection(ex, title, links, ctx) {
+  if (!links.length) return;
+  const shown = links.slice(0, PANEL_LINKS);
+  ex.append(el('div', { class: 'kind' }, title), el('div', { class: 'links' }, shown.map((l) => linkButton(l, ctx)), links.length > shown.length ? el('span', { class: 'udim' }, `and ${links.length - shown.length} more`) : null));
+}
+function linkButton(link, ctx) {
+  const where = link.module && link.node !== link.module ? ` · ${moduleFileName(link.module)}` : '';
+  const title = [link.module ? link.module.path : null, [...link.kinds].join(', ')].filter(Boolean).join(' · ');
+  return el('button', { title, onclick: () => followLink(link.node, ctx) }, `${linkName(link)}${where}`);
+}
+function linkName(link) {
+  if (link.node === link.module) return shortFile(link.module.path);
+  return link.node.sym ? link.node.sym.qual : netLabel(link.node.id);
+}
+function followLink(node, ctx) {
+  if (node.sym && node.sym.kind === 'function') ctx.go(refOf(node.sym));
+  else ctx.show(node.id);
 }
 function explainComparison(ex, ctx) {
   const c = DIFF.counts;
