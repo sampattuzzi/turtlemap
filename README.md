@@ -181,10 +181,17 @@ file without changing it rebuilds nothing.
 While Turtlemap is open it watches the project. When you save a source file or a
 `tsconfig.json`, it rebuilds what that file reaches and redraws the map in
 place, keeping where you were looking, what you had open and what you had
-selected. On that monorepo an edit to a file few others use is on screen about a
-second later. An edit to a module that hundreds of others import takes a few
-seconds. **↻ Reload** does the same check on demand. Blueprints are built when
-you open them.
+selected. The browser fetches only the files that were rebuilt, not the whole
+map, and keeps the blueprints and code it already has for every other file. An
+edit to a file few others use shows up quickly. An edit to a module that hundreds
+of others import takes a few seconds, because each of them is rebuilt.
+**↻ Reload** does the same check on demand. Blueprints are built when you open
+them.
+
+The watcher skips the folders Turtlemap never reads, such as `node_modules` and
+hidden folders, so a large `node_modules` does not use up Linux's inotify
+watches. If the watcher cannot start, Turtlemap carries on without it and
+**↻ Reload** still works.
 
 ## Comparing git revisions
 
@@ -201,7 +208,8 @@ poetry run turtlemap path/to/project --diff develop...my-branch
 | `A` | A with your working copy, including uncommitted files |
 
 Everything shows the newer side. Things that were removed are added back so
-you can see them go.
+you can see them go. When the newer side is your working copy, the comparison
+follows your edits as you save them.
 
 | Colour | Badge | Meaning |
 |---|---|---|

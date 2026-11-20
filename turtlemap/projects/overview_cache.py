@@ -4,7 +4,8 @@ import json
 import threading
 import time
 import zlib
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,15 +14,30 @@ from turtlemap.analysis.project import Piece, Project
 from turtlemap.analysis.workspace.parsed import MISSING, content_digest
 from turtlemap.analysis.workspace.reads import SOURCE
 
-CACHE_VERSION = "9"
+CACHE_VERSION = "10"
 CONFLICT = "conflict"
 
 Stat = tuple[int, int, str]
 
 
+class OverviewData:
+    def __init__(self, source: Project | bytes) -> None:
+        self._source = source
+        self._lock = threading.Lock()
+
+    def compressed(self) -> bytes:
+        with self._lock:
+            if isinstance(self._source, Project):
+                overview = self._source.overview()
+                raw = json.dumps(overview, separators=(",", ":")).encode()
+                self._source = gzip.compress(raw, 1)
+            return self._source
+
+
 @dataclass(frozen=True)
 class Overview:
-    data: bytes
+    data: OverviewData
+    pieces: Mapping[str, Piece]
     rebuilt: tuple[str, ...]
     changed: bool
     edited: tuple[str, ...] = ()
@@ -32,9 +48,10 @@ class ProjectState:
     files: tuple[str, ...]
     prints: dict[str, str]
     pieces: dict[str, Piece]
-    data: bytes
+    data: OverviewData
     stats: dict[str, Stat] = field(default_factory=dict)
     saved: bool = False
+    users: Counter[str] = field(default_factory=Counter)
 
 
 class FileDigests:
@@ -85,26 +102,28 @@ class OverviewCache:
                 if digests.stats != state.stats:
                     state.stats, state.saved = digests.stats, False
                 self._states = {project.root: state}
-                return Overview(state.data, (), False)
+                pieces = [state.pieces[path] for path in files]
+                project.use_pieces(pieces, time.perf_counter() - started)
+                return Overview(state.data, state.pieces, (), False)
             built = {piece.path: piece for piece in project.pieces(stale)}
             pieces = [kept.get(path) or built[path] for path in files]
-            overview = project.assemble(pieces, time.perf_counter() - started)
-            project.use_overview(overview)
-            raw = json.dumps(overview, separators=(",", ":")).encode()
+            project.use_pieces(pieces, time.perf_counter() - started)
             for path, stamp in project.workspace.stamps().items():
                 if stamp[2] != MISSING:
                     digests.stats.setdefault(path, stamp)
             seen = _Fingerprints(project, digests.digest)
+            prints, users = _prints(state, kept, built, seen)
             fresh = ProjectState(
                 files,
-                _prints(pieces, built, state.prints if state else {}, seen),
+                prints,
                 {piece.path: piece for piece in pieces},
-                gzip.compress(raw, 1),
+                OverviewData(project),
                 digests.stats,
+                users=users,
             )
             self._states = {project.root: fresh}
             edited = _edited(changed, files, state.files if state else files)
-            return Overview(fresh.data, tuple(stale), True, edited)
+            return Overview(fresh.data, fresh.pieces, tuple(stale), True, edited)
 
     def save(self, project: Project) -> None:
         with self._saving:
@@ -122,21 +141,23 @@ class OverviewCache:
             if saved.get("version") != CACHE_VERSION:
                 return None
             keys: list[str] = saved["keys"]
+            pieces = {
+                path: Piece.from_json(
+                    path, entry, frozenset(keys[at] for at in entry["deps"])
+                )
+                for path, entry in saved["pieces"].items()
+            }
             return ProjectState(
                 tuple(saved["files"]),
                 dict(zip(keys, saved["prints"])),
-                {
-                    path: Piece.from_json(
-                        path, entry, frozenset(keys[at] for at in entry["deps"])
-                    )
-                    for path, entry in saved["pieces"].items()
-                },
-                data_file.read_bytes(),
+                pieces,
+                OverviewData(data_file.read_bytes()),
                 {
                     path: (stat[0], stat[1], stat[2])
                     for path, stat in saved["stats"].items()
                 },
                 saved=True,
+                users=Counter(key for piece in pieces.values() for key in piece.keys),
             )
         except (
             OSError,
@@ -171,7 +192,7 @@ class OverviewCache:
         encoded = gzip.compress(json.dumps(saved, separators=(",", ":")).encode(), 1)
         try:
             self._folder.mkdir(parents=True, exist_ok=True)
-            _replace(data_file, state.data)
+            _replace(data_file, state.data.compressed())
             _replace(state_file, encoded)
         except OSError:
             pass
@@ -221,16 +242,24 @@ def _adopt_parses(project: Project, previous: Project, current: _Fingerprints) -
 
 
 def _prints(
-    pieces: list[Piece],
+    state: ProjectState | None,
+    kept: dict[str, Piece],
     built: dict[str, Piece],
-    before: dict[str, str],
     seen: _Fingerprints,
-) -> dict[str, str]:
-    prints: dict[str, str] = {}
-    for piece in pieces:
+) -> tuple[dict[str, str], Counter[str]]:
+    prints = dict(state.prints) if state else {}
+    users = Counter(state.users) if state else Counter[str]()
+    for path, piece in (state.pieces if state else {}).items():
+        if path not in kept:
+            users.subtract(piece.keys)
+    for key in [key for key, count in users.items() if count <= 0]:
+        del users[key]
+        prints.pop(key, None)
+    for piece in built.values():
+        users.update(piece.keys)
         for key in piece.keys:
-            value = seen(key) if piece.path in built else before.get(key)
+            value = seen(key)
             if value is None or prints.get(key, value) != value:
                 value = CONFLICT
             prints[key] = value
-    return prints
+    return prints, users

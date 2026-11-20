@@ -206,6 +206,17 @@ def test_groups_external_names_by_library(make_project: ProjectFactory) -> None:
     ]
 
 
+def test_groups_edges_by_the_file_they_start_in(
+    make_project: ProjectFactory,
+) -> None:
+    table = make_project(SHOP).overview()["edges"]
+
+    starts = [table["ids"][row[0]] for row in table["rows"]]
+    grouped = [path for path, count in table["files"] for _ in range(count)]
+    assert len(grouped) == len(starts)
+    assert all(f":{path}" in start for start, path in zip(starts, grouped))
+
+
 def test_links_subclass_to_its_base(make_project: ProjectFactory) -> None:
     found = edges(make_project(SHOP).overview())
 

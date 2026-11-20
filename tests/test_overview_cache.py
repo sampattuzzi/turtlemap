@@ -135,6 +135,24 @@ def test_matches_a_full_build_after(edit: str, tmp_path: Path) -> None:
     expect_full_build(root, result)
 
 
+@pytest.mark.parametrize("edit", EDITS)
+def test_matches_a_full_build_after_undoing(edit: str, tmp_path: Path) -> None:
+    before, changes = EDITS[edit]
+    root = make_files(tmp_path / "project", before)
+    cache = OverviewCache(tmp_path / "cache")
+    first = Project(root)
+    cache.overview(first)
+    make_files(root, changes)
+    edited = Project(root)
+    cache.overview(edited, previous=first)
+    make_files(root, {path: before.get(path) for path in changes})
+
+    result = cache.overview(Project(root), previous=edited)
+
+    assert result.changed
+    expect_full_build(root, result)
+
+
 def test_rebuilds_only_the_files_an_edit_reaches(tmp_path: Path) -> None:
     root = make_files(tmp_path / "project", SHOP)
     cache = OverviewCache(tmp_path / "cache")
@@ -160,7 +178,7 @@ def test_rebuilds_nothing_when_a_file_is_saved_unchanged(tmp_path: Path) -> None
     again = cache.overview(Project(root))
 
     assert not again.changed
-    assert again.data == first.data
+    assert again.data.compressed() == first.data.compressed()
 
 
 def test_reopens_from_the_cache_on_disk(tmp_path: Path) -> None:
@@ -189,9 +207,9 @@ def make_files(root: Path, files: Files) -> Path:
 
 
 def expect_full_build(root: Path, result: Overview) -> None:
-    assert without_timing(json.loads(gzip.decompress(result.data))) == without_timing(
-        Project(root).overview()
-    )
+    assert without_timing(
+        json.loads(gzip.decompress(result.data.compressed()))
+    ) == without_timing(Project(root).overview())
 
 
 def without_timing(overview: dict[str, Any]) -> dict[str, Any]:

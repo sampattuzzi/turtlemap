@@ -28,6 +28,12 @@ def build_diff(
 ) -> tuple[ProjectDiff, bytes]:
     folder = _tree_folder(trees, diff_range.base_sha, repository)
     base = Project(folder, repository.extract(diff_range.base_sha, folder))
+    return compare(repository, diff_range, base, head)
+
+
+def compare(
+    repository: Repository, diff_range: DiffRange, base: Project, head: Project
+) -> tuple[ProjectDiff, bytes]:
     diff = ProjectDiff(base, head, repository.changes(diff_range), diff_range)
     summary = json.dumps(diff.summary(), separators=(",", ":")).encode()
     return diff, gzip.compress(summary, 6)

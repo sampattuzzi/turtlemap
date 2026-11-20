@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
@@ -7,7 +8,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.api import BaseObserver
 
-from turtlemap.analysis.workspace.files import EXCLUDED_DIRECTORIES, is_source
+from turtlemap.analysis.workspace.files import is_ignored_folder, is_source
 
 CHANGES = frozenset({"created", "deleted", "modified", "moved"})
 ALIAS_CONFIGS = ("tsconfig", "jsconfig")
@@ -29,7 +30,7 @@ class ProjectWatcher(FileSystemEventHandler):
                 return
             self._stop_observing()
             self._root = root
-            observer = Observer()
+            observer = _observer()
             observer.daemon = True
             observer.schedule(self, str(root), recursive=True)
             observer.start()
@@ -60,9 +61,7 @@ class ProjectWatcher(FileSystemEventHandler):
         if not relative.parts:
             return False
         folders = relative.parts if is_directory else relative.parts[:-1]
-        if any(
-            part.startswith(".") or part in EXCLUDED_DIRECTORIES for part in folders
-        ):
+        if any(map(is_ignored_folder, folders)):
             return False
         return (
             is_directory or is_source(relative.as_posix()) or _is_alias_config(relative)
@@ -83,6 +82,14 @@ class ProjectWatcher(FileSystemEventHandler):
         if self._observer is not None:
             self._observer.stop()
             self._observer = None
+
+
+def _observer() -> BaseObserver:
+    if not sys.platform.startswith("linux"):
+        return Observer()
+    from turtlemap.projects.inotify import PrunedInotifyObserver
+
+    return PrunedInotifyObserver()
 
 
 def _is_alias_config(path: PurePosixPath) -> bool:

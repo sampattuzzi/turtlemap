@@ -14,7 +14,7 @@ import { crumbsFor, renderSide } from './sidebar.js';
 import { filterButton, filterChip, labelFilterButton, lineFilter } from './filtermenu.js';
 import { shell } from './toolbar.js';
 import { startingTrail } from './trail.js';
-import { netLabel, plural } from '../map/boxes.js';
+import { netLabel, plural, refOf } from '../map/boxes.js';
 import { focusUnitOf, netDefaultExpanded, relatedTo, resetNet, revealHidden } from '../map/focus.js';
 import { netPanel } from '../map/panel.js';
 import { buildNetScene } from '../map/scene.js';
@@ -90,6 +90,7 @@ export class Explorer {
       try { await ensureFunction(c); } catch (error) { c.error = error.message; }
     }
     if (this.trail.current !== c) return;
+    this.trail.selected = refreshedPick(this.trail.selected);
     resetNet();
     this.render(true);
   }
@@ -199,6 +200,13 @@ export class Explorer {
     const sizes = this.scene.sizes || this.scene.nodes.map((n) => ({ el: n.el, w: n.w, h: n.h }));
     if (this.relayouts < 3) watchSizes(sizes, () => { if (this.trail.current === c) this.render('relayout'); });
   }
+}
+function refreshedPick(selected) {
+  if (!selected || !selected.n || !selected.sym) return selected;
+  const ref = refOf(selected.sym);
+  const sym = lookup(ref), data = FUNCTIONS.get(fnKey(ref));
+  const node = sym && data && data.graph.nodes.find((n) => n.id === selected.n.id);
+  return node ? { n: { ...node, ins: node.ins || [], outs: node.outs || [] }, sym } : null;
 }
 function explorerButtons(explorer) {
   const button = (title, label, onclick) => el('button', { class: 'btn', title, onclick }, label);

@@ -165,6 +165,41 @@ def test_answers_project_events_with_the_current_revision(
     assert answer["ready"]
 
 
+def test_serves_the_changes_since_a_revision(
+    make_server: ThreadingHTTPServer, tmp_path: Path
+) -> None:
+    make_opened(make_server, tmp_path)
+    revision = fetch_json(make_server, "/api/status")["revision"]
+    (tmp_path / "project" / "shapes.py").write_text("class Circle:\n    pass\n")
+    fetch_json(make_server, "/api/reload")
+
+    changes = fetch_json(make_server, f"/api/project/changes?since={revision}")
+
+    assert changes["rebuilt"] == ["shapes.py"]
+    assert changes["modules"][0]["symbols"][0]["name"] == "Circle"
+
+
+def test_asks_for_the_full_overview_when_changes_go_back_too_far(
+    make_server: ThreadingHTTPServer, tmp_path: Path
+) -> None:
+    make_opened(make_server, tmp_path)
+
+    assert fetch_json(make_server, "/api/project/changes?since=0") == {"full": True}
+
+
+def test_says_when_a_function_cannot_be_drawn_because_its_file_does_not_parse(
+    make_server: ThreadingHTTPServer, tmp_path: Path
+) -> None:
+    make_opened(make_server, tmp_path)
+    (tmp_path / "project" / "shapes.py").write_text("class Square(:\n")
+    fetch_json(make_server, "/api/reload")
+
+    status, body = fetch(make_server, "/api/function?path=shapes.py&qual=Square.area")
+
+    assert status == 404
+    assert json.loads(body)["error"] == "shapes.py does not parse right now"
+
+
 def make_git_project(tmp_path: Path) -> Path:
     folder = tmp_path / "gitproject"
     folder.mkdir()
