@@ -117,6 +117,8 @@ The code panel highlights the line behind whichever node you select.
 ### Getting around
 
 - Press `/` to find any file, class or function.
+- Click a folder, file, class or function in the left panel to go to it.
+  The ▸ arrow beside a folder opens or closes it in the panel.
 - When you hover over something, lines that lead off screen get a marker on
   the edge of the view. Click a marker to glide there.
 - The **Code** tab hides, shows or resizes the code panel.
