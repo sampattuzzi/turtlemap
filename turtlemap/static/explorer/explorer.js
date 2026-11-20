@@ -156,7 +156,7 @@ export class Explorer {
       this.comments.decorate();
       return;
     }
-    const ctx = { ...this.blueprints.context('root'), activate: this.goTo };
+    const ctx = { ...this.blueprints.context('root'), activate: this.goTo, show: (id) => this.showOnMap(id) };
     if (trail.selected && trail.selected.n) codePanel(ui.right, trail.selected.sym, trail.selected.n, ctx);
     else codePanel(ui.right, lookup(trail.current), null, ctx);
     this.comments.decorate();

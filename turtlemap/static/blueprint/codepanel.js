@@ -1,9 +1,9 @@
 import { KIND } from './nodes.js';
-import { DIFF, isTestPath, lookup } from '../core/data.js';
+import { DIFF, lookup, net } from '../core/data.js';
 import { baseName, el, speak } from '../core/dom.js';
 import { codePainter } from '../core/highlight.js';
-import { callersOf } from '../core/project.js';
-import { DIFF_SIGN, DIFF_WORD, refOf } from '../map/boxes.js';
+import { DIFF_SIGN, DIFF_WORD } from '../map/boxes.js';
+import { linkSections } from '../map/links.js';
 const DESCRIPTIONS = new Map([
   ['entry', (n, ins, outs) => `The function starts here. It takes ${outs.join(', ') || 'nothing'}.`],
   ['break', (n, ins, outs) => `Reads ${outs.join(', ')} out of ${ins[0]}.`],
@@ -47,11 +47,12 @@ function explainNode(ex, sym, node, ctx) {
 }
 function explainSymbol(ex, sym, ctx) {
   ex.append(el('div', { class: 'kind' }, symbolKindLabel(sym)), el('h2', {}, sym.qual));
-  if (sym.kind !== 'function') return;
-  const callers = callersOf(refOf(sym));
-  callers.sort((a, b) => Number(isTestPath(a.path)) - Number(isTestPath(b.path)) || a.path.localeCompare(b.path) || a.sym.localeCompare(b.sym));
-  const shown = callers.slice(0, 8);
-  if (callers.length) ex.append(el('div', { class: 'kind' }, 'Called from'), el('div', { class: 'links' }, shown.map((c) => el('button', { onclick: () => ctx.activate(c, null, null) }, `${c.sym} · ${baseName(c.path)}`)), callers.length > shown.length ? el('span', { class: 'udim' }, `and ${callers.length - shown.length} more`) : null));
+  const node = net().nodes.get(symbolNodeId(sym));
+  if (node) linkSections(ex, node, { go: (ref) => ctx.activate(ref, null, null), show: ctx.show });
+}
+function symbolNodeId(sym) {
+  if (sym.kind !== 'function') return `cls:${sym.file}:${sym.qual}`;
+  return `${sym.owner ? 'm' : 'fn'}:${sym.file}:${sym.qual}`;
 }
 function symbolKindLabel(sym) {
   if (sym.kind === 'function') return sym.owner ? `method of ${sym.owner}` : 'function';

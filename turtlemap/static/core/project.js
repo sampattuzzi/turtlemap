@@ -1,7 +1,6 @@
-import { DIFF, FILES, FUNCTIONS, fnKey, lookup, net, patchProject, setProject } from './data.js';
+import { DIFF, FILES, FUNCTIONS, fnKey, lookup, patchProject, setProject } from './data.js';
 import { api } from './dom.js';
 import { FOCUS_CACHE } from '../map/focus.js';
-let CALLERS = null;
 const FUNCTION_REQUESTS = new Map();
 const OUTLINES = {};
 const OUTLINE_REQUESTS = new Map();
@@ -48,7 +47,6 @@ export async function loadChanges(since) {
   return true;
 }
 function forgetDerived() {
-  CALLERS = null;
   FOCUS_CACHE.clear();
 }
 function addFile(m) {
@@ -88,20 +86,4 @@ export function ensureOutline(path) {
   return OUTLINE_REQUESTS.get(path);
 }
 export const shortFile = (p) => p.split('/').slice(-2).join('/');
-export function callersOf(ref) {
-  if (!CALLERS) {
-    CALLERS = new Map();
-    for (const e of net().edges) {
-      if (!e.kinds.has('calls') || !/^(fn|m):/.test(e.from)) continue;
-      if (!CALLERS.has(e.to)) CALLERS.set(e.to, []);
-      CALLERS.get(e.to).push(e.from);
-    }
-  }
-  const sym = lookup(ref);
-  if (!sym) return [];
-  return (CALLERS.get(`${sym.owner ? 'm' : 'fn'}:${ref.path}:${ref.sym}`) || []).map((id) => {
-    const match = id.match(/^(?:fn|m):(.*):([^:]*)$/);
-    return match ? { path: match[1], sym: match[2] } : null;
-  }).filter(Boolean);
-}
 export function outlineFor(path) { return OUTLINES[path] || null; }
