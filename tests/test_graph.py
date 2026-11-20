@@ -1506,7 +1506,9 @@ def test_gives_a_dict_comprehension_a_key_and_a_value_pin(tmp_path: Path) -> Non
     assert source_of(graph, results, "key") == (frame["id"], "word")
 
 
-def test_nests_a_frame_for_each_further_for_clause(tmp_path: Path) -> None:
+def test_yields_from_each_further_for_clause_into_the_frame_around_it(
+    tmp_path: Path,
+) -> None:
     graph = make_graph(
         tmp_path,
         """
@@ -1519,14 +1521,21 @@ def test_nests_a_frame_for_each_further_for_clause(tmp_path: Path) -> None:
     outer = the_node(graph, "row in grid")
     inner = the_node(graph, "cell in row")
     entry = nodes_of_kind(graph, "entry")[0]
+    bands = {band["parent"]: band for band in nodes_of_kind(graph, "collect")}
     assert inner["parent"] == outer["id"]
     assert "badge" not in inner
-    assert [pin["name"] for pin in inner["outs"]] == ["cell"]
     assert source_of(graph, inner, "items") == (outer["id"], "row")
-    assert the_node(graph, "Filter")["parent"] == outer["id"]
-    results = the_node(graph, "Results")
-    assert results["parent"] == inner["id"]
-    assert [pin["name"] for pin in results["ins"]] == ["item", "keep if"]
+    assert [(pin["name"], pin["type"]["label"]) for pin in inner["outs"]] == [
+        ("", "Iterator[int]"),
+        ("cell", "int"),
+    ]
+    assert outer["outs"][0]["type"]["label"] == "list[int]"
+    assert [pin["name"] for pin in bands[inner["id"]]["ins"]] == ["item", "keep if"]
+    assert [pin["name"] for pin in bands[outer["id"]]["ins"]] == [
+        "yield from",
+        "keep if",
+    ]
+    assert source_of(graph, bands[outer["id"]], "yield from") == (inner["id"], "")
     assert source_of(graph, the_node(graph, "<"), "b") == (entry["id"], "limit")
 
 
@@ -1572,3 +1581,24 @@ def test_gives_a_field_read_twice_in_a_calculation_one_input(tmp_path: Path) -> 
     calculation = the_node(graph, "Calculate")
     assert [pin["name"] for pin in calculation["ins"]] == ["x.zeta", "fallback"]
     assert calculation["expr"] == ["fallback if x.zeta is None else x.zeta"]
+
+
+def test_keeps_the_key_and_value_pins_in_the_innermost_clause_of_a_dict(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def flatten(groups: list[list[str]]) -> dict[str, int]:
+            return {name: len(name) for group in groups for name in group}
+    """,
+        "flatten",
+    )
+
+    outer = the_node(graph, "group in groups")
+    inner = the_node(graph, "name in group")
+    bands = {band["parent"]: band for band in nodes_of_kind(graph, "collect")}
+    assert [pin["name"] for pin in bands[inner["id"]]["ins"]] == ["key", "value"]
+    assert [pin["name"] for pin in bands[outer["id"]]["ins"]] == ["yield from"]
+    assert outer["outs"][0]["type"]["label"] == "dict[str, int]"
+    assert inner["outs"][0]["type"]["label"] == "Iterator"

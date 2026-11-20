@@ -1,6 +1,5 @@
-from collections.abc import Callable, Iterable
-from contextlib import ExitStack
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 
 from turtlemap.analysis import model as m
 from turtlemap.analysis.blueprint.canvas import Graph, GraphNode
@@ -13,8 +12,15 @@ from turtlemap.analysis.types import UNKNOWN, PinType
 from turtlemap.languages.language import ComprehensionShape
 
 KEEP_IF = "keep if"
+YIELD_FROM = "yield from"
 RESULTS_TITLE = "Results"
-FILTER_TITLE = "Filter"
+
+
+@dataclass(frozen=True)
+class _Clause:
+    frame: GraphNode
+    result: Value
+    elements: list[PinType]
 
 
 class Comprehensions:
@@ -35,34 +41,36 @@ class Comprehensions:
 
     def value(self, expression: m.Comprehension) -> Value:
         shape = self._profile.comprehensions[expression.kind]
-        outer, first_items = self._frame_for(expression.clauses[0])
-        outer.badge = shape.badge
-        result = self._graph.output(outer, "", PinType(shape.label, shape.cat))
-        results: list[Value] = []
-        with self._scope.local_bindings(expression.bound), ExitStack() as inside:
-            for index, clause in enumerate(expression.clauses):
-                frame, items = (
-                    (outer, first_items) if index == 0 else self._frame_for(clause)
-                )
-                self._bind_targets(frame, items, clause)
-                inside.enter_context(self._graph.inside(frame.id))
-                conditions = [self._evaluate(test) for test in clause.conditions]
-                if index == len(expression.clauses) - 1:
-                    results = [self._evaluate(part) for part in expression.results]
-                    self._band(
-                        RESULTS_TITLE,
-                        clause.line,
-                        zip(shape.results, results),
-                        conditions,
-                    )
-                elif conditions:
-                    self._band(FILTER_TITLE, clause.line, [], conditions)
-        typed = self._result_type(shape, results)
-        outer.outs[0].type = typed
-        return replace(result, type=typed)
+        with self._scope.local_bindings(expression.bound):
+            outer = self._clause(expression, 0, shape)
+        outer.frame.badge = shape.badge
+        return outer.result
 
-    def _frame_for(self, clause: m.ComprehensionClause) -> tuple[GraphNode, Value]:
+    def _clause(
+        self, expression: m.Comprehension, index: int, shape: ComprehensionShape
+    ) -> _Clause:
+        clause = expression.clauses[index]
+        produces = shape if index == 0 else self._profile.comprehensions["generator"]
         items = self._evaluate(clause.iterable)
+        frame = self._frame(clause, items)
+        result = self._graph.output(frame, "", PinType(produces.label, produces.cat))
+        self._bind_targets(frame, items, clause)
+        with self._graph.inside(frame.id):
+            conditions = [self._evaluate(test) for test in clause.conditions]
+            if index == len(expression.clauses) - 1:
+                values = [self._evaluate(part) for part in expression.results]
+                pins = list(zip(shape.results, values))
+                elements = [value.type for value in values]
+            else:
+                inner = self._clause(expression, index + 1, shape)
+                pins = [(YIELD_FROM, inner.result)]
+                elements = inner.elements
+            self._band(clause.line, pins, conditions)
+        typed = _result_type(produces, elements)
+        frame.outs[0].type = typed
+        return _Clause(frame, replace(result, type=typed), elements)
+
+    def _frame(self, clause: m.ComprehensionClause, items: Value) -> GraphNode:
         names = ", ".join(self._label(target) for target in flat_targets(clause.target))
         source = shorten(self._text(clause.iterable), LABEL_LIMIT)
         frame = self._graph.add(
@@ -72,42 +80,40 @@ class Comprehensions:
             note="async for" if clause.is_async else None,
         )
         self._graph.connect(frame, "items", items)
-        return frame, items
+        return frame
 
     def _bind_targets(
         self, frame: GraphNode, items: Value, clause: m.ComprehensionClause
     ) -> None:
         targets = flat_targets(clause.target)
-        element = self._lookups.element(items) if len(targets) == 1 else UNKNOWN
+        single = len(targets) == 1
+        element = self._lookups.element(items) if single else UNKNOWN
+        annotation = self._lookups.element_annotation(items) if single else None
         for target in targets:
-            output = self._graph.output(frame, self._label(target), element)
+            output = self._graph.output(frame, self._label(target), element, annotation)
             name = _bound_name(target)
             if name is not None:
                 self._scope.bind(name, output)
 
     def _band(
-        self,
-        title: str,
-        line: int,
-        results: Iterable[tuple[str, Value]],
-        conditions: list[Value],
+        self, line: int, pins: list[tuple[str, Value]], conditions: list[Value]
     ) -> None:
-        band = self._graph.add("collect", title, line)
-        for name, value in results:
+        band = self._graph.add("collect", RESULTS_TITLE, line)
+        for name, value in pins:
             self._graph.connect(band, name, value)
         for condition in conditions:
             self._graph.connect(band, KEEP_IF, condition, BOOL)
 
-    def _result_type(self, shape: ComprehensionShape, results: list[Value]) -> PinType:
-        known = [value.type for value in results]
-        if not known or any(pin.cat == "any" for pin in known):
-            return PinType(shape.label, shape.cat)
-        labels = ", ".join(pin.label for pin in known)
-        items = known[0].ref if len(known) == 1 else None
-        return PinType(f"{shape.label}[{labels}]", shape.cat, items=items)
-
     def _label(self, target: m.Expr) -> str:
         return target_label(target, self._profile.spread_prefix, self._text)
+
+
+def _result_type(shape: ComprehensionShape, elements: list[PinType]) -> PinType:
+    if len(elements) != len(shape.results) or any(pin.cat == "any" for pin in elements):
+        return PinType(shape.label, shape.cat)
+    labels = ", ".join(pin.label for pin in elements)
+    items = elements[0].ref if len(elements) == 1 else None
+    return PinType(f"{shape.label}[{labels}]", shape.cat, items=items)
 
 
 def _bound_name(target: m.Expr) -> str | None:

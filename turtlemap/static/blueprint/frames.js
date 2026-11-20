@@ -122,7 +122,7 @@ function alongRightEdge(view, width, height, top, remeasure) {
   view.x = width - view.w; view.y = top;
   remeasure(view);
 }
-const carriesResult = (n) => n.kind === 'comprehension' && Boolean(n.badge);
+const carriesResult = (n) => n.kind === 'comprehension';
 function plainRouteKey(e) { return e.tp === undefined ? `${e.from.id}|${e.fp}|${e.to.id}|exec-in` : `${e.from.id}|out:${e.fp}|${e.to.id}|in:${e.tp}`; }
 function frameOf(n, byNodeId) { return n.parent && byNodeId.has(n.parent) ? n.parent : ''; }
 function pushTo(map, key, value) { if (!map.has(key)) map.set(key, []); map.get(key).push(value); }

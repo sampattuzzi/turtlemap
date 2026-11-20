@@ -171,8 +171,17 @@ class TypeLookups:
         return fields
 
     def element(self, value: Value) -> PinType:
-        if value.annotation is None:
+        found = self.element_annotation(value)
+        if found is None:
             return UNKNOWN
+        annotation, module = found
+        return self.resolver(module).annotation(annotation)
+
+    def element_annotation(
+        self, value: Value
+    ) -> tuple[m.TypeExpr, ParsedModule] | None:
+        if value.annotation is None:
+            return None
         annotation, module = value.annotation
         if isinstance(annotation, m.TypeName) and annotation.args:
             names = module.language.profile.types
@@ -182,8 +191,8 @@ class TypeLookups:
                 or base in names.mappings
                 or base in names.tuples
             ):
-                return self.resolver(module).annotation(annotation.args[0])
-        return UNKNOWN
+                return annotation.args[0], module
+        return None
 
     def item(self, container: Value, key: m.Expr) -> PinType:
         if container.annotation is None:

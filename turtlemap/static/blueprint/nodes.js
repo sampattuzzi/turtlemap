@@ -88,14 +88,15 @@ function closureEl(n, connectedOuts, state) {
   return wrap;
 }
 function comprehensionEl(n, connectedIns, connectedOuts, state) {
-  const [result, ...elements] = n.badge ? n.outs : [null, ...n.outs];
+  const [result, ...elements] = n.outs;
   const wrap = el('div', { class: `k-frame k-comprehension${state ? ` diff-${state}` : ''}`, 'data-node': n.id });
   const head = el('div', { class: 'head', style: '--hc: var(--h-loop)' }, diffBadge(state),
     n.ins.map((p) => pinEl('in', `in:${p.name}`, p.name, p.type, { lit: p.lit, connected: connectedIns.has(p.name) || p.lit != null, diff: p.diff })),
     n.badge ? el('span', { class: 'badge' }, n.badge) : null,
     el('span', { class: 'title' }, plain(n.title)),
     el('span', { class: 'grow' }),
-    result ? [el('span', { class: 'tag' }, result.type.label), pinEl('out', `out:${result.name}`, result.name, result.type, { connected: connectedOuts.has(result.name), diff: result.diff })] : null);
+    el('span', { class: 'tag' }, result.type.label),
+    pinEl('out', `out:${result.name}`, result.name, result.type, { connected: connectedOuts.has(result.name), diff: result.diff }));
   const strip = el('div', { class: 'strip' }, elements.map((o) => pinEl('out', `out:${o.name}`, o.name, o.type, { connected: connectedOuts.has(o.name), diff: o.diff })));
   wrap.append(el('div', { class: 'box frame-box' }, head, strip));
   return wrap;

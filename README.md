@@ -109,7 +109,8 @@ blueprints.
   wires back into a band on the frame's right edge (`item`, `yield`, or `key`
   and `value`, plus a `keep if` for each `if`), and the finished list, set,
   dict or generator leaves from the header's right. Each further `for` is a
-  frame inside the one before.
+  frame inside the one before, and its own result wires into the outer band's
+  `yield from` pin.
 - **An `if`, `match` or `switch`** is a frame of stacked lanes, one per arm,
   each headed by its condition. A lane starts at the ▶ on its top-left, and
   **then** carries on after the branch. Only `a if c else b` becomes a Select.

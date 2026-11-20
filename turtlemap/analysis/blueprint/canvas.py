@@ -64,9 +64,7 @@ class GraphNode:
         return next((pin for pin in self.outs if pin.name == name), None)
 
     def header_output(self) -> str | None:
-        carries_result = self.kind == "closure" or (
-            self.kind == "comprehension" and self.badge is not None
-        )
+        carries_result = self.kind in ("closure", "comprehension")
         return self.outs[0].name if carries_result and self.outs else None
 
     def to_json(self) -> dict[str, Any]:
