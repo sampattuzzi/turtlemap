@@ -1,5 +1,8 @@
+import gc
 import secrets
+import sys
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -14,6 +17,10 @@ from turtlemap.analysis.diff.revisions import DiffRange
 from turtlemap.projects.git import GitError, Repository
 from turtlemap.projects.overview_cache import OverviewCache
 from turtlemap.projects.registry import ServerRegistry
+from turtlemap.projects.watcher import ProjectWatcher
+
+MAX_WAIT = 30.0
+SHOWN_CHANGES = 50
 
 
 @dataclass(frozen=True)
@@ -27,6 +34,9 @@ class Session:
     diff: ProjectDiff | None = None
     diff_bytes: bytes | None = None
     diff_error: str | None = None
+    revision: int = 0
+    edited: tuple[str, ...] = ()
+    rebuilt: int = 0
 
     def without_diff(self) -> "Session":
         return replace(
@@ -54,6 +64,10 @@ class Session:
             and (diff is None or diff["ready"]),
             "error": self.error or (diff["error"] if diff else None),
             "diff": diff,
+            "revision": self.revision,
+            "edited": list(self.edited[:SHOWN_CHANGES]),
+            "editedCount": len(self.edited),
+            "rebuilt": self.rebuilt,
         }
 
 
@@ -69,11 +83,21 @@ class ProjectHost:
         self._overviews = OverviewCache(cache_dir)
         self._trees = cache_dir / "trees"
         self._lock = threading.Lock()
+        self._changed = threading.Condition(self._lock)
+        self._refreshing = threading.Lock()
         self._session = Session()
+        self._watcher: ProjectWatcher | None = None
+
+    def watch_files(self) -> None:
+        self._watcher = ProjectWatcher(self.refresh)
+        root = self._session.root
+        if root is not None:
+            self._watch(root)
 
     def open(self, root: Path, diff: str | None = None) -> None:
         if self._registry is not None:
             self._registry.set_root(root)
+        self._watch(root)
         if diff:
             resolved = root.resolve()
             self._begin(lambda current: replace(current.without_diff(), root=resolved))
@@ -107,8 +131,43 @@ class ProjectHost:
             return
         if session.diff_spec:
             self.open_diff(session.diff_spec)
-        else:
+        elif session.overview_bytes is None:
             self.open(session.root)
+        else:
+            self.refresh()
+
+    def refresh(self) -> None:
+        with self._refreshing:
+            session = self._session
+            previous = session.project
+            if session.diff_spec or session.overview_bytes is None or previous is None:
+                return
+            project = Project(previous.root)
+            try:
+                result = self._overviews.overview(project, previous)
+            except Exception:
+                traceback.print_exc(limit=5, file=sys.stderr)
+                return
+            if result.changed:
+                after = replace(
+                    session,
+                    project=project,
+                    overview_bytes=result.data,
+                    edited=result.edited,
+                    rebuilt=len(result.rebuilt),
+                )
+                self._advance(session, after)
+            self._overviews.save(project)
+
+    def wait_for_change(self, since: int, wait: float) -> dict[str, Any]:
+        deadline = time.monotonic() + max(0.0, min(wait, MAX_WAIT))
+        with self._changed:
+            while self._session.revision <= since:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._changed.wait(remaining)
+            return self._session.status()
 
     def status(self) -> dict[str, Any]:
         return self._session.status()
@@ -122,26 +181,40 @@ class ProjectHost:
     def project(self) -> Project | None:
         return self._session.project
 
+    def _watch(self, root: Path) -> None:
+        if self._watcher is None:
+            return
+        try:
+            self._watcher.watch(root)
+        except OSError:
+            traceback.print_exc(limit=3, file=sys.stderr)
+
     def _begin(self, start: Callable[[Session], Session]) -> Session:
-        with self._lock:
-            self._session = start(self._session)
-            return self._session
+        with self._changed:
+            return self._become(start(self._session))
 
     def _advance(self, current: Session, after: Session) -> Session | None:
-        with self._lock:
+        with self._changed:
             if self._session is not current:
                 return None
-            self._session = after
-            return after
+            return self._become(after)
+
+    def _become(self, session: Session) -> Session:
+        self._session = replace(session, revision=self._session.revision + 1)
+        self._changed.notify_all()
+        return self._session
 
     def _load_overview(self, session: Session, project: Project) -> Session | None:
         try:
-            data = self._overviews.overview_bytes(project)
+            data = self._overviews.overview(project).data
         except Exception:
             error = traceback.format_exc(limit=5)
             return self._advance(session, replace(session, error=error, loading=False))
+        self._overviews.save(project)
         loaded = replace(session, overview_bytes=data, loading=False)
-        return self._advance(session, loaded)
+        after = self._advance(session, loaded)
+        gc.freeze()
+        return after
 
     def _compare(
         self,

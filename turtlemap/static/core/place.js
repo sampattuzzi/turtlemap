@@ -23,7 +23,7 @@ function placeKey() { return `${SETTINGS_KEY}-place:${OVERVIEW ? OVERVIEW.root :
 function placeOf(trail, vp) {
   const c = trail.current;
   return {
-    entry: { view: c.view, path: c.path, sym: c.sym, scope: c.scope, focus: c.focus, related: c.related, expanded: c.expanded ? [...c.expanded] : undefined, open: [...(c.open || [])] },
+    entry: { view: c.view, path: c.path, sym: c.sym, focus: c.focus, related: c.related, expanded: c.expanded ? [...c.expanded] : undefined, open: [...(c.open || [])] },
     selected: trail.selectedId(),
     view: { x: vp.x, y: vp.y, s: vp.s },
   };

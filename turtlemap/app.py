@@ -17,6 +17,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     registry = ServerRegistry()
     host = ProjectHost(registry=registry)
+    if not args.no_watch:
+        host.watch_files()
     if args.folder:
         _open_folder(parser, host, Path(args.folder).expanduser(), args.diff)
     token = secrets.token_urlsafe(18)
@@ -60,6 +62,11 @@ def _parser() -> argparse.ArgumentParser:
         "--no-open",
         action="store_true",
         help="print the address instead of opening it in your browser",
+    )
+    parser.add_argument(
+        "--no-watch",
+        action="store_true",
+        help="do not redraw the map when source files change",
     )
     return parser
 

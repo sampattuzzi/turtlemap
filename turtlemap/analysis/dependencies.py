@@ -1,4 +1,5 @@
 from collections import deque
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -6,6 +7,7 @@ from turtlemap.analysis import model as m
 from turtlemap.analysis.symbols import class_fields, module_constants
 from turtlemap.analysis.type_parameters import TypeParameters, bound_names
 from turtlemap.analysis.types import PinType, TypeResolver, TypeSystem
+from turtlemap.analysis.workspace.reads import Keys, ReadLog
 from turtlemap.analysis.workspace.parsed import (
     ExternalRef,
     ParsedClass,
@@ -20,10 +22,16 @@ class DependencyCollector:
     types: TypeSystem
     edges: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
     external_names: set[tuple[str, str | None]] = field(default_factory=set)
-    _fields: dict[SymbolRef, dict[str, PinType]] = field(default_factory=dict)
-    _own_fields: dict[SymbolRef, dict[str, PinType]] = field(default_factory=dict)
+    _fields: dict[SymbolRef, tuple[dict[str, PinType], Keys]] = field(
+        default_factory=dict
+    )
+    _own_fields: dict[SymbolRef, tuple[dict[str, PinType], Keys]] = field(
+        default_factory=dict
+    )
     _constants: dict[str, frozenset[str]] = field(default_factory=dict)
-    _constant_ids: dict[tuple[str, str], str | None] = field(default_factory=dict)
+    _constant_ids: dict[tuple[str, str], tuple[str | None, Keys]] = field(
+        default_factory=dict
+    )
     _generics: TypeParameters | None = None
 
     @property
@@ -58,22 +66,22 @@ class DependencyCollector:
                 self, module, resolver, f"c:{module.path}:{name}", None
             ).collect_constant(statement)
 
-    def result(self) -> dict[str, Any]:
-        ids: dict[str, int] = {}
-        rows: list[list[Any]] = []
-        for entry in self.edges.values():
-            kinds = set(entry["kinds"])
-            if kinds & {"calls", "creates"}:
-                kinds.discard("uses")
-            row: list[Any] = [
-                ids.setdefault(entry["from"], len(ids)),
-                ids.setdefault(entry["to"], len(ids)),
-                ",".join(sorted(kinds)),
+    def collect_alone(
+        self, module: ParsedModule
+    ) -> tuple[list[list[Any]], frozenset[tuple[str, str | None]]]:
+        self.edges = {}
+        self.external_names = set()
+        self.collect(module)
+        edges = [
+            [
+                entry["from"],
+                entry["to"],
+                sorted(entry["kinds"]),
+                sorted(entry["labels"]),
             ]
-            if entry["labels"]:
-                row.append(",".join(sorted(entry["labels"])))
-            rows.append(row)
-        return {"ids": list(ids), "rows": rows}
+            for entry in self.edges.values()
+        ]
+        return edges, frozenset(self.external_names)
 
     def link(
         self, source: str, target: str | None, kind: str, label: str | None = None
@@ -107,25 +115,33 @@ class DependencyCollector:
         return None
 
     def constant_id(self, module: ParsedModule, dotted: str) -> str | None:
-        key = (module.path, dotted)
-        if key not in self._constant_ids:
-            self._constant_ids[key] = self._find_constant(module, dotted)
-        return self._constant_ids[key]
+        return self._reads.remembered(
+            self._constant_ids,
+            (module.path, dotted),
+            lambda: self._find_constant(module, dotted),
+        )
 
     def own_fields(self, ref: SymbolRef) -> dict[str, PinType]:
-        if ref not in self._own_fields:
-            self._own_fields[ref] = {
-                name: pin for name, pin, _ in class_fields(self.types, ref)
-            }
-        return self._own_fields[ref]
+        return self._reads.remembered(
+            self._own_fields,
+            ref,
+            lambda: {name: pin for name, pin, _ in class_fields(self.types, ref)},
+        )
 
     def fields_of(self, ref: SymbolRef) -> dict[str, PinType]:
-        if ref not in self._fields:
-            merged: dict[str, PinType] = {}
-            for ancestor in reversed(self.types.workspace.class_ancestry(ref)):
-                merged.update(self.own_fields(ancestor))
-            self._fields[ref] = merged
-        return self._fields[ref]
+        return self._reads.remembered(
+            self._fields, ref, lambda: self._merged_fields(ref)
+        )
+
+    @property
+    def _reads(self) -> ReadLog:
+        return self.types.workspace.reads
+
+    def _merged_fields(self, ref: SymbolRef) -> dict[str, PinType]:
+        merged: dict[str, PinType] = {}
+        for ancestor in reversed(self.types.workspace.class_ancestry(ref)):
+            merged.update(self.own_fields(ancestor))
+        return merged
 
     def _find_constant(self, module: ParsedModule, dotted: str) -> str | None:
         head, _, rest = dotted.partition(".")
@@ -181,6 +197,24 @@ class DependencyCollector:
                         "has",
                         name,
                     )
+
+
+def edge_table(edges: Iterable[list[Any]]) -> dict[str, Any]:
+    ids: dict[str, int] = {}
+    rows: list[list[Any]] = []
+    for source, target, kinds, labels in edges:
+        shown = set(kinds)
+        if shown & {"calls", "creates"}:
+            shown.discard("uses")
+        row: list[Any] = [
+            ids.setdefault(source, len(ids)),
+            ids.setdefault(target, len(ids)),
+            ",".join(sorted(shown)),
+        ]
+        if labels:
+            row.append(",".join(labels))
+        rows.append(row)
+    return {"ids": list(ids), "rows": rows}
 
 
 class CodeDependencies:

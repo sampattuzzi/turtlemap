@@ -1,6 +1,7 @@
 import { loadComments, startCommentWatch } from './comments/store.js';
 import { DIFF, setDiff } from './core/data.js';
 import { api, el } from './core/dom.js';
+import { reloadProject, stopWatching, watchProject } from './core/live.js';
 import { loadOverview } from './core/project.js';
 import { setSeen } from './core/review.js';
 import { applySettings } from './core/settings.js';
@@ -43,18 +44,23 @@ async function openProject(root) {
   }
   waitForProject();
 }
+let WAITING = 0;
 async function waitForProject() {
+  stopWatching();
+  const generation = ++WAITING;
   const started = Date.now();
   const tick = async () => {
     let status;
     try { status = await api('/api/status'); } catch (error) { showWelcome(error.message); return; }
+    if (generation !== WAITING) return;
     if (!status.open) { showWelcome(); return; }
     if (status.error) { showLoadError(status); return; }
     if (!status.ready) { showProgress(status, started); setTimeout(tick, 400); return; }
     try {
       await loadProject(status);
     } catch (error) { showWelcome(error.message); return; }
-    mount();
+    if (generation !== WAITING) return;
+    mount(status);
   };
   tick();
 }
@@ -81,13 +87,18 @@ async function loadProject(status) {
   loadOverview(await api('/api/project'));
   await loadComments();
 }
-function mount() {
+const LIVE = {
+  changed: async (status) => { await loadProject(status); if (explorerApi) await explorerApi.projectChanged(); },
+  elsewhere: () => waitForProject(),
+};
+function mount(status) {
   const app = document.getElementById('app');
   app.innerHTML = '';
   document.getElementById('measure').innerHTML = '';
   document.querySelectorAll('.popover, .palette').forEach((p) => p.remove());
-  explorerApi = new Explorer(app, { showWelcome, waitForProject });
+  explorerApi = new Explorer(app, { showWelcome, waitForProject, reload: () => reloadProject(LIVE).catch((error) => showWelcome(error.message)) });
   startCommentWatch();
+  watchProject(status, LIVE);
 }
 async function boot() {
   applySettings();

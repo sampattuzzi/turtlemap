@@ -54,17 +54,14 @@ function restoredEntry(entry) {
   const restore = RESTORERS.get(entry.view);
   return restore ? restore(entry, open) : null;
 }
-const RESTORERS = new Map([['fn', restoredFunction], ['data', restoredData], ['net', restoredMap]]);
+const RESTORERS = new Map([['fn', restoredFunction], ['net', restoredMap]]);
 function restoredFunction(entry, open) {
   const named = typeof entry.path === 'string' && typeof entry.sym === 'string';
   const sym = named ? lookup({ path: entry.path, sym: entry.sym }) : null;
   return sym && sym.kind === 'function' ? { view: 'fn', path: entry.path, sym: entry.sym, open } : null;
 }
-function restoredData(entry, open) {
-  return entry.scope === 'root' || net().nodes.has(entry.scope) ? { view: 'data', scope: entry.scope, open } : null;
-}
 function restoredMap(entry, open) {
   if (!Array.isArray(entry.expanded)) return null;
-  const known = (id) => typeof id === 'string' && net().nodes.has(id);
+  const known = (id) => typeof id === 'string' && net().allIds.has(id);
   return { view: 'net', expanded: new Set(entry.expanded.filter(known)), focus: known(entry.focus) ? entry.focus : null, related: known(entry.related) ? entry.related : null, open };
 }

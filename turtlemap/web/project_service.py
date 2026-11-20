@@ -23,6 +23,7 @@ class ProjectService:
         router.get("/api/open", self.open)
         router.get("/api/reload", self.reload)
         router.get("/api/project", self.overview)
+        router.get("/api/project/events", self.events)
         router.get("/api/function", self.function)
         router.get("/api/outline", self.outline)
         router.get("/api/capabilities", self.capabilities)
@@ -44,6 +45,11 @@ class ProjectService:
     def reload(self, request: Request) -> Response:
         self._host.reload()
         return json_response(self._host.status())
+
+    def events(self, request: Request) -> Response:
+        since = _number(request.query.get("since"))
+        wait = _number(request.query.get("wait"))
+        return json_response(self._host.wait_for_change(int(since), wait))
 
     def overview(self, request: Request) -> Response:
         data = self._host.session().overview_bytes
@@ -72,3 +78,10 @@ class ProjectService:
     def _shown(self) -> ProjectDiff | Project | None:
         session = self._host.session()
         return session.diff or session.project
+
+
+def _number(text: str | None) -> float:
+    try:
+        return float(text) if text is not None else 0.0
+    except ValueError:
+        return 0.0

@@ -23,8 +23,9 @@ or a recent one, on the start screen. To try it on itself, run
 | `--diff RANGE` | Highlight what changed in a git range ([see below](#comparing-git-revisions)) |
 | `--port N` | Use a fixed port instead of a free one |
 | `--no-open` | Print the address instead of opening your browser |
+| `--no-watch` | Don't redraw the map when source files change |
 
-## Three views
+## Two views
 
 ### The map
 
@@ -46,18 +47,33 @@ and **uses**.
 - **Select a module** to hide every module that is not linked to it.
   **✕ Show all** brings them back.
 - **Libraries** are one box each, and the standard library gets one box.
-- **Show** in the corner hides test files or constants.
 
 The code panel under the map shows the real source, folded to match what you
 have opened.
 
-### The data model
+### Filters
 
-Press **▦ Data** for an entity–relationship diagram of your dataclasses,
-models and enums.
+Press **⚲ Filter** to choose which kinds of box and line the map shows.
 
-- Each class lists its fields. A line joins a field to the class it holds.
-- The ends of each line show how many:
+- **Presets** set both at once:
+
+  | Preset | Boxes | Lines |
+  |---|---|---|
+  | Everything | all of them | all of them |
+  | Data | data classes, enums and their fields | has a field of, inherits, implements |
+  | Inheritance | classes, interfaces and type parameters | inherits, implements, stands for |
+  | Execution | functions, methods and the classes that hold them, libraries | calls, creates |
+
+- **Tick or untick** any kind of box or line, and the preset becomes
+  *Custom*. **↺** goes back to the preset you started from. Hover over a line
+  kind and press **only** to show just that kind.
+- **Click a line in the Key** to show or hide that kind too.
+- **Hidden boxes** are removed, and packages and modules shrink to what is
+  left. Choose **fade** to keep them in place, greyed out.
+- **Keep boxes a shown line touches** keeps a hidden box, faded, when a line
+  you show starts or ends there, so no line ends in nothing.
+- **Tests** hides test files and the libraries only they use.
+- **Has a field of** lines end in a mark for how many the field holds:
 
   | End | Means |
   |---|---|
@@ -65,10 +81,11 @@ models and enums.
   | Circle and bar | zero or one (`Optional`) |
   | Crow's foot | many (a list, set, tuple or dict) |
 
-- Classes that link to each other are grouped together.
-- The view opens on the package you were looking at. Pick another in the list
-  at the top.
-- A project with more than 250 data classes asks you to pick a package first.
+- Classes that only show fields open by themselves.
+- The chip in the corner says which filter is on. **✕** goes back to
+  Everything.
+- Finding a box the filter hides shows it anyway, until you change the filter.
+- Each project remembers its own filter.
 
 ### The blueprint
 
@@ -134,8 +151,19 @@ On the map, Balanced and Classic look the same.
 The first time you open a large project it takes a while to read. A monorepo of
 about 2,700 modules takes around 15 seconds.
 
-The result is cached in `~/.cache/turtlemap` until a file changes. Press
-**↻ Reload** after editing code. Blueprints are built when you open them.
+The map is built one file at a time and cached in `~/.cache/turtlemap`. Each
+file's piece remembers what it read while it was built: the other files, by a
+hash of their contents, and the answers it got when it looked a module up. When
+something changes, only the pieces whose inputs changed are rebuilt. Saving a
+file without changing it rebuilds nothing.
+
+While Turtlemap is open it watches the project. When you save a source file or a
+`tsconfig.json`, it rebuilds what that file reaches and redraws the map in
+place, keeping where you were looking, what you had open and what you had
+selected. On that monorepo an edit to a file few others use is on screen about a
+second later. An edit to a module that hundreds of others import takes a few
+seconds. **↻ Reload** does the same check on demand. Blueprints are built when
+you open them.
 
 ## Comparing git revisions
 

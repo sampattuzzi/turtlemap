@@ -9,6 +9,7 @@ from turtlemap.analysis.workspace.parsed import (
     ParsedModule,
     SymbolRef,
 )
+from turtlemap.analysis.workspace.reads import Keys
 from turtlemap.analysis.workspace.workspace import Workspace
 from turtlemap.languages.language import TypeNames
 
@@ -65,25 +66,28 @@ def clean_label(text: str) -> str:
 class TypeSystem:
     def __init__(self, workspace: Workspace) -> None:
         self.workspace = workspace
-        self._categories: dict[SymbolRef, str] = {}
-        self.field_cache: dict[SymbolRef, list[tuple[str, PinType, str | None]]] = {}
+        self._categories: dict[SymbolRef, tuple[str, Keys]] = {}
+        self.field_cache: dict[
+            SymbolRef, tuple[list[tuple[str, PinType, str | None]], Keys]
+        ] = {}
         self._computing: set[SymbolRef] = set()
 
     def resolver(self, module: ParsedModule) -> "TypeResolver":
         return TypeResolver(self, module)
 
     def class_category(self, ref: SymbolRef) -> str:
-        if ref in self._categories:
-            return self._categories[ref]
-        if ref in self._computing:
+        if ref in self._computing and ref not in self._categories:
             return "object"
+        return self.workspace.reads.remembered(
+            self._categories, ref, lambda: self._guarded_category(ref)
+        )
+
+    def _guarded_category(self, ref: SymbolRef) -> str:
         self._computing.add(ref)
         try:
-            category = self._compute_category(ref)
+            return self._compute_category(ref)
         finally:
             self._computing.discard(ref)
-        self._categories[ref] = category
-        return category
 
     def stereotype(self, ref: SymbolRef) -> str | None:
         parsed = self.workspace.parsed_class(ref)

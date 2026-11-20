@@ -1,25 +1,33 @@
 import { shapeSVG } from '../blueprint/nodes.js';
 import { DIFF, OVERVIEW } from '../core/data.js';
+import { LINE_KINDS } from '../core/filters.js';
 import { api, el } from '../core/dom.js';
 import { LAYOUT_CHOICES } from '../core/layout.js';
 import { SETTINGS_KEY, applySettings, saveSettings, settings } from '../core/settings.js';
 import { openPalette } from './palette.js';
 import { diffBadge } from '../map/boxes.js';
-function legendInto(container) {
-  container.append(el('div', { class: 'kind', style: 'font-size:0.72em;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-dim)' }, 'File diagram lines'));
-  const line = (kind, dashed, label) => container.append(el('div', { class: 'legend-row legend-line' }, el('span', { html: `<svg viewBox="0 0 46 12"><path d="M2,6 H38" style="stroke:var(--rel-${kind === 'realizes' ? 'inherits' : kind})" stroke-width="2" ${dashed ? 'stroke-dasharray="6 4"' : ''}/>${kind === 'inherits' || kind === 'realizes' || kind === 'bound' ? `<path d="M36,1 L45,6 L36,11 z" style="fill:var(--canvas);stroke:var(--rel-${kind === 'bound' ? 'bound' : 'inherits'})" stroke-width="1.4"/>` : `<path d="M37,1 L45,6 L37,11" style="fill:none;stroke:var(--rel-${kind})" stroke-width="1.6"/>`}${kind === 'has' ? '<path d="M1,6 L6,2.5 L11,6 L6,9.5 z" style="fill:var(--rel-has)"/>' : ''}</svg>` }), el('span', {}, label)));
+export function lineSample(kind) {
+  const dashed = LINE_KINDS.find((l) => l.key === kind).dashed;
+  return el('span', { class: 'line-sample', html: `<svg viewBox="0 0 46 12"><path d="M2,6 H38" style="stroke:var(--rel-${kind === 'realizes' ? 'inherits' : kind})" stroke-width="2" ${dashed ? 'stroke-dasharray="6 4"' : ''}/>${kind === 'inherits' || kind === 'realizes' || kind === 'bound' ? `<path d="M36,1 L45,6 L36,11 z" style="fill:var(--canvas);stroke:var(--rel-${kind === 'bound' ? 'bound' : 'inherits'})" stroke-width="1.4"/>` : `<path d="M37,1 L45,6 L37,11" style="fill:none;stroke:var(--rel-${kind})" stroke-width="1.6"/>`}${kind === 'has' ? '<path d="M1,6 L6,2.5 L11,6 L6,9.5 z" style="fill:var(--rel-has)"/>' : ''}</svg>` });
+}
+function legendInto(container, lineFilter) {
+  container.append(el('div', { class: 'kind', style: 'font-size:0.72em;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-dim)' }, 'Map lines', el('span', { style: 'text-transform:none;letter-spacing:0' }, ' · click one to show or hide it')));
+  for (const { key, legend } of LINE_KINDS) {
+    const box = el('input', { type: 'checkbox', onchange: (e) => lineFilter.toggle(key, e.target.checked) });
+    box.checked = lineFilter.shown(key);
+    container.append(el('label', { class: 'legend-row legend-line legend-toggle', title: 'Show or hide these lines on the map' }, box, lineSample(key), el('span', {}, legend)));
+  }
   if (DIFF) {
     container.append(el('div', { class: 'kind', style: 'font-size:0.72em;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-dim)' }, `Changes in ${DIFF.spec}`));
     for (const [state, text] of [['added', 'added'], ['removed', 'removed'], ['modified', 'changed, or something inside it changed']]) container.append(el('div', { class: 'legend-row' }, diffBadge(state), el('span', {}, text)));
   }
-  line('inherits', false, 'builds on (inherits)'); line('realizes', true, 'implements a protocol'); line('bound', false, 'type parameter stands for any of these'); line('has', false, 'has a field of that type'); line('creates', true, 'creates one'); line('calls', true, 'calls it'); line('uses', true, 'takes or returns it'); line('reads', true, 'reads a field (inside a class)'); line('writes', true, 'sets a field (inside a class)');
   container.append(el('div', { class: 'kind', style: 'font-size:0.72em;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-dim);margin-top:6px' }, 'Function view'));
   const rows = [['bool', 'bool'], ['int', 'int'], ['float', 'float'], ['str', 'str, Path'], ['enum', 'Enum'], ['struct', 'dataclass / model'], ['object', 'object'], ['map', 'dict, Mapping'], ['list', 'list, tuple'], ['callable', 'callable'], ['time', 'datetime'], ['none', 'None / unknown']];
   container.append(el('div', { class: 'legend-row' }, el('span', { class: 'shape', html: shapeSVG(null) }), el('span', {}, 'execution order ', el('small', {}, 'white wire'))));
   for (const [cat, code] of rows) container.append(el('div', { class: 'legend-row' }, el('span', { class: 'shape', html: shapeSVG({ cat }) }), el('small', {}, code)));
   container.append(el('div', { class: 'legend-row' }, el('span', { class: 'shape', html: shapeSVG({ cat: 'int' }, true, true) }), el('span', {}, 'the variable itself ', el('small', {}, 'dotted wire, to a variable that is set in one place and read or changed in another'))));
 }
-function popoverButton(label, cls, fill) {
+export function popoverButton(label, cls, fill) {
   const btn = el('button', { class: 'btn' }, label);
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -27,7 +35,7 @@ function popoverButton(label, cls, fill) {
     const r = btn.getBoundingClientRect();
     const pop = el('div', { class: `popover ${cls}`, style: `top:${r.bottom + 6}px; right:max(12px, ${window.innerWidth - r.right}px)`, onclick: (ev) => ev.stopPropagation() });
     fill(pop); document.body.append(pop);
-    if (pop.getBoundingClientRect().left < 12) { pop.style.right = 'auto'; pop.style.left = `${Math.max(12, r.left)}px`; }
+    if (pop.getBoundingClientRect().left < 12) { pop.style.right = 'auto'; pop.style.left = `${Math.max(12, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12))}px`; }
   });
   return btn;
 }
@@ -90,7 +98,7 @@ function shortSpec(spec) {
   const short = spec.replace(/\b[0-9a-f]{12,40}\b/g, (sha) => sha.slice(0, 8));
   return short.length > 32 ? `${short.slice(0, 31)}…` : short;
 }
-export function shell(root, { extraButtons, onPick, onSettings, onCompared }) {
+export function shell(root, { extraButtons, onPick, onSettings, onCompared, lineFilter }) {
   const crumbs = el('div', { class: 'crumbs' });
   const left = el('div', { class: 'panel left' });
   const right = el('div', { class: 'panel right' });
@@ -100,7 +108,7 @@ export function shell(root, { extraButtons, onPick, onSettings, onCompared }) {
     ...extraButtons,
     el('button', { class: 'btn', title: 'Find a file or symbol (/)', 'data-find': true, onclick: () => openPalette(onPick) }, '⌕ Find'),
     compareButton(onCompared),
-    crumbs, popoverButton('● Key', 'legend', legendInto), settingsButton(onSettings)));
+    crumbs, popoverButton('● Key', 'legend', (pop) => legendInto(pop, lineFilter)), settingsButton(onSettings)));
   const row = el('div', { class: 'body-row' });
   const vpHost = el('div', { class: 'viewport' });
   const bar = el('div', { class: 'resize-bar', title: 'Drag to resize the code panel' });

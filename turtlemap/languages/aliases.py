@@ -3,6 +3,8 @@ import os
 import re
 from pathlib import Path, PurePosixPath
 
+from turtlemap.analysis.workspace.reads import ReadLog
+
 _COMMENTS = re.compile(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', re.S)
 _TRAILING_COMMAS = re.compile(r",(\s*[}\]])")
 
@@ -10,8 +12,9 @@ Alias = tuple[str, tuple[str, ...]]
 
 
 class PathAliases:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, reads: ReadLog) -> None:
         self.root = root
+        self._reads = reads
         self._by_directory: dict[str, tuple[Alias, ...]] = {}
 
     def candidates(self, specifier: str, near: str) -> list[str]:
@@ -30,12 +33,20 @@ class PathAliases:
             directory = directory.parent
         return found
 
+    def fingerprint(self, directory: str) -> str:
+        return repr(self._aliases(directory))
+
     def _aliases(self, directory: str) -> tuple[Alias, ...]:
+        self._reads.note(alias_key(directory))
         cached = self._by_directory.get(directory)
         if cached is None:
             cached = _read_aliases(self.root / directory)
             self._by_directory[directory] = cached
         return cached
+
+
+def alias_key(directory: str) -> str:
+    return f"aliases:{directory}"
 
 
 def _read_aliases(directory: Path) -> tuple[Alias, ...]:

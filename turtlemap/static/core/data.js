@@ -1,3 +1,4 @@
+import { LINE_KINDS, filterNet, filterProject, kindCounts } from './filters.js';
 import { settings } from './settings.js';
 export let OVERVIEW = null;
 export let DIFF = null;
@@ -5,9 +6,9 @@ export let FILES = {};
 export const FUNCTIONS = new Map();
 export const fnKey = (ref) => `${ref.path}::${ref.sym}`;
 export function lookup(ref) { if (!ref) return null; const f = FILES[ref.path]; return f ? f.index[ref.sym] || null : null; }
-export const KIND_ORDER = ['inherits', 'realizes', 'bound', 'has', 'creates', 'calls', 'writes', 'reads', 'uses'];
+export const KIND_ORDER = LINE_KINDS.map((l) => l.key);
 let NET_CACHE = null;
-export function setProject(overview) { OVERVIEW = overview; FILES = {}; NET_CACHE = null; }
+export function setProject(overview) { OVERVIEW = overview; FILES = {}; NET_CACHE = null; filterProject(overview && overview.root); }
 export function setDiff(diff) { DIFF = diff; }
 export function clearNetCache() { NET_CACHE = null; }
 const TEST_PATH = /(^|\/)(tests?|testing|__tests__)\/|(^|\/)test_[^/]*\.py$|_test\.py$|\.(test|spec)\.[cm]?[jt]sx?$/;
@@ -18,9 +19,12 @@ export function net() {
   for (const path of Object.keys(FILES).sort()) if (settings.tests || !isTestPath(path)) addProjectFile(add, root, path);
   addLibraries(add, root);
   if (DIFF) settleDiffs(root);
-  const edges = netLinks(nodes);
-  if (!settings.tests) dropTestOnlyLibraries(root, nodes, edges);
-  NET_CACHE = { nodes, root, edges, chain: chainLookup(nodes) };
+  const allEdges = netLinks(nodes);
+  if (!settings.tests) dropTestOnlyLibraries(root, nodes, allEdges);
+  const counts = kindCounts(nodes, allEdges);
+  const allIds = new Set(nodes.keys());
+  const { edges, autoOpen } = filterNet(root, nodes, allEdges);
+  NET_CACHE = { nodes, root, edges, chain: chainLookup(nodes), counts, allIds, autoOpen };
   return NET_CACHE;
 }
 function netTree() {
@@ -47,7 +51,7 @@ function addProjectFile(add, root, path) {
     for (const [fname, ftype] of s.fields || []) add(`f:${path}:${s.qual}.${fname}`, 'field', fname, c, { type: ftype });
     for (const m of s.methods || []) add(`m:${path}:${m.qual}`, 'method', m.name, c, { sym: m });
   }
-  if (settings.constants) for (const [cn, ct, cv] of f.constants || []) add(`c:${path}:${cn}`, 'constant', cn, mod, { type: ct, value: cv });
+  for (const [cn, ct, cv] of f.constants || []) add(`c:${path}:${cn}`, 'constant', cn, mod, { type: ct, value: cv });
   for (const [tn, line, bound] of f.typeVars || []) add(`tv:${path}:${tn}`, 'typevar', tn, mod, { bound, line });
 }
 function addLibraries(add, root) {
