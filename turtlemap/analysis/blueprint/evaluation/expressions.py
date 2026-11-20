@@ -6,6 +6,7 @@ from turtlemap.analysis.blueprint.evaluation.attributes import AttributeReads
 from turtlemap.analysis.blueprint.callees import Callees
 from turtlemap.analysis.blueprint.evaluation.calls import Calls
 from turtlemap.analysis.blueprint.canvas import Flow
+from turtlemap.analysis.blueprint.evaluation.comprehensions import Comprehensions
 from turtlemap.analysis.blueprint.evaluation.constructions import Constructions
 from turtlemap.analysis.blueprint.evaluation.folding import Folding
 from turtlemap.analysis.blueprint.lookups import TypeLookups
@@ -51,6 +52,9 @@ class Expressions:
         self.operations = Operations(lookups, flow.graph, self.value, self._text)
         self.constructions = Constructions(
             self._profile, flow.graph, self.value, self._text
+        )
+        self.comprehensions = Comprehensions(
+            lookups, scope, flow.graph, self.value, self._text
         )
         self._handlers = self._expression_handlers()
         self.nested: Nested | None = None
@@ -107,7 +111,7 @@ class Expressions:
                 _on(m.Template, self.constructions.format_text),
                 _on(m.Sequence, self.constructions.sequence),
                 _on(m.Mapping, self.constructions.mapping),
-                _on(m.Comprehension, self._comprehension),
+                _on(m.Comprehension, self.comprehensions.value),
                 _on(m.Function, self._function_value),
                 _on(m.AssignExpr, self._assign_expression),
                 _on(m.Spread, self._inner),
@@ -123,12 +127,6 @@ class Expressions:
             self.value(expression.body),
             self.value(expression.orelse),
             expression.line,
-        )
-
-    def _comprehension(self, expression: m.Comprehension) -> Value:
-        title, label, cat = self._profile.comprehensions[expression.kind]
-        return self._opaque(
-            expression, title, PinType(label, cat), code=self._text(expression)
         )
 
     def _function_value(self, expression: m.Function) -> Value:

@@ -140,9 +140,13 @@ class Folding:
         if parts is None:
             value = self._evaluate(expression)
             if value.node is not None:
-                name = unused_name(
-                    shorten(self._module.language.text(expression), _INPUT_NAME_LIMIT),
-                    set(inputs),
+                text = shorten(
+                    self._module.language.text(expression), _INPUT_NAME_LIMIT
+                )
+                name = (
+                    text
+                    if inputs.get(text) == value
+                    else unused_name(text, set(inputs))
                 )
                 inputs[name] = value
                 leaves[expression] = name

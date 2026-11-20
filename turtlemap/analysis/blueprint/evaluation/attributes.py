@@ -29,6 +29,7 @@ class AttributeReads:
         self._attribute_counts = _attribute_counts(function)
         self._breaks: dict[_BaseKey, GraphNode] = {}
         self._getters: dict[tuple[_BaseKey, str], Value] = {}
+        self._fields: dict[tuple[_BaseKey, str], Value] = {}
 
     def read(self, expression: m.Member) -> Value:
         attributes, base = _split_attribute(expression)
@@ -154,10 +155,11 @@ class AttributeReads:
                 )
             self._graph.connect(node, base_name, base)
             self._breaks[key] = node
-        existing = node.output(attribute)
-        if existing is not None:
-            return Value(existing.type, node.id, existing.name)
-        return self._graph.output(node, attribute, pin_type, annotation)
+        read = self._fields.get((key, attribute))
+        if read is None:
+            read = self._graph.output(node, attribute, pin_type, annotation)
+            self._fields[(key, attribute)] = read
+        return read
 
 
 def _base_key(base: Value, frame: str | None) -> _BaseKey:

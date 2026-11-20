@@ -1,7 +1,8 @@
 import { layered } from './layout.js';
 const FRAME_PAD = 22;
 const LANE_PAD = 14;
-const FRAMES = new Set(['closure', 'loop', 'branch', 'lane']);
+const BAND_PAD = 6;
+const FRAMES = new Set(['closure', 'loop', 'branch', 'lane', 'comprehension']);
 const isFrame = (n) => FRAMES.has(n.kind);
 export function framedLayout(g, byId, remeasure) {
   if (!g.nodes.some(isFrame)) {
@@ -15,7 +16,7 @@ export function framedLayout(g, byId, remeasure) {
   const standIns = new Map();
   const standIn = (n) => {
     if (!isFrame(n)) return n;
-    if (!standIns.has(n)) standIns.set(n, n.kind === 'closure' ? { id: n.id, kind: 'closure', title: n.title, ins: [], outs: n.outs } : { id: n.id, kind: n.kind, title: n.title, ins: n.ins, outs: [], execIn: n.execIn, execOut: n.execOut });
+    if (!standIns.has(n)) standIns.set(n, n.kind === 'closure' ? { id: n.id, kind: 'closure', title: n.title, ins: [], outs: n.outs } : { id: n.id, kind: n.kind, title: n.title, ins: n.ins, outs: carriesResult(n) ? [n.outs[0]] : [], execIn: n.execIn, execOut: n.execOut });
     return standIns.get(n);
   };
   const contentOf = (frameId) => {
@@ -24,7 +25,7 @@ export function framedLayout(g, byId, remeasure) {
     return out;
   };
   const framesUnder = (frameId) => [frameId, ...(members.get(frameId) || []).filter(isFrame).flatMap((n) => framesUnder(n.id))];
-  const headerPin = (frame, pin) => frame.kind === 'closure' && pin === frame.outs[0].name;
+  const headerPin = (frame, pin) => (frame.kind === 'closure' || carriesResult(frame)) && pin === frame.outs[0].name;
   const shiftContent = (frameId, dx, dy) => {
     for (const n of contentOf(frameId)) { const v = byId.get(n); v.x += dx; v.y += dy; }
     for (const f of framesUnder(frameId)) for (const d of frameDummies.get(f) || []) { d.x += dx; d.y += dy; }
@@ -108,11 +109,20 @@ export function framedLayout(g, byId, remeasure) {
     const h = Math.max(fv.headH + (frame.kind === 'lane' ? 10 : 0), ...boxes.map((b) => b.y + b.h + pad));
     fv.el.style.width = `${w}px`; fv.el.style.height = `${h}px`;
     remeasure(fv);
+    const band = frame.kind === 'comprehension' && own.find((n) => n.kind === 'collect');
+    if (band) alongRightEdge(byId.get(band), w, h, fv.headH, remeasure);
   };
   layoutFrame('');
   const dummies = [...frameDummies.values()].flat();
   return { routes, dummies, routeKey: (e) => routeKeys.get(e) };
 }
+function alongRightEdge(view, width, height, top, remeasure) {
+  view.el.firstChild.style.paddingTop = `${view.y - top + BAND_PAD}px`;
+  view.el.style.height = `${height - top}px`;
+  view.x = width - view.w; view.y = top;
+  remeasure(view);
+}
+const carriesResult = (n) => n.kind === 'comprehension' && Boolean(n.badge);
 function plainRouteKey(e) { return e.tp === undefined ? `${e.from.id}|${e.fp}|${e.to.id}|exec-in` : `${e.from.id}|out:${e.fp}|${e.to.id}|in:${e.tp}`; }
 function frameOf(n, byNodeId) { return n.parent && byNodeId.has(n.parent) ? n.parent : ''; }
 function pushTo(map, key, value) { if (!map.has(key)) map.set(key, []); map.get(key).push(value); }

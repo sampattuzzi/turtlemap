@@ -169,6 +169,12 @@ button { cursor: pointer; }
 .node.k-loop .head { border-radius: 10px 10px 0 0; min-height: 28px; background: color-mix(in srgb, var(--hc) 72%, transparent); }
 .node.k-loop .strip { display: flex; align-items: center; justify-content: flex-start; gap: 14px; padding: 4px 0 5px 12px; background: color-mix(in srgb, var(--h-loop) 30%, var(--node-body)); }
 .node.k-loop .strip .pin:last-child { margin-left: 4px; }
+.node.k-comprehension > .frame-box { background: color-mix(in srgb, var(--h-loop) 7%, transparent); border: 1.5px dashed color-mix(in srgb, var(--h-loop) 85%, var(--node-fg) 15%); border-radius: 12px; }
+.node.k-comprehension .head { border-radius: 10px 10px 0 0; min-height: 28px; gap: 6px; background: color-mix(in srgb, var(--hc) 72%, transparent); }
+.node.k-comprehension .head .badge { font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,0.25); }
+.node.k-comprehension .strip { display: flex; align-items: center; gap: 14px; min-height: 8px; padding: 4px 0 5px 12px; background: color-mix(in srgb, var(--h-loop) 30%, var(--node-body)); }
+.node.k-collect > .band { height: 100%; box-sizing: border-box; box-shadow: none; border: none; border-left: 1px solid color-mix(in srgb, var(--h-loop) 60%, transparent); border-radius: 0 0 11px 0; background: color-mix(in srgb, var(--h-loop) 30%, var(--node-body)); padding: 6px 12px 6px 0; }
+.node.k-collect .col { display: flex; flex-direction: column; gap: 4px; }
 .node.k-branch > .frame-box { background: color-mix(in srgb, var(--h-lane) 5%, transparent); border: 1.5px solid var(--h-lane); border-radius: 10px; }
 .node.k-branch .head { border-radius: 8px 8px 0 0; background: color-mix(in srgb, var(--h-lane) 55%, var(--node-body)); }
 .node.k-lane > .frame-box { background: none; border: none; border-top: 1.5px dashed color-mix(in srgb, var(--h-lane) 60%, transparent); border-radius: 0; display: flex; flex-direction: column; align-items: flex-start; }

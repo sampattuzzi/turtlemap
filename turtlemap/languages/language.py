@@ -42,6 +42,14 @@ class Syntax:
 
 
 @dataclass(frozen=True)
+class ComprehensionShape:
+    badge: str
+    label: str
+    cat: str
+    results: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class TypeNames:
     scalars: Mapping[str, str]
     lists: frozenset[str]
@@ -83,7 +91,7 @@ class Profile:
     receiver_names: frozenset[str]
     instance_receiver: str
     constructor_name: str
-    comprehensions: Mapping[str, tuple[str, str, str]]
+    comprehensions: Mapping[str, ComprehensionShape]
     types: TypeNames
     super_name: str = "super"
     default_exception: str = "Exception"

@@ -118,7 +118,7 @@ PRICING_MODULE = """
 """
 
 
-FRAME_KINDS = ("closure", "loop", "branch", "lane")
+FRAME_KINDS = ("closure", "loop", "branch", "lane", "comprehension")
 
 
 def make_workspace(
@@ -1430,3 +1430,145 @@ def test_reaches_a_list_built_up_in_a_loop_by_reference(tmp_path: Path) -> None:
         "found",
     )
     assert "cell" not in input_pin(the_node(graph, "log.info"), "self")
+
+
+def test_draws_a_generator_as_a_pure_frame_that_takes_its_results_back(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        from dataclasses import dataclass
+
+        @dataclass
+        class Valve:
+            zeta: float
+
+        def total(valves: list[Valve]) -> float:
+            return sum(valve.zeta for valve in valves)
+    """,
+        "total",
+    )
+
+    frame = the_node(graph, "valve in valves")
+    zeta = the_node(graph, "Break Valve")
+    results = the_node(graph, "Results")
+    entry = nodes_of_kind(graph, "entry")[0]
+    assert graph["exec"] == []
+    assert frame["kind"] == "comprehension"
+    assert frame["badge"] == "Generator"
+    assert "execOuts" not in frame and "execIn" not in frame
+    assert source_of(graph, frame, "items") == (entry["id"], "valves")
+    assert [(pin["name"], pin["type"]["label"]) for pin in frame["outs"]] == [
+        ("", "Iterator[float]"),
+        ("valve", "Valve"),
+    ]
+    assert zeta["parent"] == results["parent"] == frame["id"]
+    assert source_of(graph, zeta, "valve") == (frame["id"], "valve")
+    assert source_of(graph, results, "yield") == (zeta["id"], "zeta")
+    assert source_of(graph, the_node(graph, "sum"), "arg1") == (frame["id"], "")
+
+
+def test_wires_each_filter_into_a_keep_if_pin_of_the_results(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def names(people: list[str], banned: set[str]) -> list[str]:
+            return [person for person in people if person not in banned if person]
+    """,
+        "names",
+    )
+
+    frame = the_node(graph, "person in people")
+    results = the_node(graph, "Results")
+    assert frame["badge"] == "List"
+    assert frame["outs"][0]["type"]["label"] == "list[str]"
+    assert [pin["name"] for pin in results["ins"]] == ["item", "keep if", "keep if 2"]
+    assert [pin["type"]["label"] for pin in results["ins"][1:]] == ["bool", "bool"]
+    assert source_of(graph, results, "item") == (frame["id"], "person")
+    assert source_of(graph, results, "keep if 2") == (frame["id"], "person")
+
+
+def test_gives_a_dict_comprehension_a_key_and_a_value_pin(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def lengths(words: list[str]) -> dict[str, int]:
+            return {word: len(word) for word in words}
+    """,
+        "lengths",
+    )
+
+    frame = the_node(graph, "word in words")
+    results = the_node(graph, "Results")
+    assert frame["badge"] == "Dict"
+    assert [pin["name"] for pin in results["ins"]] == ["key", "value"]
+    assert source_of(graph, results, "key") == (frame["id"], "word")
+
+
+def test_nests_a_frame_for_each_further_for_clause(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def doubled(grid: list[list[int]], limit: int) -> list[int]:
+            return [cell * 2 for row in grid if row for cell in row if cell < limit]
+    """,
+        "doubled",
+    )
+
+    outer = the_node(graph, "row in grid")
+    inner = the_node(graph, "cell in row")
+    entry = nodes_of_kind(graph, "entry")[0]
+    assert inner["parent"] == outer["id"]
+    assert "badge" not in inner
+    assert [pin["name"] for pin in inner["outs"]] == ["cell"]
+    assert source_of(graph, inner, "items") == (outer["id"], "row")
+    assert the_node(graph, "Filter")["parent"] == outer["id"]
+    results = the_node(graph, "Results")
+    assert results["parent"] == inner["id"]
+    assert [pin["name"] for pin in results["ins"]] == ["item", "keep if"]
+    assert source_of(graph, the_node(graph, "<"), "b") == (entry["id"], "limit")
+
+
+def test_keeps_a_comprehension_variable_inside_its_frame(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def shout(name: str, names: list[str]) -> str:
+            loud = [name.upper() for name in names]
+            return name + str(len(loud))
+    """,
+        "shout",
+    )
+
+    entry = nodes_of_kind(graph, "entry")[0]
+    frame = the_node(graph, "name in names")
+    assert source_of(graph, the_node(graph, "name.upper"), "self") == (
+        frame["id"],
+        "name",
+    )
+    assert source_of(graph, the_node(graph, "Calculate"), "name") == (
+        entry["id"],
+        "name",
+    )
+
+
+def test_gives_a_field_read_twice_in_a_calculation_one_input(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        from dataclasses import dataclass
+
+        @dataclass
+        class Valve:
+            zeta: float | None
+
+        def zetas(valves: list[Valve], fallback: float) -> list[float]:
+            return [fallback if x.zeta is None else x.zeta for x in valves]
+    """,
+        "zetas",
+    )
+
+    calculation = the_node(graph, "Calculate")
+    assert [pin["name"] for pin in calculation["ins"]] == ["x.zeta", "fallback"]
+    assert calculation["expr"] == ["fallback if x.zeta is None else x.zeta"]

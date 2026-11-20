@@ -43,8 +43,9 @@ export const KIND = {
   select: ['--h-select', 'Pick one value'], branch: ['--h-branch', 'Branch'], return: ['--h-return', 'Give back'], raise: ['--h-raise', 'Raise an error'], set: ['--h-set', 'Store a value'],
   get: ['--h-var', 'Read a variable now'], closure: ['--h-closure', 'A function made here'],
   lane: ['--h-lane', 'One way through the branch'], jump: ['--h-raise', 'Leave this pass of the loop'],
+  comprehension: ['--h-loop', 'Builds a collection, one element at a time'], collect: ['--h-loop', 'What each element gives back'],
 };
-const FRAME_KINDS = new Set(['closure', 'loop', 'branch', 'lane']);
+const FRAME_KINDS = new Set(['closure', 'loop', 'branch', 'lane', 'comprehension']);
 export const isFrame = (n) => FRAME_KINDS.has(n.kind);
 function targetChanged(n) {
   if (!DIFF || !n.target || n.kind === 'entry') return false;
@@ -86,6 +87,23 @@ function closureEl(n, connectedOuts, state) {
   wrap.append(el('div', { class: 'box closure-frame' }, head, strip));
   return wrap;
 }
+function comprehensionEl(n, connectedIns, connectedOuts, state) {
+  const [result, ...elements] = n.badge ? n.outs : [null, ...n.outs];
+  const wrap = el('div', { class: `k-frame k-comprehension${state ? ` diff-${state}` : ''}`, 'data-node': n.id });
+  const head = el('div', { class: 'head', style: '--hc: var(--h-loop)' }, diffBadge(state),
+    n.ins.map((p) => pinEl('in', `in:${p.name}`, p.name, p.type, { lit: p.lit, connected: connectedIns.has(p.name) || p.lit != null, diff: p.diff })),
+    n.badge ? el('span', { class: 'badge' }, n.badge) : null,
+    el('span', { class: 'title' }, plain(n.title)),
+    el('span', { class: 'grow' }),
+    result ? [el('span', { class: 'tag' }, result.type.label), pinEl('out', `out:${result.name}`, result.name, result.type, { connected: connectedOuts.has(result.name), diff: result.diff })] : null);
+  const strip = el('div', { class: 'strip' }, elements.map((o) => pinEl('out', `out:${o.name}`, o.name, o.type, { connected: connectedOuts.has(o.name), diff: o.diff })));
+  wrap.append(el('div', { class: 'box frame-box' }, head, strip));
+  return wrap;
+}
+function collectEl(n, connectedIns, state) {
+  const pins = el('div', { class: 'col in' }, n.ins.map((p) => pinEl('in', `in:${p.name}`, p.name, p.type, { lit: p.lit, connected: connectedIns.has(p.name) || p.lit != null, diff: p.diff })));
+  return el('div', { class: `k-collect${state ? ` diff-${state}` : ''}`, 'data-node': n.id, title: KIND.collect[1] }, el('div', { class: 'box band' }, pins));
+}
 function frameEl(n, connectedIns, connectedOuts, state, path) {
   const wrap = el('div', { class: `k-frame k-${n.kind}${state ? ` diff-${state}` : ''}`, 'data-node': n.id });
   const head = el('div', { class: 'head', style: `--hc: var(${KIND[n.kind][0]})` }, diffBadge(state));
@@ -111,6 +129,8 @@ function frameEl(n, connectedIns, connectedOuts, state, path) {
 function nodeEl(n, ctx, connectedIns, connectedOuts, path) {
   const state = n.diff || (targetChanged(n) ? 'modified' : null);
   if (n.kind === 'closure') return closureEl(n, connectedOuts, state);
+  if (n.kind === 'comprehension') return comprehensionEl(n, connectedIns, connectedOuts, state);
+  if (n.kind === 'collect') return collectEl(n, connectedIns, state);
   if (isFrame(n)) return frameEl(n, connectedIns, connectedOuts, state, path);
   const wrap = el('div', { class: `k-${n.kind}${state ? ` diff-${state}` : ''}`, 'data-node': n.id });
   const box = el('div', { class: 'box' });
@@ -173,10 +193,10 @@ export function buildFunctionScene(fnSym, ctx) {
 }
 function crumbsAt(scene, view) {
   const x = view.x + view.w / 2, y = view.y + view.h / 2;
-  const around = scene.nodes.filter((v) => ['loop', 'lane', 'closure'].includes(v.data.kind) && x >= v.x && x <= v.x + v.w && y >= v.y && y <= v.y + v.h).sort((a, b) => b.w * b.h - a.w * a.h);
+  const around = scene.nodes.filter((v) => ['loop', 'lane', 'closure', 'comprehension'].includes(v.data.kind) && x >= v.x && x <= v.x + v.w && y >= v.y && y <= v.y + v.h).sort((a, b) => b.w * b.h - a.w * a.h);
   const inner = around[around.length - 1];
   if (!inner || (inner.y >= view.y && inner.x >= view.x)) return null;
-  return around.map((v) => el('div', { class: `crumb-line crumb-${v.data.kind}` }, v.data.kind === 'loop' ? '↻ ' : v.data.kind === 'lane' ? '↳ ' : 'ƒ ', plain(v.data.reach || v.data.title)));
+  return around.map((v) => el('div', { class: `crumb-line crumb-${v.data.kind}` }, v.data.kind === 'loop' || v.data.kind === 'comprehension' ? '↻ ' : v.data.kind === 'lane' ? '↳ ' : 'ƒ ', plain(v.data.reach || v.data.title)));
 }
 function connectedPins(edges, nodeOf, pinOf) {
   const connected = new Map();

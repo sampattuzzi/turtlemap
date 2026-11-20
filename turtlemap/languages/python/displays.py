@@ -64,22 +64,20 @@ class DisplayLowering:
 
     def comprehension(self, node: ast.expr) -> m.Expr:
         line, end = span(node)
-        heads: list[m.Node]
+        results: list[m.Expr]
         if isinstance(node, ast.DictComp):
-            heads = [self.expr(node.key), self.expr(node.value)]
-            generators = node.generators
+            results = [self.expr(node.key), self.expr(node.value)]
         else:
             assert isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp))
-            heads = [self.expr(node.elt)]
-            generators = node.generators
-        clauses: list[m.Node] = [
-            m.OtherExpr(
+            results = [self.expr(node.elt)]
+        generators = node.generators
+        clauses = [
+            m.ComprehensionClause(
                 *span(generator.iter),
-                [
-                    self.expr(generator.target),
-                    self.expr(generator.iter),
-                    *(self.expr(condition) for condition in generator.ifs),
-                ],
+                self.expr(generator.target),
+                self.expr(generator.iter),
+                [self.expr(condition) for condition in generator.ifs],
+                bool(generator.is_async),
                 origin=generator,
             )
             for generator in generators
@@ -94,7 +92,8 @@ class DisplayLowering:
             line,
             end,
             _COMPREHENSION_KINDS[type(node)],
-            [*heads, *clauses],
+            results,
+            clauses,
             bound,
             origin=node,
         )

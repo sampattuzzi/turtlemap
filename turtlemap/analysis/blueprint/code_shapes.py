@@ -1,4 +1,7 @@
+from collections.abc import Callable
+
 from turtlemap.analysis import model as m
+from turtlemap.analysis.blueprint.text import LABEL_LIMIT, shorten
 
 
 def is_literal_expression(expression: m.Expr | None) -> bool:
@@ -20,6 +23,16 @@ def is_literal_expression(expression: m.Expr | None) -> bool:
             key is not None and is_literal_expression(key) for key in expression.keys
         ) and all(is_literal_expression(value) for value in expression.values)
     return False
+
+
+def target_label(
+    target: m.Expr, spread_prefix: str, text: Callable[[m.Node], str]
+) -> str:
+    if isinstance(target, m.Name):
+        return target.id
+    if isinstance(target, m.Spread):
+        return f"{spread_prefix}{target_label(target.value, spread_prefix, text)}"
+    return shorten(text(target), LABEL_LIMIT)
 
 
 def assigned_names(target: m.Expr) -> list[str] | None:

@@ -1,7 +1,7 @@
 import builtins
 import sys
 
-from turtlemap.languages.language import Profile, Syntax
+from turtlemap.languages.language import ComprehensionShape, Profile, Syntax
 from turtlemap.languages.python.type_names import PYTHON_TYPES
 
 _STR = ("str", "str")
@@ -325,10 +325,10 @@ PYTHON_PROFILE = Profile(
     instance_receiver="self",
     constructor_name="__init__",
     comprehensions={
-        "list": ("List comprehension", "list", "list"),
-        "set": ("Set comprehension", "set", "list"),
-        "dict": ("Dict comprehension", "dict", "map"),
-        "generator": ("Generator", "list", "list"),
+        "list": ComprehensionShape("List", "list", "list", ("item",)),
+        "set": ComprehensionShape("Set", "set", "list", ("item",)),
+        "dict": ComprehensionShape("Dict", "dict", "map", ("key", "value")),
+        "generator": ComprehensionShape("Generator", "Iterator", "list", ("yield",)),
     },
     types=PYTHON_TYPES,
     sequence_kinds={"tuple": _TUPLE, "list": _LIST, "set": _SET},

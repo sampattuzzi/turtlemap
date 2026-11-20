@@ -3,14 +3,10 @@ from turtlemap.analysis.types import (
     UNKNOWN,
 )
 from turtlemap.analysis import model as m
-from turtlemap.analysis.blueprint.text import (
-    shorten,
-    pin_name,
-)
+from turtlemap.analysis.blueprint.text import pin_name
 from turtlemap.analysis.blueprint.values import BOOL, Value
 from turtlemap.analysis.blueprint.code_shapes import assigned_names
-from turtlemap.analysis.blueprint.code_shapes import flat_targets
-from turtlemap.analysis.blueprint.text import LABEL_LIMIT
+from turtlemap.analysis.blueprint.code_shapes import flat_targets, target_label
 from turtlemap.analysis.blueprint.statements.context import BuildContext
 from turtlemap.analysis.blueprint.canvas import Pin
 from turtlemap.analysis.blueprint.variables import (
@@ -296,13 +292,9 @@ class Bindings:
         self.context.flow.resume([])
 
     def target_label(self, target: m.Expr) -> str:
-        if isinstance(target, m.Name):
-            return target.id
-        if isinstance(target, m.Spread):
-            return (
-                f"{self.context.profile.spread_prefix}{self.target_label(target.value)}"
-            )
-        return shorten(self.context.text(target), LABEL_LIMIT)
+        return target_label(
+            target, self.context.profile.spread_prefix, self.context.text
+        )
 
 
 def _step_title(text: str) -> str | None:

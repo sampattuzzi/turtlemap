@@ -104,6 +104,12 @@ blueprints.
 - **Loops** are frames too, like a callback: items come in on the header, each
   item and the start ▶ come out of the strip below it, and **then** carries on
   once the loop is done.
+- **Comprehensions and generator expressions** are pure loop frames, with no ▶.
+  Items come in on the header and each element comes out of the strip. The body
+  wires back into a band on the frame's right edge (`item`, `yield`, or `key`
+  and `value`, plus a `keep if` for each `if`), and the finished list, set,
+  dict or generator leaves from the header's right. Each further `for` is a
+  frame inside the one before.
 - **An `if`, `match` or `switch`** is a frame of stacked lanes, one per arm,
   each headed by its condition. A lane starts at the ▶ on its top-left, and
   **then** carries on after the branch. Only `a if c else b` becomes a Select.

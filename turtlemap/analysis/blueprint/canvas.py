@@ -15,10 +15,10 @@ MAX_NODES = 250
 _TITLE_LIMIT = 60
 
 
-FRAME_KINDS = frozenset({"closure", "loop", "branch", "lane"})
+FRAME_KINDS = frozenset({"closure", "loop", "branch", "lane", "comprehension"})
 
 
-STRIP_KINDS = frozenset({"closure", "loop", "lane"})
+STRIP_KINDS = frozenset({"closure", "loop", "lane", "comprehension"})
 
 
 _NOTE_LIMIT = 160
@@ -58,9 +58,16 @@ class GraphNode:
     expression: list[str] | None = None
     parent: str | None = None
     reach: str | None = None
+    badge: str | None = None
 
     def output(self, name: str) -> Pin | None:
         return next((pin for pin in self.outs if pin.name == name), None)
+
+    def header_output(self) -> str | None:
+        carries_result = self.kind == "closure" or (
+            self.kind == "comprehension" and self.badge is not None
+        )
+        return self.outs[0].name if carries_result and self.outs else None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -91,6 +98,8 @@ class GraphNode:
             out["parent"] = self.parent
         if self.reach is not None:
             out["reach"] = self.reach
+        if self.badge is not None:
+            out["badge"] = self.badge
         return out
 
 
@@ -124,9 +133,8 @@ class Graph:
         if value.node is None:
             return self.frame
         node = self._by_id[value.node]
-        if node.kind in STRIP_KINDS and not (
-            node.kind == "closure" and node.outs and node.outs[0].name == value.pin
-        ):
+        header = node.header_output()
+        if node.kind in STRIP_KINDS and (header is None or header != value.pin):
             return node.id
         return node.parent
 

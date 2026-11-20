@@ -127,9 +127,18 @@ class Template(Expr):
 
 
 @dataclass(eq=False)
+class ComprehensionClause(Node):
+    target: Expr
+    iterable: Expr
+    conditions: list[Expr]
+    is_async: bool = False
+
+
+@dataclass(eq=False)
 class Comprehension(Expr):
     kind: str
-    parts: list[Node]
+    results: list[Expr]
+    clauses: list[ComprehensionClause]
     bound: list[str]
 
 

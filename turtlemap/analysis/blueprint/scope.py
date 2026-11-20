@@ -1,5 +1,5 @@
-from collections.abc import Callable
-
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 
 from turtlemap.analysis.blueprint.callees import external_name
@@ -48,6 +48,18 @@ class Scope:
 
     def bind(self, name: str, value: Value) -> None:
         self.env[name] = value
+
+    @contextmanager
+    def local_bindings(self, names: Iterable[str]) -> Iterator[None]:
+        saved = dict(self.env)
+        hidden = {
+            name: self._declared.pop(name) for name in names if name in self._declared
+        }
+        try:
+            yield
+        finally:
+            self.env = saved
+            self._declared.update(hidden)
 
     def forget(self, name: str) -> None:
         self.env.pop(name, None)
