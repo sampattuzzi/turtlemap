@@ -61,12 +61,17 @@ export class Explorer {
     if (ref.folder) { this.goToFolder(ref.folder); return; }
     const sym = ref.sym ? lookup(ref) : null;
     if (sym && sym.kind === 'function') { this.open({ view: 'fn', path: ref.path, sym: ref.sym, open: new Set() }); return; }
-    const target = ref.sym ? `cls:${ref.path}:${ref.sym}` : `mod:${ref.path}`;
+    if (ref.sym) { this.showOnMap(`cls:${ref.path}:${ref.sym}`); return; }
+    const target = `mod:${ref.path}`;
     revealHidden([target]);
+    this.open({ view: 'net', expanded: netDefaultExpanded(ref.path), focus: target, related: focusUnitOf(target), open: new Set() }, target);
+  }
+  showOnMap(id) {
+    setCommentPick(null);
+    revealHidden([id]);
     const expanded = new Set(this.trail.lastMap().expanded);
-    if (!ref.sym) { expanded.clear(); netDefaultExpanded(ref.path).forEach((x) => expanded.add(x)); }
-    else { net().chain(target).slice(1).forEach((x) => expanded.add(x.id)); }
-    this.open({ view: 'net', expanded, focus: target, related: focusUnitOf(target), open: new Set() }, ref.sym ? target : null);
+    net().chain(id).slice(1).forEach((x) => expanded.add(x.id));
+    this.open({ view: 'net', expanded, focus: id, related: focusUnitOf(id), open: new Set() }, id);
   }
   goToFolder(folder) {
     const target = `pkg:${folder}`;
@@ -127,6 +132,7 @@ export class Explorer {
     return {
       refresh: () => { if (this.trail.current.view !== 'fn') this.panel(); },
       go: this.goTo,
+      show: (id) => this.showOnMap(id),
       toggle: (id) => this.toggleNet(id),
       select: (id) => {
         this.trail.selected = id;
