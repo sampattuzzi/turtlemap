@@ -5,6 +5,7 @@ import { reloadProject, stopWatching, watchProject } from './core/live.js';
 import { loadOverview } from './core/project.js';
 import { setSeen } from './core/review.js';
 import { applySettings } from './core/settings.js';
+import { watchForUpdates } from './core/updates.js';
 import { Explorer } from './explorer/explorer.js';
 let explorerApi = null;
 document.addEventListener('keydown', (e) => {
@@ -102,6 +103,7 @@ function mount(status) {
 }
 async function boot() {
   applySettings();
+  watchForUpdates();
   try {
     const status = await api('/api/status');
     if (!status.open) showWelcome(); else waitForProject();
