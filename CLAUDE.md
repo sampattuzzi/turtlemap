@@ -16,6 +16,12 @@ poetry run turtlemap .
 [.github/workflows/ci.yml](.github/workflows/ci.yml) is the source of truth for
 what CI runs.
 
+## Branches
+
+Work on `main`: commit there, and push `main` when the work is done. If a
+session starts you on another branch, merge that branch into `main` when the
+work is done and push `main`.
+
 ## Conventions
 
 - **No comments or docstrings** in code you add. Make the code explain itself
