@@ -1,0 +1,30 @@
+name: macos-check
+
+on:
+  push:
+    branches: [claude/nice-ritchie-nygn3y]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install poetry
+        run: pipx install poetry==1.8.2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "poetry"
+      - run: poetry install --with dev
+      - run: poetry run mypy .
+      - run: poetry run pytest tests -v -k "self_update or self_restart"
+      - run: poetry run pytest tests
