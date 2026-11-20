@@ -25,15 +25,17 @@ def source_files_under(root: Path) -> list[str]:
     found: list[str] = []
     for directory, subdirectories, filenames in os.walk(root):
         subdirectories[:] = [
-            name
-            for name in subdirectories
-            if not name.startswith(".") and name not in EXCLUDED_DIRECTORIES
+            name for name in subdirectories if not is_ignored_folder(name)
         ]
         for filename in filenames:
             relative = Path(directory, filename).relative_to(root).as_posix()
             if is_source(relative):
                 found.append(relative)
     return found
+
+
+def is_ignored_folder(name: str) -> bool:
+    return name.startswith(".") or name in EXCLUDED_DIRECTORIES
 
 
 def is_source(path: str) -> bool:

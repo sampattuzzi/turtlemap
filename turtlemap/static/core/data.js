@@ -8,7 +8,31 @@ export const fnKey = (ref) => `${ref.path}::${ref.sym}`;
 export function lookup(ref) { if (!ref) return null; const f = FILES[ref.path]; return f ? f.index[ref.sym] || null : null; }
 export const KIND_ORDER = LINE_KINDS.map((l) => l.key);
 let NET_CACHE = null;
-export function setProject(overview) { OVERVIEW = overview; FILES = {}; NET_CACHE = null; filterProject(overview && overview.root); }
+let EDGES = new Map();
+export function setProject(overview) { OVERVIEW = overview; FILES = {}; EDGES = edgesByFile(overview.edges); NET_CACHE = null; filterProject(overview && overview.root); }
+export function patchProject(changes) {
+  const touched = new Set([...changes.rebuilt, ...changes.removed]);
+  for (const path of touched) { delete FILES[path]; EDGES.delete(path); }
+  for (const [path, rows] of edgesByFile(changes.edges)) EDGES.set(path, rows);
+  OVERVIEW.modules = [...OVERVIEW.modules.filter((m) => !touched.has(m.path)), ...changes.modules];
+  OVERVIEW.failures = [...OVERVIEW.failures.filter((f) => !touched.has(f.path)), ...changes.failures];
+  OVERVIEW.libraries = changes.libraries;
+  NET_CACHE = null;
+  return touched;
+}
+function link(from, to, kindList, labels) {
+  const kinds = new Set(kindList.split(',').filter(Boolean));
+  return { from, to, kinds, labels: new Set(labels ? labels.split(',') : []), kind: KIND_ORDER.find((k) => kinds.has(k)) };
+}
+function edgesByFile(table) {
+  const byFile = new Map();
+  let at = 0;
+  for (const [path, count] of table.files || []) {
+    byFile.set(path, table.rows.slice(at, at + count).map((row) => link(table.ids[row[0]], table.ids[row[1]], row[2], row[3])));
+    at += count;
+  }
+  return byFile;
+}
 export function setDiff(diff) { DIFF = diff; }
 export function clearNetCache() { NET_CACHE = null; }
 const TEST_PATH = /(^|\/)(tests?|testing|__tests__)\/|(^|\/)test_[^/]*\.py$|_test\.py$|\.(test|spec)\.[cm]?[jt]sx?$/;
@@ -74,13 +98,7 @@ function settleDiffs(n) {
 }
 function netLinks(nodes) {
   const list = [];
-  const ids = OVERVIEW ? OVERVIEW.edges.ids : [];
-  for (const row of OVERVIEW ? OVERVIEW.edges.rows : []) {
-    const from = ids[row[0]], to = ids[row[1]];
-    if (!nodes.has(from) || !nodes.has(to)) continue;
-    const kinds = new Set(row[2].split(',').filter(Boolean));
-    list.push({ from, to, kinds, labels: new Set(row[3] ? row[3].split(',') : []), kind: KIND_ORDER.find((k) => kinds.has(k)) });
-  }
+  for (const path of [...EDGES.keys()].sort()) for (const e of EDGES.get(path)) if (nodes.has(e.from) && nodes.has(e.to)) list.push(e);
   return list;
 }
 function chainLookup(nodes) {

@@ -27,8 +27,8 @@ export async function reloadProject(handlers) {
   else liveNote('The map already matches the code');
 }
 async function show(status, changed) {
-  SHOWN.revision = status.revision;
-  await changed(status);
+  await changed(status, SHOWN.revision);
+  SHOWN.revision = Math.max(SHOWN.revision, status.revision);
   liveNote(updateText(status));
 }
 function sameProject(status) {

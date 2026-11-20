@@ -1,6 +1,6 @@
 import threading
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -69,18 +69,23 @@ class Project:
         self.types = TypeSystem(self.workspace)
         self._lock = threading.RLock()
         self._overview: dict[str, Any] | None = None
+        self._pieces: tuple[Sequence[Piece], float] | None = None
 
     def overview(self) -> dict[str, Any]:
         with self._lock:
             if self._overview is None:
                 started = time.perf_counter()
-                pieces = self.pieces(self.workspace.index.files)
-                self._overview = self.assemble(pieces, time.perf_counter() - started)
+                pieces, seconds = self._pieces or (
+                    self.pieces(self.workspace.index.files),
+                    time.perf_counter() - started,
+                )
+                self._overview = self.assemble(pieces, seconds)
             return self._overview
 
-    def use_overview(self, overview: dict[str, Any]) -> None:
+    def use_pieces(self, pieces: Sequence[Piece], seconds: float) -> None:
         with self._lock:
-            self._overview = overview
+            self._pieces = (pieces, seconds)
+            self._overview = None
 
     def pieces(self, paths: Iterable[str]) -> list[Piece]:
         collector = DependencyCollector(self.types)
@@ -100,8 +105,23 @@ class Project:
                 if piece.failure is not None
             ],
             "libraries": _libraries(modules, used),
-            "edges": edge_table(edge for piece in pieces for edge in piece.edges),
+            "edges": _edges_by_file(pieces),
             "seconds": round(seconds, 2),
+        }
+
+    def changes(
+        self,
+        rebuilt: Sequence[Piece],
+        removed: Collection[str],
+        everything: Collection[Piece],
+    ) -> dict[str, Any]:
+        modules = [piece.module for piece in everything if piece.module is not None]
+        used = {name for piece in everything for name in piece.external}
+        return {
+            **self.assemble(rebuilt, 0),
+            "rebuilt": [piece.path for piece in rebuilt],
+            "removed": sorted(removed),
+            "libraries": _libraries(modules, used),
         }
 
     def reload(self) -> None:
@@ -109,6 +129,7 @@ class Project:
             self.workspace.refresh()
             self.types = TypeSystem(self.workspace)
             self._overview = None
+            self._pieces = None
 
     def outline(self, path: str) -> list[dict[str, Any]] | None:
         module = self._module(path)
@@ -133,6 +154,12 @@ class Project:
         module = self._module(path)
         return module_summary(self.types, module) if module is not None else None
 
+    def parse_failure(self, path: str) -> str | None:
+        if not self.workspace.index.contains(path):
+            return None
+        parsed = self.workspace.parsed(path)
+        return parsed.message if isinstance(parsed, ParseFailure) else None
+
     def _module(self, path: str) -> ParsedModule | None:
         if not self.workspace.index.contains(path):
             return None
@@ -152,6 +179,12 @@ class Project:
                 failure = f"RecursionError: {error}"
                 return Piece(path, None, failure, [], frozenset(), frozenset(keys))
         return Piece(path, module, None, edges, external, frozenset(keys))
+
+
+def _edges_by_file(pieces: Sequence[Piece]) -> dict[str, Any]:
+    table = edge_table(edge for piece in pieces for edge in piece.edges)
+    table["files"] = [[piece.path, len(piece.edges)] for piece in pieces if piece.edges]
+    return table
 
 
 def _libraries(

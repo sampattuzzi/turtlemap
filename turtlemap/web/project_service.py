@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from turtlemap.analysis.diff.project_diff import ProjectDiff
 from turtlemap.analysis.project import Project
@@ -24,6 +24,7 @@ class ProjectService:
         router.get("/api/reload", self.reload)
         router.get("/api/project", self.overview)
         router.get("/api/project/events", self.events)
+        router.get("/api/project/changes", self.changes)
         router.get("/api/function", self.function)
         router.get("/api/outline", self.outline)
         router.get("/api/capabilities", self.capabilities)
@@ -52,17 +53,22 @@ class ProjectService:
         return json_response(self._host.wait_for_change(int(since), wait))
 
     def overview(self, request: Request) -> Response:
-        data = self._host.session().overview_bytes
+        data = self._host.session().overview
         if data is None:
             return error_response("Project is still loading", 409)
-        return gzipped_json(data)
+        return gzipped_json(data.compressed())
+
+    def changes(self, request: Request) -> Response:
+        since = int(_number(request.query.get("since")))
+        changes = self._host.changes_since(since)
+        return json_response(changes if changes is not None else {"full": True})
 
     def function(self, request: Request) -> Response:
         source = self._shown()
         path, qual = request.query.get("path", ""), request.query.get("qual", "")
         result = source.function(path, qual) if source else None
         if result is None:
-            return error_response("No such function", 404)
+            return error_response(self._missing_function(path), 404)
         return json_response(result)
 
     def outline(self, request: Request) -> Response:
@@ -74,6 +80,13 @@ class ProjectService:
 
     def capabilities(self, request: Request) -> Response:
         return json_response({"recent": recent_projects()})
+
+    def _missing_function(self, path: str) -> str:
+        project = self._host.project()
+        failure = project.parse_failure(path) if project else None
+        if failure is None:
+            return "No such function"
+        return f"{PurePosixPath(path).name} does not parse right now"
 
     def _shown(self) -> ProjectDiff | Project | None:
         session = self._host.session()

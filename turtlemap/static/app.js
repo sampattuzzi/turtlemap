@@ -2,7 +2,7 @@ import { loadComments, startCommentWatch } from './comments/store.js';
 import { DIFF, setDiff } from './core/data.js';
 import { api, el } from './core/dom.js';
 import { reloadProject, stopWatching, watchProject } from './core/live.js';
-import { loadOverview } from './core/project.js';
+import { loadChanges, loadOverview } from './core/project.js';
 import { setSeen } from './core/review.js';
 import { applySettings } from './core/settings.js';
 import { Explorer } from './explorer/explorer.js';
@@ -88,7 +88,10 @@ async function loadProject(status) {
   await loadComments();
 }
 const LIVE = {
-  changed: async (status) => { await loadProject(status); if (explorerApi) await explorerApi.projectChanged(); },
+  changed: async (status, since) => {
+    if (await loadChanges(since)) await loadComments(); else await loadProject(status);
+    if (explorerApi) await explorerApi.projectChanged();
+  },
   elsewhere: () => waitForProject(),
 };
 function mount(status) {

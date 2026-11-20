@@ -4,30 +4,34 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, ParamSpec
 
 from turtlemap.analysis.diff.project_diff import ProjectDiff
 from turtlemap.config import cache_directory
-from turtlemap.analysis.project import Project
-from turtlemap.projects.comparison import build_diff, head_project
+from turtlemap.analysis.project import Piece, Project
+from turtlemap.projects.comparison import build_diff, compare, head_project
 from turtlemap.analysis.diff.revisions import DiffRange
 from turtlemap.projects.git import GitError, Repository
-from turtlemap.projects.overview_cache import OverviewCache
+from turtlemap.projects.overview_cache import OverviewCache, OverviewData
 from turtlemap.projects.registry import ServerRegistry
 from turtlemap.projects.watcher import ProjectWatcher
 
 MAX_WAIT = 30.0
+SAVE_DELAY = 10.0
 SHOWN_CHANGES = 50
+KEPT_CHANGES = 100
+
+Change = tuple[int, frozenset[str]]
 
 
 @dataclass(frozen=True)
 class Session:
     root: Path | None = None
     project: Project | None = None
-    overview_bytes: bytes | None = None
+    overview: OverviewData | None = None
     error: str | None = None
     loading: bool = False
     diff_spec: str | None = None
@@ -37,10 +41,40 @@ class Session:
     revision: int = 0
     edited: tuple[str, ...] = ()
     rebuilt: int = 0
+    pieces: Mapping[str, Piece] | None = None
+    changes: tuple[Change, ...] = ()
+    changes_from: int | None = None
 
     def without_diff(self) -> "Session":
         return replace(
             self, diff_spec=None, diff=None, diff_bytes=None, diff_error=None
+        )
+
+    def loaded(self, data: OverviewData, pieces: Mapping[str, Piece]) -> "Session":
+        return replace(
+            self,
+            overview=data,
+            pieces=pieces,
+            loading=False,
+            changes=(),
+            changes_from=self.revision + 1,
+        )
+
+    def changed(self, touched: frozenset[str]) -> "Session":
+        changes = (*self.changes, (self.revision + 1, touched))
+        dropped = changes[:-KEPT_CHANGES]
+        return replace(
+            self,
+            changes=changes[-KEPT_CHANGES:],
+            changes_from=dropped[-1][0] if dropped else self.changes_from,
+        )
+
+    def touched_since(self, since: int) -> frozenset[str] | None:
+        start = self.changes_from
+        if self.diff_spec or start is None or not start <= since <= self.revision:
+            return None
+        return frozenset().union(
+            *(paths for revision, paths in self.changes if revision > since)
         )
 
     def status(self) -> dict[str, Any]:
@@ -60,8 +94,7 @@ class Session:
             "name": project.name if project else None,
             "files": len(project.workspace.index.files) if project else 0,
             "loading": self.loading,
-            "ready": self.overview_bytes is not None
-            and (diff is None or diff["ready"]),
+            "ready": self.overview is not None and (diff is None or diff["ready"]),
             "error": self.error or (diff["error"] if diff else None),
             "diff": diff,
             "revision": self.revision,
@@ -87,6 +120,7 @@ class ProjectHost:
         self._refreshing = threading.Lock()
         self._session = Session()
         self._watcher: ProjectWatcher | None = None
+        self._save_timer: threading.Timer | None = None
 
     def watch_files(self) -> None:
         self._watcher = ProjectWatcher(self.refresh)
@@ -131,7 +165,7 @@ class ProjectHost:
             return
         if session.diff_spec:
             self.open_diff(session.diff_spec)
-        elif session.overview_bytes is None:
+        elif session.overview is None:
             self.open(session.root)
         else:
             self.refresh()
@@ -140,24 +174,39 @@ class ProjectHost:
         with self._refreshing:
             session = self._session
             previous = session.project
-            if session.diff_spec or session.overview_bytes is None or previous is None:
+            if session.overview is None or previous is None:
                 return
-            project = Project(previous.root)
+            if session.diff_spec and not _compares_working_copy(session):
+                return
+            project = Project(previous.root, name=previous.name)
             try:
                 result = self._overviews.overview(project, previous)
+                if result.changed:
+                    removed = (session.pieces or {}).keys() - result.pieces.keys()
+                    after = replace(
+                        session,
+                        project=project,
+                        overview=result.data,
+                        edited=result.edited,
+                        rebuilt=len(result.rebuilt),
+                        pieces=result.pieces,
+                    ).changed(frozenset(result.rebuilt) | removed)
+                    self._advance(session, self._compared_again(after))
             except Exception:
                 traceback.print_exc(limit=5, file=sys.stderr)
                 return
-            if result.changed:
-                after = replace(
-                    session,
-                    project=project,
-                    overview_bytes=result.data,
-                    edited=result.edited,
-                    rebuilt=len(result.rebuilt),
-                )
-                self._advance(session, after)
-            self._overviews.save(project)
+            self._save_soon(project)
+
+    def changes_since(self, since: int) -> dict[str, Any] | None:
+        session = self._session
+        touched = session.touched_since(since)
+        if touched is None or session.pieces is None or session.project is None:
+            return None
+        pieces = session.pieces
+        rebuilt = [pieces[path] for path in sorted(touched) if path in pieces]
+        removed = touched - pieces.keys()
+        changes = session.project.changes(rebuilt, removed, list(pieces.values()))
+        return {**changes, "revision": session.revision}
 
     def wait_for_change(self, since: int, wait: float) -> dict[str, Any]:
         deadline = time.monotonic() + max(0.0, min(wait, MAX_WAIT))
@@ -180,6 +229,16 @@ class ProjectHost:
 
     def project(self) -> Project | None:
         return self._session.project
+
+    def _save_soon(self, project: Project) -> None:
+        with self._lock:
+            if self._save_timer is not None:
+                self._save_timer.cancel()
+            self._save_timer = threading.Timer(
+                SAVE_DELAY, self._overviews.save, (project,)
+            )
+            self._save_timer.daemon = True
+            self._save_timer.start()
 
     def _watch(self, root: Path) -> None:
         if self._watcher is None:
@@ -206,15 +265,26 @@ class ProjectHost:
 
     def _load_overview(self, session: Session, project: Project) -> Session | None:
         try:
-            data = self._overviews.overview(project).data
+            result = self._overviews.overview(project)
         except Exception:
             error = traceback.format_exc(limit=5)
             return self._advance(session, replace(session, error=error, loading=False))
         self._overviews.save(project)
-        loaded = replace(session, overview_bytes=data, loading=False)
-        after = self._advance(session, loaded)
+        after = self._advance(session, session.loaded(result.data, result.pieces))
         gc.freeze()
         return after
+
+    def _compared_again(self, session: Session) -> Session:
+        diff, root = session.diff, session.root
+        if diff is None or root is None or session.project is None:
+            return session
+        try:
+            fresh, data = compare(
+                Repository(root), diff.range, diff.base, session.project
+            )
+        except Exception as error:
+            return replace(session, diff_error=_describe(error))
+        return replace(session, diff=fresh, diff_bytes=data, diff_error=None)
 
     def _compare(
         self,
@@ -227,7 +297,7 @@ class ProjectHost:
         try:
             head = head_project(repository, diff_range, root, self._trees)
             reading = replace(
-                session, project=head, overview_bytes=None, error=None, loading=True
+                session, project=head, overview=None, error=None, loading=True
             )
             latest = self._advance(session, reading)
             if latest is not None:
@@ -250,6 +320,10 @@ def _in_background(
     **kwargs: Arguments.kwargs,
 ) -> None:
     threading.Thread(target=task, args=args, kwargs=kwargs, daemon=True).start()
+
+
+def _compares_working_copy(session: Session) -> bool:
+    return session.diff is not None and session.diff.range.head_sha is None
 
 
 def _describe(error: Exception) -> str:
