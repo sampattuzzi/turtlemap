@@ -1,6 +1,7 @@
 import gzip
 import json
 import secrets
+import socketserver
 import threading
 import traceback
 from collections.abc import Callable
@@ -13,6 +14,7 @@ JSON = "application/json"
 GUEST = "guest"
 MAX_BODY = 4_000_000
 COMPRESS_ABOVE = 2048
+LOOPBACK = "127.0.0.1"
 
 
 @dataclass(frozen=True)
@@ -102,9 +104,14 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, port: int, router: Router, roles: dict[str, str]) -> None:
-        super().__init__(("127.0.0.1", port), Handler)
+        super().__init__((LOOPBACK, port), Handler)
         self.router = router
         self.roles = roles
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = LOOPBACK
+        self.server_port = self.server_address[1]
 
     def start(self) -> None:
         threading.Thread(target=self.serve_forever, daemon=True).start()
