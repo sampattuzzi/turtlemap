@@ -6,7 +6,7 @@ import { Viewport } from '../canvas/viewport.js';
 import { setCommentPick } from '../comments/store.js';
 import { CommentControls } from '../comments/controls.js';
 import { FUNCTIONS, fnKey, lookup, net } from '../core/data.js';
-import { api, baseName, el } from '../core/dom.js';
+import { baseName, el } from '../core/dom.js';
 import { PlaceMemory, loadPlace } from '../core/place.js';
 import { ensureFunction } from '../core/project.js';
 import { fileUnits, seenBox, setSeenListener, symbolUnits } from '../core/review.js';
@@ -68,6 +68,16 @@ export class Explorer {
     this.open({ view: 'net', expanded, focus: target, related: focusUnitOf(target), open: new Set() }, ref.sym ? target : null);
   }
   filterChanged() {
+    resetNet();
+    this.render(true);
+  }
+  async projectChanged() {
+    const c = this.trail.current;
+    if (c.view === 'fn') {
+      c.error = null;
+      try { await ensureFunction(c); } catch (error) { c.error = error.message; }
+    }
+    if (this.trail.current !== c) return;
     resetNet();
     this.render(true);
   }
@@ -184,7 +194,7 @@ function explorerButtons(explorer) {
     forward: button('Forward (Alt+→)', '→', () => explorer.step(explorer.trail.forward())),
     foldAll: button('Fold every open node back up', '⊟ Fold all', () => { explorer.trail.current.open.clear(); explorer.render(true); }),
     openOther: button('Open another project folder', 'Open…', () => explorer.session.showWelcome()),
-    reload: button('Read the project again after editing code', '↻ Reload', () => { api('/api/reload').then(() => explorer.session.waitForProject(), (err) => explorer.session.showWelcome(err.message)); }),
+    reload: button('Read the project again after editing code', '↻ Reload', () => explorer.session.reload()),
     filter: filterButton(() => explorer.filterChanged()),
   };
 }

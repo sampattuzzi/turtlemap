@@ -153,6 +153,18 @@ def test_reuses_cached_overview_for_unchanged_files(
     assert fetch_json(make_server, "/api/project") == first
 
 
+def test_answers_project_events_with_the_current_revision(
+    make_server: ThreadingHTTPServer, tmp_path: Path
+) -> None:
+    make_opened(make_server, tmp_path)
+    revision = fetch_json(make_server, "/api/status")["revision"]
+
+    answer = fetch_json(make_server, f"/api/project/events?since={revision}&wait=0")
+
+    assert answer["revision"] == revision
+    assert answer["ready"]
+
+
 def make_git_project(tmp_path: Path) -> Path:
     folder = tmp_path / "gitproject"
     folder.mkdir()

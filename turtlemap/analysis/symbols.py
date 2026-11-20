@@ -148,22 +148,9 @@ def parameters(
 def class_fields(
     types: TypeSystem, ref: SymbolRef
 ) -> list[tuple[str, PinType, str | None]]:
-    cached = types.field_cache.get(ref)
-    if cached is not None:
-        return cached
-    module = types.workspace.module(ref.path)
-    parsed = types.workspace.parsed_class(ref)
-    if module is None or parsed is None:
-        return []
-    fields = _fields(
-        types,
-        types.resolver(module),
-        module,
-        parsed,
-        types.class_category(ref) == "enum",
+    return types.workspace.reads.remembered(
+        types.field_cache, ref, lambda: _class_fields(types, ref)
     )
-    types.field_cache[ref] = fields
-    return fields
 
 
 def module_constants(module: ParsedModule) -> list[tuple[str, m.Assign]]:
@@ -174,6 +161,22 @@ def module_constants(module: ParsedModule) -> list[tuple[str, m.Assign]]:
             assert isinstance(target, m.Name)
             found.append((target.id, statement))
     return found
+
+
+def _class_fields(
+    types: TypeSystem, ref: SymbolRef
+) -> list[tuple[str, PinType, str | None]]:
+    module = types.workspace.module(ref.path)
+    parsed = types.workspace.parsed_class(ref)
+    if module is None or parsed is None:
+        return []
+    return _fields(
+        types,
+        types.resolver(module),
+        module,
+        parsed,
+        types.class_category(ref) == "enum",
+    )
 
 
 def _class_summaries(

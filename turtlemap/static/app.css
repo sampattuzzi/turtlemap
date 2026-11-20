@@ -609,6 +609,8 @@ button { cursor: pointer; }
 .agent-chip[hidden] { display: none; }
 .agent-status.active { color: var(--fg); }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50; max-width: min(520px, calc(100% - 32px)); padding: 9px 16px; border: 1px solid var(--accent); border-radius: 10px; background: var(--chrome); color: var(--fg); font: inherit; font-size: 0.9em; text-align: left; box-shadow: 0 8px 28px rgba(0,0,0,0.4); cursor: pointer; }
+.live-note { position: fixed; right: 16px; bottom: 16px; z-index: 50; max-width: calc(100% - 32px); padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--chrome); color: var(--fg-dim); font-size: 0.85em; pointer-events: none; transition: opacity 0.5s; }
+.live-note.leaving { opacity: 0; }
 .show-chip { position: absolute; left: max(12px, env(safe-area-inset-left, 0px)); bottom: 14px; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--chrome); color: var(--fg); font-size: 0.86em; box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
 @media (max-width: 760px) { .pick-bar { bottom: 58px; } }
 .code-view .s-kw, .node .expr .s-kw { color: var(--t-class); font-weight: 600; }

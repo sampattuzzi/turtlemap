@@ -23,6 +23,7 @@ or a recent one, on the start screen. To try it on itself, run
 | `--diff RANGE` | Highlight what changed in a git range ([see below](#comparing-git-revisions)) |
 | `--port N` | Use a fixed port instead of a free one |
 | `--no-open` | Print the address instead of opening your browser |
+| `--no-watch` | Don't redraw the map when source files change |
 
 ## Two views
 
@@ -150,8 +151,19 @@ On the map, Balanced and Classic look the same.
 The first time you open a large project it takes a while to read. A monorepo of
 about 2,700 modules takes around 15 seconds.
 
-The result is cached in `~/.cache/turtlemap` until a file changes. Press
-**↻ Reload** after editing code. Blueprints are built when you open them.
+The map is built one file at a time and cached in `~/.cache/turtlemap`. Each
+file's piece remembers what it read while it was built: the other files, by a
+hash of their contents, and the answers it got when it looked a module up. When
+something changes, only the pieces whose inputs changed are rebuilt. Saving a
+file without changing it rebuilds nothing.
+
+While Turtlemap is open it watches the project. When you save a source file or a
+`tsconfig.json`, it rebuilds what that file reaches and redraws the map in
+place, keeping where you were looking, what you had open and what you had
+selected. On that monorepo an edit to a file few others use is on screen about a
+second later. An edit to a module that hundreds of others import takes a few
+seconds. **↻ Reload** does the same check on demand. Blueprints are built when
+you open them.
 
 ## Comparing git revisions
 
