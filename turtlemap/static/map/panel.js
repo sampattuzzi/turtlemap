@@ -76,7 +76,7 @@ export function netPanel(container, selId, ctx, effective) {
   const hl = cv.querySelector('.hl'); if (hl) requestAnimationFrame(() => hl.scrollIntoView({ block: 'nearest' }));
 }
 function explainMapNode(ex, n, selId, ctx) {
-  const what = n.children.length ? summaryOf(n) : n.sym ? `${n.sym.params.filter((p) => p[0] !== 'self').length} parameters` : n.type ? n.type.label : '';
+  const what = n.children.length ? summaryOf(n) : n.sym && n.sym.params ? `${n.sym.params.filter((p) => p[0] !== 'self').length} parameters` : n.type ? n.type.label : '';
   const text = `${netLabel(selId)}. ${n.kind}${moduleOf(selId) ? ` in ${moduleOf(selId)}` : ''}. ${what}.`;
   ex.append(el('div', { class: 'kind' }, n.kind), el('h2', {}, netLabel(selId)), el('p', {}, what));
   ex.append(el('div', { class: 'actions' }, el('button', { class: 'btn small', onclick: () => speak(text) }, '🔊 Read aloud')));

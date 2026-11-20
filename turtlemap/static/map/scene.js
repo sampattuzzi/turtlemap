@@ -68,6 +68,8 @@ class NetDrawing {
     const path = svg('path', { d, class: `rel k-${g.kind} weighted${g.count === 1 ? ' light' : ''}${g.shortcut ? ' shortcut' : ''}`, 'marker-end': g.kind === 'inherits' || g.kind === 'realizes' ? 'url(#m-tri)' : g.kind === 'bound' ? 'url(#m-tri-bound)' : `url(#m-arrow-${g.kind})` });
     path.style.setProperty('--w', `${(1.4 + 1.4 * Math.log2(g.count)).toFixed(2)}px`);
     if (g.kind === 'has') path.setAttribute('marker-start', 'url(#m-dia)');
+    const end = g.kinds.size === 1 && g.kind === 'has' ? holdingEnd(this.N, g.atoms) : null;
+    if (end) path.setAttribute('marker-end', `url(#m-hold-${end})`);
     const label = arrowLabel(this.N, g);
     const text = svg('text', { x: labelAt.x, y: labelAt.y - 5, class: `rel-label k-${g.kind}`, 'text-anchor': 'middle' });
     text.textContent = label;
@@ -176,7 +178,8 @@ class NetDrawing {
 }
 function effectiveOpen(N, expanded) {
   const effective = new Set(['root']);
-  for (const id of expanded) { const c = N.chain(id); if (c.length && c[c.length - 1].children.length && c.slice(1).every((x) => expanded.has(x.id))) effective.add(id); }
+  const open = (x) => expanded.has(x.id) !== N.autoOpen.has(x.id);
+  for (const id of new Set([...expanded, ...N.autoOpen])) { const c = N.chain(id); if (c.length && c[c.length - 1].children.length && c.slice(1).every(open)) effective.add(id); }
   return effective;
 }
 function visibleEnd(N, effective, id) {
@@ -228,8 +231,26 @@ function arrowMarkers() {
     <marker id="m-tri" viewBox="0 0 14 14" refX="13" refY="7" markerWidth="14" markerHeight="14" markerUnits="userSpaceOnUse" orient="auto"><path d="M1,1 L13,7 L1,13 z" style="fill:var(--canvas);stroke:var(--rel-inherits)" stroke-width="1.6"/></marker>
     <marker id="m-tri-bound" viewBox="0 0 14 14" refX="13" refY="7" markerWidth="14" markerHeight="14" markerUnits="userSpaceOnUse" orient="auto"><path d="M1,1 L13,7 L1,13 z" style="fill:var(--canvas);stroke:var(--rel-bound)" stroke-width="1.6"/></marker>
     <marker id="m-dia" viewBox="0 0 18 10" refX="1" refY="5" markerWidth="18" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M1,5 L9,1 L17,5 L9,9 z" style="fill:var(--rel-has)"/></marker>
+    ${Object.entries(HOLDING_ENDS).map(([end, shape]) => `<marker id="m-hold-${end}" class="hold-marker" viewBox="0 0 24 16" refX="24" refY="8" markerWidth="24" markerHeight="16" markerUnits="userSpaceOnUse" orient="auto">${shape}</marker>`).join('')}
     ${['has', 'creates', 'calls', 'writes', 'reads', 'uses'].map((k) => `<marker id="m-arrow-${k}" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto"><path d="M1,1 L11,6 L1,11" style="fill:none;stroke:var(--rel-${k})" stroke-width="1.7"/></marker>`).join('')}`;
   return defs;
+}
+const HOLDING_ENDS = {
+  one: '<path d="M16,1 V15 M11,1 V15"/>',
+  optional: '<circle cx="8" cy="8" r="4"/><path d="M16,1 V15"/>',
+  many: '<circle cx="6" cy="8" r="4"/><path d="M12,8 L24,1 M12,8 L24,8 M12,8 L24,15"/>',
+};
+function holdingEnd(N, atoms) {
+  const ends = new Set(atoms.map((e) => fieldHolds(N.nodes.get(e.from), e.to)));
+  return ends.size === 1 ? [...ends][0] : null;
+}
+function fieldHolds(field, target) {
+  const t = field && field.kind === 'field' ? field.type : null;
+  const classId = (ref) => (ref ? `cls:${ref.path}:${ref.sym}` : null);
+  if (!t) return null;
+  if (classId(t.items) === target) return 'many';
+  if (classId(t.ref) === target) return t.opt ? 'optional' : 'one';
+  return null;
 }
 function forwardArrow(g, ends, shift, spans) {
   const { x: x1, y: y1 } = ends.a, { x: x2, y: y2 } = ends.b;

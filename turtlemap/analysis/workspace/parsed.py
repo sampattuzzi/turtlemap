@@ -1,3 +1,4 @@
+import hashlib
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -53,6 +54,7 @@ class ParsedModule:
     lines: list[str]
     code: m.ModuleCode
     language: Language
+    digest: str
     imports: dict[str, ImportBinding] = field(default_factory=dict)
     import_statements: list[m.Import] = field(default_factory=list)
     star_imports: list[str] = field(default_factory=list)
@@ -71,10 +73,18 @@ class ParsedModule:
         return self.name.rpartition(".")[0]
 
 
+MISSING = "missing"
+
+
 @dataclass(frozen=True)
 class ParseFailure:
     path: str
     message: str
+    digest: str = MISSING
+
+
+def content_digest(data: bytes) -> str:
+    return hashlib.blake2b(data, digest_size=16).hexdigest()
 
 
 def module_name_for(path: str) -> str:
@@ -101,11 +111,16 @@ def parse_module(
         *language.parse_errors(),
     )
     try:
-        source = absolute.read_text(encoding="utf-8")
+        data = absolute.read_bytes()
+    except OSError as error:
+        return ParseFailure(path, f"{type(error).__name__}: {error}")
+    digest = content_digest(data)
+    try:
+        source = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
         name = module_name_for(path)
         lowered = language.lower(path, name, source, locate)
     except errors as error:
-        return ParseFailure(path, f"{type(error).__name__}: {error}")
+        return ParseFailure(path, f"{type(error).__name__}: {error}", digest)
     module = ParsedModule(
         path=path,
         name=name,
@@ -113,6 +128,7 @@ def parse_module(
         lines=source.splitlines(),
         code=lowered.code,
         language=language,
+        digest=digest,
     )
     _collect_imports(module, lowered.imports)
     _collect_definitions(module, module.body, prefix="", class_qualname=None)

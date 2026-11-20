@@ -1,9 +1,11 @@
 import threading
 import time
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from turtlemap.analysis.dependencies import DependencyCollector
+from turtlemap.analysis.dependencies import DependencyCollector, edge_table
 from turtlemap.analysis.blueprint.builder import build_function_graph
 from turtlemap.analysis.outline import function_code, module_outline
 from turtlemap.analysis.symbols import module_summary
@@ -13,7 +15,39 @@ from turtlemap.analysis.workspace.parsed import (
     ParsedModule,
     library_of,
 )
+from turtlemap.analysis.workspace.reads import Keys
 from turtlemap.analysis.workspace.workspace import Workspace
+
+ExternalName = tuple[str, str | None]
+
+
+@dataclass(frozen=True)
+class Piece:
+    path: str
+    module: dict[str, Any] | None
+    failure: str | None
+    edges: list[list[Any]]
+    external: frozenset[ExternalName]
+    keys: Keys
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "module": self.module,
+            "failure": self.failure,
+            "edges": self.edges,
+            "external": sorted([module, name or ""] for module, name in self.external),
+        }
+
+    @classmethod
+    def from_json(cls, path: str, data: dict[str, Any], keys: Keys) -> "Piece":
+        return cls(
+            path,
+            data["module"],
+            data["failure"],
+            data["edges"],
+            frozenset((module, name or None) for module, name in data["external"]),
+            keys,
+        )
 
 
 class Project:
@@ -39,8 +73,36 @@ class Project:
     def overview(self) -> dict[str, Any]:
         with self._lock:
             if self._overview is None:
-                self._overview = self._build_overview()
+                started = time.perf_counter()
+                pieces = self.pieces(self.workspace.index.files)
+                self._overview = self.assemble(pieces, time.perf_counter() - started)
             return self._overview
+
+    def use_overview(self, overview: dict[str, Any]) -> None:
+        with self._lock:
+            self._overview = overview
+
+    def pieces(self, paths: Iterable[str]) -> list[Piece]:
+        collector = DependencyCollector(self.types)
+        with self._lock:
+            return [self._piece(path, collector) for path in paths]
+
+    def assemble(self, pieces: Sequence[Piece], seconds: float) -> dict[str, Any]:
+        modules = [piece.module for piece in pieces if piece.module is not None]
+        used = {name for piece in pieces for name in piece.external}
+        return {
+            "name": self.name,
+            "root": str(self.display_root),
+            "modules": modules,
+            "failures": [
+                {"path": piece.path, "message": piece.failure}
+                for piece in pieces
+                if piece.failure is not None
+            ],
+            "libraries": _libraries(modules, used),
+            "edges": edge_table(edge for piece in pieces for edge in piece.edges),
+            "seconds": round(seconds, 2),
+        }
 
     def reload(self) -> None:
         with self._lock:
@@ -76,30 +138,20 @@ class Project:
             return None
         return self.workspace.module(path)
 
-    def _build_overview(self) -> dict[str, Any]:
-        started = time.perf_counter()
-        modules: list[dict[str, Any]] = []
-        failures: list[dict[str, str]] = []
-        collector = DependencyCollector(self.types)
-        for path in self.workspace.index.files:
+    def _piece(self, path: str, collector: DependencyCollector) -> Piece:
+        with self.workspace.reads.recording() as keys:
             parsed = self.workspace.parsed(path)
             if isinstance(parsed, ParseFailure):
-                failures.append({"path": path, "message": parsed.message})
-                continue
+                return Piece(
+                    path, None, parsed.message, [], frozenset(), frozenset(keys)
+                )
             try:
-                modules.append(module_summary(self.types, parsed))
-                collector.collect(parsed)
+                module = module_summary(self.types, parsed)
+                edges, external = collector.collect_alone(parsed)
             except RecursionError as error:
-                failures.append({"path": path, "message": f"RecursionError: {error}"})
-        return {
-            "name": self.name,
-            "root": str(self.display_root),
-            "modules": modules,
-            "failures": failures,
-            "libraries": _libraries(modules, collector.external_names),
-            "edges": collector.result(),
-            "seconds": round(time.perf_counter() - started, 2),
-        }
+                failure = f"RecursionError: {error}"
+                return Piece(path, None, failure, [], frozenset(), frozenset(keys))
+        return Piece(path, module, None, edges, external, frozenset(keys))
 
 
 def _libraries(

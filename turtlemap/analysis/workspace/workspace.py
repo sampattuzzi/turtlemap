@@ -1,6 +1,6 @@
 import threading
-from collections.abc import Iterable, Sequence
-from pathlib import Path, PurePosixPath
+from collections.abc import Callable, Iterable, Sequence
+from pathlib import Path
 
 from turtlemap.analysis import model as m
 from turtlemap.analysis.workspace.files import source_files_under
@@ -16,21 +16,26 @@ from turtlemap.analysis.workspace.parsed import (
     SymbolRef,
     parse_module,
 )
+from turtlemap.analysis.workspace.reads import Keys, ReadLog, source_key
 from turtlemap.languages.registry import language_for
 
 _MAX_RESOLUTION_DEPTH = 6
+
+Stamp = tuple[int, int]
 
 
 class Workspace:
     def __init__(self, root: Path, files: Iterable[str]) -> None:
         self.root = root.resolve()
-        self._parsed: dict[str, tuple[float, ParsedModule | ParseFailure]] = {}
+        self.reads = ReadLog()
+        self._parsed: dict[str, tuple[Stamp, ParsedModule | ParseFailure, Keys]] = {}
         self._validated: set[str] = set()
-        self._resolutions: dict[tuple[str, str], Resolved | None] = {}
-        self._bases: dict[SymbolRef, tuple[tuple[str, Resolved | None], ...]] = {}
+        self._resolutions: dict[tuple[str, str], tuple[Resolved | None, Keys]] = {}
+        self._bases: dict[
+            SymbolRef, tuple[tuple[tuple[str, Resolved | None], ...], Keys]
+        ] = {}
         self._lock = threading.RLock()
-        self._scripts: dict[str, tuple[str, ...]] = {}
-        self.index = ModuleIndex(self.root, files)
+        self.index = ModuleIndex(self.root, files, self.reads)
 
     @classmethod
     def discover(cls, root: Path) -> "Workspace":
@@ -42,31 +47,66 @@ class Workspace:
             self._resolutions.clear()
             self._bases.clear()
         previous = self.index.files
-        self.index = ModuleIndex(self.root, source_files_under(self.root))
+        self.index = ModuleIndex(self.root, source_files_under(self.root), self.reads)
         if previous != self.index.files:
             self._forget_parses_that_read_other_files()
-        self._scripts = {}
+
+    def adopt_parses(
+        self, other: "Workspace", unchanged: Callable[[Keys], bool]
+    ) -> None:
+        with other._lock:
+            offered = list(other._parsed.items())
+        with self._lock:
+            for path, entry in offered:
+                if path not in self._parsed and unchanged(entry[2]):
+                    self._parsed[path] = entry
+                    self._validated.add(path)
+
+    def stamps(self) -> dict[str, tuple[int, int, str]]:
+        with self._lock:
+            return {
+                path: (*stamp, result.digest)
+                for path, (stamp, result, _) in self._parsed.items()
+            }
+
+    def fingerprint(self, key: str, file_digest: Callable[[str], str]) -> str | None:
+        kind, _, path = key.partition(":")
+        if kind != "src":
+            return self.index.fingerprint(key)
+        cached = self._parsed.get(path)
+        return cached[1].digest if cached is not None else file_digest(path)
 
     def parsed(self, path: str) -> ParsedModule | ParseFailure:
+        self.reads.note(source_key(path))
         cached_now = self._parsed.get(path)
         if cached_now is not None and path in self._validated:
+            self.reads.note_all(cached_now[2])
             return cached_now[1]
         absolute = self.root / path
         try:
-            modified = absolute.stat().st_mtime
+            stat = absolute.stat()
+            modified = (stat.st_mtime_ns, stat.st_size)
         except OSError as error:
             return ParseFailure(path, str(error))
         with self._lock:
             cached = self._parsed.get(path)
             if cached is not None and cached[0] == modified:
                 self._validated.add(path)
+                self.reads.note_all(cached[2])
                 return cached[1]
-        result = parse_module(path, absolute, self.index.locate)
+        with self.reads.recording() as keys:
+            result = parse_module(path, absolute, self.index.locate)
         with self._lock:
-            self._parsed[path] = (modified, result)
+            replaced = path in self._parsed
+            self._parsed[path] = (
+                modified,
+                result,
+                frozenset({source_key(path), *keys}),
+            )
             self._validated.add(path)
-            self._resolutions.clear()
-            self._bases.clear()
+            if replaced:
+                self._resolutions.clear()
+                self._bases.clear()
         return result
 
     def module(self, path: str) -> ParsedModule | None:
@@ -74,12 +114,11 @@ class Workspace:
         return result if isinstance(result, ParsedModule) else None
 
     def resolve(self, module: ParsedModule, dotted: str) -> Resolved | None:
-        key = (module.path, dotted)
-        if key in self._resolutions:
-            return self._resolutions[key]
-        result = self._resolve(module, dotted)
-        self._resolutions[key] = result
-        return result
+        return self.reads.remembered(
+            self._resolutions,
+            (module.path, dotted),
+            lambda: self._resolve(module, dotted),
+        )
 
     def _resolve(self, module: ParsedModule, dotted: str) -> Resolved | None:
         head, _, rest = dotted.partition(".")
@@ -105,18 +144,8 @@ class Workspace:
     def script_neighbours(self, module: ParsedModule) -> list[ParsedModule]:
         if not module.code.is_script:
             return []
-        directory = PurePosixPath(module.path).parent.as_posix()
-        paths = self._scripts.get(directory)
-        if paths is None:
-            paths = tuple(
-                path
-                for path in self.index.files
-                if PurePosixPath(path).parent.as_posix() == directory
-                and language_for(path) is module.language
-            )
-            self._scripts[directory] = paths
         neighbours: list[ParsedModule] = []
-        for path in paths:
+        for path in self.index.files_beside(module.path):
             if path == module.path:
                 continue
             neighbour = self.module(path)
@@ -159,9 +188,7 @@ class Workspace:
         return module.functions.get(ref.sym) if module else None
 
     def base_classes(self, ref: SymbolRef) -> tuple[tuple[str, Resolved | None], ...]:
-        if ref not in self._bases:
-            self._bases[ref] = self._base_classes(ref)
-        return self._bases[ref]
+        return self.reads.remembered(self._bases, ref, lambda: self._base_classes(ref))
 
     def _base_classes(self, ref: SymbolRef) -> tuple[tuple[str, Resolved | None], ...]:
         parsed = self.parsed_class(ref)

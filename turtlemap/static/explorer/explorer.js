@@ -6,22 +6,18 @@ import { Viewport } from '../canvas/viewport.js';
 import { setCommentPick } from '../comments/store.js';
 import { CommentControls } from '../comments/controls.js';
 import { FUNCTIONS, fnKey, lookup, net } from '../core/data.js';
-import { api, baseName, el } from '../core/dom.js';
+import { baseName, el } from '../core/dom.js';
 import { PlaceMemory, loadPlace } from '../core/place.js';
 import { ensureFunction } from '../core/project.js';
 import { fileUnits, seenBox, setSeenListener, symbolUnits } from '../core/review.js';
-import { saveSettings, settings } from '../core/settings.js';
 import { crumbsFor, renderSide } from './sidebar.js';
+import { filterButton, filterChip, labelFilterButton, lineFilter } from './filtermenu.js';
 import { shell } from './toolbar.js';
 import { startingTrail } from './trail.js';
 import { netLabel, plural } from '../map/boxes.js';
-import { dataScopeChip, showToggles } from '../map/chips.js';
-import { dataScopeFor } from '../map/datamodel.js';
-import { buildDataScene } from '../map/datascene.js';
-import { focusUnitOf, netDefaultExpanded, relatedTo, resetNet } from '../map/focus.js';
+import { focusUnitOf, netDefaultExpanded, relatedTo, resetNet, revealHidden } from '../map/focus.js';
 import { netPanel } from '../map/panel.js';
 import { buildNetScene } from '../map/scene.js';
-const DATA_TITLE = 'Show the data model: data classes, their fields and how they hold each other';
 export class Explorer {
   constructor(root, session) {
     this.session = session;
@@ -34,13 +30,12 @@ export class Explorer {
     this.goTo = (ref) => this.go(ref);
     this.buttons = explorerButtons(this);
     const b = this.buttons;
-    this.ui = shell(root, { extraButtons: [b.openOther, b.reload, b.back, b.forward, b.foldAll, b.data], onPick: this.goTo, onSettings: () => this.render(true), onCompared: () => session.waitForProject() });
+    this.ui = shell(root, { extraButtons: [b.openOther, b.reload, b.back, b.forward, b.foldAll, b.filter], onPick: this.goTo, onSettings: () => this.render(true), onCompared: () => session.waitForProject(), lineFilter: lineFilter(() => this.filterChanged()) });
     this.vp = new Viewport(this.ui.vpHost);
     this.vp.onMoved = () => this.rememberPlace();
     this.vp.onBackground = () => this.clearSelection();
     this.blueprints = new BlueprintControls(this);
     this.netCtx = this.mapContext();
-    this.dataCtx = { ...this.netCtx, toggle: () => {}, select: (id) => { this.trail.selected = id; this.panel(); showOnPhone(this.ui.right); } };
     setSeenListener(() => this.chrome());
     this.ui.crumbs.after(el('span', { id: 'agent-chip', class: 'agent-chip', hidden: true }));
     this.comments = new CommentControls(this);
@@ -67,21 +62,29 @@ export class Explorer {
     if (sym && sym.kind === 'function') { this.open({ view: 'fn', path: ref.path, sym: ref.sym, open: new Set() }); return; }
     if (ref.sym) { this.showOnMap(`cls:${ref.path}:${ref.sym}`); return; }
     const target = `mod:${ref.path}`;
+    revealHidden([target]);
     this.open({ view: 'net', expanded: netDefaultExpanded(ref.path), focus: target, related: focusUnitOf(target), open: new Set() }, target);
   }
   showOnMap(id) {
     setCommentPick(null);
+    revealHidden([id]);
     const expanded = new Set(this.trail.lastMap().expanded);
     net().chain(id).slice(1).forEach((x) => expanded.add(x.id));
     this.open({ view: 'net', expanded, focus: id, related: focusUnitOf(id), open: new Set() }, id);
   }
-  toggleData() {
-    const leaving = this.trail.current.view === 'data';
-    const last = this.trail.lastMap();
-    const from = typeof this.trail.selected === 'string' ? this.trail.selected : last.focus || last.related;
-    const entry = leaving ? { ...last, expanded: new Set(last.expanded), open: new Set() } : { view: 'data', scope: dataScopeFor(net(), from), open: new Set() };
-    setCommentPick(null);
-    this.open(entry);
+  filterChanged() {
+    resetNet();
+    this.render(true);
+  }
+  async projectChanged() {
+    const c = this.trail.current;
+    if (c.view === 'fn') {
+      c.error = null;
+      try { await ensureFunction(c); } catch (error) { c.error = error.message; }
+    }
+    if (this.trail.current !== c) return;
+    resetNet();
+    this.render(true);
   }
   toggleNet(id) {
     const target = net().nodes.get(id);
@@ -156,21 +159,8 @@ export class Explorer {
     const c = this.trail.current;
     updateButtons(this.buttons, this.trail);
     this.chrome();
-    if (c.view === 'data') this.renderData(c, keepView);
-    else if (c.view !== 'net' && !FUNCTIONS.has(fnKey(c))) this.renderLoading(c, keepView);
+    if (c.view !== 'net' && !FUNCTIONS.has(fnKey(c))) this.renderLoading(c, keepView);
     else this.renderScene(c, keepView);
-  }
-  renderData(c, keepView) {
-    const { vp, ui } = this;
-    const keep = { x: vp.x, y: vp.y, s: vp.s };
-    this.scene = buildDataScene(this.dataCtx, c.scope);
-    ui.vpHost.querySelectorAll('.focus-chip, .show-chip').forEach((chip) => chip.remove());
-    ui.vpHost.append(dataScopeChip(c.scope, (scope) => { c.scope = scope; this.trail.selected = null; this.render(false); }));
-    vp.setScene(this.scene, keepView ? 'none' : 'fit');
-    if (keepView) { Object.assign(vp, keep); vp.apply(); }
-    this.place.restore(vp);
-    this.panel();
-    this.rememberPlace();
   }
   renderLoading(c, keepView) {
     const vp = this.vp;
@@ -188,8 +178,7 @@ export class Explorer {
     c.refocused = false;
     const filter = isNet ? relatedTo(c.related) : null;
     this.scene = isNet ? buildNetScene(c.expanded, this.netCtx, filter) : buildFunctionScene(lookup(c), this.blueprints.context('root'));
-    const onToggle = (key, on) => { settings[key] = on; saveSettings(); resetNet(); this.render(true); };
-    placeMapChips(this.ui.vpHost, isNet ? showToggles(onToggle) : null, filter, () => this.showEverything());
+    placeMapChips(this.ui.vpHost, isNet ? filterChip(() => this.filterChanged()) : null, filter, () => this.showEverything());
     vp.setScene(this.scene, keepView ? 'none' : 'start');
     if (keepView) { Object.assign(vp, keep); vp.apply(); }
     else if (isNet && c.focus) zoomToFocus(vp, this.scene, c.focus);
@@ -211,8 +200,8 @@ function explorerButtons(explorer) {
     forward: button('Forward (Alt+→)', '→', () => explorer.step(explorer.trail.forward())),
     foldAll: button('Fold every open node back up', '⊟ Fold all', () => { explorer.trail.current.open.clear(); explorer.render(true); }),
     openOther: button('Open another project folder', 'Open…', () => explorer.session.showWelcome()),
-    reload: button('Read the project again after editing code', '↻ Reload', () => { api('/api/reload').then(() => explorer.session.waitForProject(), (err) => explorer.session.showWelcome(err.message)); }),
-    data: button(DATA_TITLE, '▦ Data', () => explorer.toggleData()),
+    reload: button('Read the project again after editing code', '↻ Reload', () => explorer.session.reload()),
+    filter: filterButton(() => explorer.filterChanged()),
   };
 }
 function updateButtons(buttons, trail) {
@@ -220,15 +209,10 @@ function updateButtons(buttons, trail) {
   buttons.back.disabled = !trail.canGoBack;
   buttons.forward.disabled = !trail.canGoForward;
   buttons.foldAll.hidden = view !== 'fn';
-  buttons.data.textContent = view === 'data' ? '◱ Map' : '▦ Data';
-  buttons.data.title = view === 'data' ? 'Back to the dependency map' : DATA_TITLE;
+  buttons.filter.hidden = view === 'fn';
+  labelFilterButton(buttons.filter);
 }
 function paintFrame(ui, c, onPick) {
-  if (c.view === 'data') {
-    renderSide(ui.left, null, null, onPick);
-    crumbsFor(ui.crumbs, null, null, onPick, el('span', { class: 'crumb-extra' }, '· data model'));
-    return;
-  }
   const isNet = c.view === 'net';
   const focusPath = isNet ? (net().nodes.get(c.focus) && net().chain(c.focus).find((n) => n.kind === 'module') || {}).path || null : c.path;
   renderSide(ui.left, focusPath, isNet ? null : c.sym, onPick);
@@ -241,10 +225,10 @@ function crumbExtra(c, focusPath) {
   const seen = units.length ? el('label', { class: 'seen-toggle', title: 'Tick once you have reviewed these changes' }, seenBox(units, isNet ? baseName(focusPath) : c.sym), isNet ? 'File seen' : 'Seen') : null;
   return note || seen ? el('span', { class: 'crumb-extra' }, note, seen) : null;
 }
-function placeMapChips(host, toggles, filter, onShowAll) {
+function placeMapChips(host, kindChip, filter, onShowAll) {
   host.querySelectorAll('.focus-chip').forEach((chip) => chip.remove());
   host.querySelectorAll('.show-chip').forEach((chip) => chip.remove());
-  if (toggles) host.append(toggles);
+  if (kindChip) host.append(kindChip);
   if (filter) host.append(el('div', { class: 'focus-chip' }, el('span', {}, 'Showing what ', el('strong', {}, netLabel(filter.unit)), ` depends on or is used by · ${plural(filter.related.size, 'related module')}`), el('button', { class: 'btn small', title: 'Show every module again', onclick: onShowAll }, '✕ Show all')));
 }
 function zoomToFocus(vp, scene, focus) {
