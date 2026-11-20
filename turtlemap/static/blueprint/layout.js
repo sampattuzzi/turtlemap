@@ -90,7 +90,13 @@ function blueprintRanks(g) {
   pushPastSources(g.nodes, realSuccs, rank);
   const maxR = Math.max(...rank.values());
   for (const n of g.nodes) if (n.kind === 'return' && !(realSuccs.get(n) || []).length) rank.set(n, maxR);
+  pullTowardUsers(g.nodes, realSuccs, rank);
   return rank;
+}
+function pullTowardUsers(nodes, succs, rank) {
+  const pullable = nodes.filter((n) => !isExecNode(n) && n.kind !== 'entry' && n.kind !== 'return' && (succs.get(n) || []).length);
+  pullable.sort((a, b) => rank.get(b) - rank.get(a));
+  for (const n of pullable) rank.set(n, Math.max(rank.get(n), Math.min(...succs.get(n).map((s) => rank.get(s))) - 1));
 }
 function pushPastSources(sources, succs, rank) {
   const pending = [...sources];
