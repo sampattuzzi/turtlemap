@@ -11,10 +11,10 @@ const FILE_UNITS_OPEN = new Map();
 const SIDE_TAB_KEY = `${SETTINGS_KEY}-side-tab`;
 let SIDE_TAB = (() => { try { return localStorage.getItem(SIDE_TAB_KEY) || 'changes'; } catch (e) { return 'changes'; } })();
 let SIDE_SHOWN = null;
-export function renderSide(left, currentPath, currentSym, onPick) {
+export function renderSide(left, currentPath, currentSym, onPick, currentFolder = null) {
   const scroll = left.scrollTop;
   left.innerHTML = '';
-  const redraw = () => renderSide(left, currentPath, currentSym, onPick);
+  const redraw = () => renderSide(left, currentPath, currentSym, onPick, currentFolder);
   const tab = SIDE_TAB === 'changes' && !DIFF ? 'files' : SIDE_TAB;
   const pick = (name) => { SIDE_TAB = name; try { localStorage.setItem(SIDE_TAB_KEY, name); } catch (e) {} left.scrollTop = 0; redraw(); };
   const tabButton = (name, label, title, count) => el('button', { class: `side-tab ${tab === name ? 'on' : ''}`, role: 'tab', 'aria-selected': String(tab === name), title, onclick: () => pick(name) }, label, count != null ? el('small', {}, count) : null);
@@ -24,18 +24,21 @@ export function renderSide(left, currentPath, currentSym, onPick) {
     tabButton('files', 'Files', 'Every file in the project'),
     DIFF ? tabButton('changes', 'Changes', `${seenCount(all)} of ${all.length} changes seen`, `${seenCount(all)}/${all.length}`) : null,
     tabButton('comments', 'Comments', `${plural(openCount, 'open comment')}`, openCount || null)));
-  if (tab === 'changes') renderChanges(left, currentPath, currentSym, onPick, redraw);
+  const here = { currentPath, currentSym, currentFolder, onPick, redraw };
+  if (tab === 'changes') renderChanges(left, here);
   else if (tab === 'comments') renderCommentList(left);
-  else renderFiles(left, currentPath, currentSym, onPick, redraw);
+  else renderFiles(left, here);
   left.scrollTop = scroll;
-  const shown = `${tab}|${currentPath}|${currentSym}`;
+  const shown = `${tab}|${currentPath}|${currentSym}|${currentFolder}`;
   if (shown !== SIDE_SHOWN) { SIDE_SHOWN = shown; const active = left.querySelector('.active'); if (active) active.scrollIntoView({ block: 'nearest' }); }
 }
-function renderFiles(left, currentPath, currentSym, onPick, redraw) {
+function renderFiles(left, here) {
+  const { currentPath, currentSym, currentFolder, onPick } = here;
   left.append(el('h3', {}, OVERVIEW ? OVERVIEW.name : 'Files'));
-  if (currentPath) { let acc = ''; for (const part of currentPath.split('/').slice(0, -1)) { acc += (acc ? '/' : '') + part; TREE_OPEN.add(acc); } }
+  openFoldersAbove(currentPath);
+  openFoldersAbove(currentFolder);
   const box = el('div', { class: 'tree' });
-  drawFileTree(box, pathTree(Object.keys(FILES)), '', 0, { currentPath, onPick, redraw });
+  drawFileTree(box, pathTree(Object.keys(FILES)), '', 0, here);
   left.append(box);
   const f = currentPath ? FILES[currentPath] : null;
   if (!f) return;
@@ -48,19 +51,28 @@ function renderFiles(left, currentPath, currentSym, onPick, redraw) {
 function drawFileTree(box, node, prefix, depth, view) {
   for (const name of Object.keys(node.dirs).sort()) {
     const full = prefix ? `${prefix}/${name}` : name;
-    box.append(folderButton(name, full, depth, view.redraw));
+    box.append(folderRow(name, full, depth, view));
     if (TREE_OPEN.has(full)) drawFileTree(box, node.dirs[name], full, depth + 1, view);
   }
   for (const path of node.files.sort()) box.append(fileButton(path, depth, view));
 }
-function folderButton(name, full, depth, redraw) {
+function openFoldersAbove(path) {
+  if (!path) return;
+  let acc = '';
+  for (const part of path.split('/').slice(0, -1)) { acc += (acc ? '/' : '') + part; TREE_OPEN.add(acc); }
+}
+function folderRow(name, full, depth, { currentFolder, onPick, redraw }) {
   const isOpen = TREE_OPEN.has(full);
-  const folderState = folderDiff(full);
-  return el('button', { class: `tree-item folder${folderState ? ` diff-${folderState}` : ''}`, style: `padding-left:${12 + depth * 14}px`, onclick: () => { if (isOpen) TREE_OPEN.delete(full); else TREE_OPEN.add(full); redraw(); } }, `${isOpen ? '▾' : '▸'} ${name}/`, diffBadge(folderState));
+  const active = full === currentFolder;
+  const state = folderDiff(full);
+  const toggle = () => { if (isOpen) TREE_OPEN.delete(full); else TREE_OPEN.add(full); redraw(); };
+  return el('div', { class: `tree-row${active ? ' active' : ''}`, style: `padding-left:${10 + depth * 14}px` },
+    el('button', { class: 'chev', title: isOpen ? 'Collapse' : 'Expand', onclick: toggle }, isOpen ? '▾' : '▸'),
+    el('button', { class: `tree-item folder${active ? ' active' : ''}${state ? ` diff-${state}` : ''}`, title: `Show ${full}/ on the map`, onclick: () => onPick({ folder: full }) }, `${name}/`, diffBadge(state)));
 }
 function fileButton(path, depth, { currentPath, onPick }) {
   const state = fileDiff(path);
-  return el('button', { class: `tree-item ${path === currentPath ? 'active' : ''}${state ? ` diff-${state}` : ''}`, style: `padding-left:${26 + depth * 14}px`, title: state ? `${path} (${DIFF_WORD[state]})` : path, onclick: () => onPick({ path, sym: null }) }, baseName(path), seenMark(fileUnits(path)), diffBadge(state));
+  return el('button', { class: `tree-item ${path === currentPath ? 'active' : ''}${state ? ` diff-${state}` : ''}`, style: `padding-left:${33 + depth * 14}px`, title: state ? `${path} (${DIFF_WORD[state]})` : path, onclick: () => onPick({ path, sym: null }) }, baseName(path), seenMark(fileUnits(path)), diffBadge(state));
 }
 function symbolButton(sym, colour, style, currentSym, onPick) {
   const ref = refOf(sym);
@@ -83,20 +95,20 @@ function reviewRow({ depth, units, what, chevron, onChevron, label, onClick, act
     seenBox(units, what),
     el('button', { class: `tree-item${active ? ' active' : ''}${state ? ` diff-${state}` : ''}`, title: title || what, onclick: onClick }, ...label, units.length > 1 ? el('span', { class: 'count' }, `${seenCount(units)}/${units.length}`) : null, diffBadge(state)));
 }
-function renderChanges(left, currentPath, currentSym, onPick, redraw) {
+function renderChanges(left, here) {
   const paths = Object.keys(DIFF.files).sort();
   const all = paths.flatMap(fileUnits);
   const done = seenCount(all);
   left.append(el('div', { class: 'review-progress' },
     el('div', { class: 'review-bar' }, el('span', { style: `width:${all.length ? (100 * done) / all.length : 0}%` })),
     el('span', {}, all.length ? `${done} of ${all.length} changes seen` : 'Nothing changed')));
-  const tree = new ChangeTree({ currentPath, currentSym, onPick, redraw });
+  const tree = new ChangeTree(here);
   tree.draw(pathTree(paths), '', 0);
   left.append(tree.box);
 }
 class ChangeTree {
-  constructor({ currentPath, currentSym, onPick, redraw }) {
-    Object.assign(this, { currentPath, currentSym, onPick, redraw });
+  constructor({ currentPath, currentSym, currentFolder, onPick, redraw }) {
+    Object.assign(this, { currentPath, currentSym, currentFolder, onPick, redraw });
     this.box = el('div', { class: 'tree' });
   }
   draw(node, prefix, depth) {
@@ -108,7 +120,7 @@ class ChangeTree {
     while (!inner.files.length && Object.keys(inner.dirs).length === 1) { const only = Object.keys(inner.dirs)[0]; name += `/${only}`; full += `/${only}`; inner = inner.dirs[only]; }
     const isOpen = !CHANGES_CLOSED.has(full);
     const toggle = () => { if (isOpen) CHANGES_CLOSED.add(full); else CHANGES_CLOSED.delete(full); this.redraw(); };
-    this.box.append(reviewRow({ depth, units: unitsUnder(full), what: `everything in ${full}/`, chevron: isOpen ? '▾' : '▸', onChevron: toggle, label: [el('span', { class: 'label folder-name' }, `${name}/`)], onClick: toggle, title: full }));
+    this.box.append(reviewRow({ depth, units: unitsUnder(full), what: `everything in ${full}/`, chevron: isOpen ? '▾' : '▸', onChevron: toggle, label: [el('span', { class: 'label folder-name' }, `${name}/`)], onClick: () => this.onPick({ folder: full }), active: full === this.currentFolder, title: `Show ${full}/ on the map` }));
     if (isOpen) this.draw(inner, full, depth + 1);
   }
   file(path, depth) {

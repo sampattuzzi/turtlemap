@@ -76,9 +76,10 @@ class ProjectHost:
         self,
         cache_dir: Path | None = None,
         registry: ServerRegistry | None = None,
+        agent_token: str | None = None,
     ) -> None:
         cache_dir = cache_dir or cache_directory()
-        self.agent_token = secrets.token_urlsafe(18)
+        self.agent_token = agent_token or secrets.token_urlsafe(18)
         self._registry = registry
         self._overviews = OverviewCache(cache_dir)
         self._trees = cache_dir / "trees"

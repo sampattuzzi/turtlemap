@@ -58,6 +58,7 @@ export class Explorer {
   }
   go(ref) {
     setCommentPick(null);
+    if (ref.folder) { this.goToFolder(ref.folder); return; }
     const sym = ref.sym ? lookup(ref) : null;
     if (sym && sym.kind === 'function') { this.open({ view: 'fn', path: ref.path, sym: ref.sym, open: new Set() }); return; }
     const target = ref.sym ? `cls:${ref.path}:${ref.sym}` : `mod:${ref.path}`;
@@ -66,6 +67,12 @@ export class Explorer {
     if (!ref.sym) { expanded.clear(); netDefaultExpanded(ref.path).forEach((x) => expanded.add(x)); }
     else { net().chain(target).slice(1).forEach((x) => expanded.add(x.id)); }
     this.open({ view: 'net', expanded, focus: target, related: focusUnitOf(target), open: new Set() }, ref.sym ? target : null);
+  }
+  goToFolder(folder) {
+    const target = `pkg:${folder}`;
+    revealHidden([target]);
+    const expanded = new Set(net().chain(target).slice(1).map((x) => x.id));
+    this.open({ view: 'net', expanded, focus: target, related: focusUnitOf(target), open: new Set() }, target);
   }
   filterChanged() {
     resetNet();
@@ -209,7 +216,8 @@ function updateButtons(buttons, trail) {
 function paintFrame(ui, c, onPick) {
   const isNet = c.view === 'net';
   const focusPath = isNet ? (net().nodes.get(c.focus) && net().chain(c.focus).find((n) => n.kind === 'module') || {}).path || null : c.path;
-  renderSide(ui.left, focusPath, isNet ? null : c.sym, onPick);
+  const focusFolder = isNet && !focusPath && c.focus && c.focus.startsWith('pkg:') ? c.focus.slice(4) : null;
+  renderSide(ui.left, focusPath, isNet ? null : c.sym, onPick, focusFolder);
   crumbsFor(ui.crumbs, focusPath, isNet ? null : c.sym, onPick, crumbExtra(c, focusPath));
 }
 function crumbExtra(c, focusPath) {

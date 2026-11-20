@@ -24,6 +24,7 @@ or a recent one, on the start screen. To try it on itself, run
 | `--port N` | Use a fixed port instead of a free one |
 | `--no-open` | Print the address instead of opening your browser |
 | `--no-watch` | Don't redraw the map when source files change |
+| `--no-update` | Don't update Turtlemap itself ([see below](#staying-up-to-date)) |
 
 ## Two views
 
@@ -117,6 +118,8 @@ The code panel highlights the line behind whichever node you select.
 ### Getting around
 
 - Press `/` to find any file, class or function.
+- Click a folder, file, class or function in the left panel to go to it.
+  The ▸ arrow beside a folder opens or closes it in the panel.
 - When you hover over something, lines that lead off screen get a marker on
   the edge of the view. Click a marker to glide there.
 - The **Code** tab hides, shows or resizes the code panel.
@@ -143,8 +146,26 @@ On the map, Balanced and Classic look the same.
 
 - Turtlemap reads your code but never imports or runs it.
 - The server listens only on `127.0.0.1` and needs a token made at launch.
-- The only outbound request is for web fonts from Google Fonts. Offline, it
-  uses system fonts.
+- The browser's only outbound request is for web fonts from Google Fonts.
+  Offline, it uses system fonts.
+- The server's only outbound request is a `git fetch` of Turtlemap's own `main`
+  every five minutes ([see below](#staying-up-to-date)). `--no-update` turns it
+  off.
+
+## Staying up to date
+
+When Turtlemap runs from a git checkout of itself on `main`, it fetches `main`
+every five minutes and updates itself:
+
+| What changed on `main` | What happens |
+|---|---|
+| The browser app | It pulls, and open pages offer **Refresh** |
+| The server code | It pulls and starts again on the same address, with the same project open, then pages offer **Refresh** |
+| `pyproject.toml` or `poetry.lock` | It doesn't pull. Pages say to run `git pull` and `poetry install`, then start Turtlemap again |
+
+It only ever fast-forwards. It leaves the checkout alone when it is on another
+branch, has uncommitted changes to tracked files, or has commits that are not
+on `main`.
 
 ## Large projects
 
@@ -351,6 +372,7 @@ that (the map, blueprints and queries) works only on the model.
 | `review/` | Stores comments and works out where they point |
 | `web/` | The local server |
 | `static/` | The browser app, as plain JavaScript modules |
+| `updates/` | Updates Turtlemap itself from `main` |
 | `app.py` | The `turtlemap` command |
 | `agent.py`, `mcp.py` | The `turtlemap-agent` and `turtlemap-mcp` commands |
 | `config.py` | Where settings and caches are kept |
