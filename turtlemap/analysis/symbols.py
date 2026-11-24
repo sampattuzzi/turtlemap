@@ -295,9 +295,6 @@ class _FieldCollector:
     def class_statement(self, statement: m.Stmt) -> None:
         if isinstance(statement, m.Assign):
             self._class_assign(statement)
-        elif isinstance(statement, m.FunctionDef) and statement.function.is_property:
-            returns = self.resolver.annotation(statement.function.returns)
-            self.seen.setdefault(statement.function.name, (returns, None))
 
     def method(self, method: m.FunctionDecl, receiver: str) -> None:
         parameter_types = _parameter_types(self.resolver, method)
