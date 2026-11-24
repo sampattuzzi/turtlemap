@@ -70,6 +70,7 @@ class Project:
         self._lock = threading.RLock()
         self._overview: dict[str, Any] | None = None
         self._pieces: tuple[Sequence[Piece], float] | None = None
+        self._known: dict[str, Piece] = {}
 
     def overview(self) -> dict[str, Any]:
         with self._lock:
@@ -86,6 +87,11 @@ class Project:
         with self._lock:
             self._pieces = (pieces, seconds)
             self._overview = None
+            self._known = {piece.path: piece for piece in pieces}
+
+    def remember(self, pieces: Iterable[Piece]) -> None:
+        with self._lock:
+            self._known.update((piece.path, piece) for piece in pieces)
 
     def pieces(self, paths: Iterable[str]) -> list[Piece]:
         collector = DependencyCollector(self.types)
@@ -151,6 +157,9 @@ class Project:
         }
 
     def module_summary(self, path: str) -> dict[str, Any] | None:
+        known = self._known.get(path)
+        if known is not None:
+            return known.module
         module = self._module(path)
         return module_summary(self.types, module) if module is not None else None
 

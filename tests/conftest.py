@@ -5,13 +5,13 @@ from dataclasses import dataclass
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
 
-from turtlemap.analysis.project import Project
+from turtlemap.analysis.project import Piece, Project
 from turtlemap.review.comments import CommentStore
 from turtlemap.projects.seen import SeenStore
 from turtlemap.projects.host import ProjectHost
@@ -42,6 +42,20 @@ def make_project(tmp_path: Path) -> ProjectFactory:
         return Project(tmp_path)
 
     return make
+
+
+@pytest.fixture
+def build_log(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    built: list[str] = []
+    build = Project.pieces
+
+    def logged(project: Project, paths: Iterable[str]) -> list[Piece]:
+        pieces = build(project, paths)
+        built.extend(piece.path for piece in pieces)
+        return pieces
+
+    monkeypatch.setattr(Project, "pieces", logged)
+    return built
 
 
 @dataclass

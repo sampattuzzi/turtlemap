@@ -31,6 +31,8 @@ SHOP: Files = {
     """,
 }
 
+EDITED_NOTES: Files = {"notes.py": 'def remember() -> str:\n    return "eggs"\n'}
+
 ALIASED: Files = {
     "web/tsconfig.json": """
         {"compilerOptions": {"paths": {"@lib/*": ["./src/lib/*"]}}}
@@ -186,13 +188,92 @@ def test_reopens_from_the_cache_on_disk(tmp_path: Path) -> None:
     first = Project(root)
     cache = OverviewCache(tmp_path / "cache")
     cache.overview(first)
-    cache.save(first)
+    cache.save()
     make_files(root, {"notes.py": "def remember() -> None:\n    pass\n"})
 
     reopened = OverviewCache(tmp_path / "cache").overview(Project(root))
 
     assert reopened.rebuilt == ("notes.py",)
     expect_full_build(root, reopened)
+
+
+def test_reuses_pieces_across_folders_with_the_same_contents(
+    tmp_path: Path, build_log: list[str]
+) -> None:
+    root = make_files(tmp_path / "project", SHOP)
+    copy = make_files(tmp_path / "copy", {**SHOP, **EDITED_NOTES})
+    cache = OverviewCache(tmp_path / "cache")
+    cache.overview(Project(root))
+    build_log.clear()
+
+    result = cache.overview(Project(copy, display_root=root))
+
+    assert build_log == ["notes.py"]
+    expect_full_build(Project(copy, display_root=root), result)
+
+
+def test_keeps_recent_folders_in_memory(tmp_path: Path) -> None:
+    root = make_files(tmp_path / "project", SHOP)
+    copy = make_files(tmp_path / "copy", {**SHOP, **EDITED_NOTES})
+    cache = OverviewCache(tmp_path / "cache")
+    first = cache.overview(Project(root))
+    cache.overview(Project(copy, display_root=root))
+
+    again = cache.overview(Project(root))
+
+    assert not again.changed
+    assert again.data is first.data
+
+
+def test_reports_files_whose_piece_came_back_from_the_store(tmp_path: Path) -> None:
+    root = make_files(tmp_path / "project", SHOP)
+    cache = OverviewCache(tmp_path / "cache")
+    cache.overview(Project(root))
+    make_files(root, EDITED_NOTES)
+    cache.overview(Project(root))
+    make_files(root, {"notes.py": SHOP["notes.py"]})
+
+    result = cache.overview(Project(root))
+
+    assert result.rebuilt == ("notes.py",)
+    expect_full_build(Project(root), result)
+
+
+def test_gives_pieces_for_some_files_from_the_store(
+    tmp_path: Path, build_log: list[str]
+) -> None:
+    root = make_files(tmp_path / "project", SHOP)
+    base = make_files(tmp_path / "base", {**SHOP, **EDITED_NOTES})
+    cache = OverviewCache(tmp_path / "cache")
+    cache.overview(Project(root))
+    build_log.clear()
+    project = Project(base, display_root=root)
+
+    pieces = cache.pieces(project, ["models.py", "notes.py", "gone.py"])
+
+    assert build_log == ["notes.py"]
+    assert sorted(pieces) == ["models.py", "notes.py"]
+    assert project.module_summary("notes.py") == Project(base).module_summary(
+        "notes.py"
+    )
+
+
+def test_reopens_pieces_shared_by_another_folder_from_disk(
+    tmp_path: Path, build_log: list[str]
+) -> None:
+    root = make_files(tmp_path / "project", SHOP)
+    copy = make_files(tmp_path / "copy", SHOP)
+    cache = OverviewCache(tmp_path / "cache")
+    cache.overview(Project(root))
+    cache.save()
+    build_log.clear()
+
+    result = OverviewCache(tmp_path / "cache").overview(
+        Project(copy, display_root=root)
+    )
+
+    assert build_log == []
+    expect_full_build(Project(copy, display_root=root), result)
 
 
 def make_files(root: Path, files: Files) -> Path:
@@ -206,10 +287,11 @@ def make_files(root: Path, files: Files) -> Path:
     return root
 
 
-def expect_full_build(root: Path, result: Overview) -> None:
+def expect_full_build(project: Path | Project, result: Overview) -> None:
+    fresh = project if isinstance(project, Project) else Project(project)
     assert without_timing(
         json.loads(gzip.decompress(result.data.compressed()))
-    ) == without_timing(Project(root).overview())
+    ) == without_timing(fresh.overview())
 
 
 def without_timing(overview: dict[str, Any]) -> dict[str, Any]:

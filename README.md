@@ -185,6 +185,12 @@ hash of their contents, and the answers it got when it looked a module up. When
 something changes, only the pieces whose inputs changed are rebuilt. Saving a
 file without changing it rebuilds nothing.
 
+Pieces are shared between your working copy and the revisions you compare it
+with. Each file keeps its last few pieces, and any revision where a piece's
+inputs are the same reuses it. Opening a comparison builds only the files the
+branch changed and the files that use them, and going back to the project
+doesn't read it again.
+
 While Turtlemap is open it watches the project. When you save a source file or a
 `tsconfig.json`, it rebuilds what that file reaches and redraws the map in
 place, keeping where you were looking, what you had open and what you had

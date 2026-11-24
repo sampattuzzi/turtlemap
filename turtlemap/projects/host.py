@@ -196,7 +196,7 @@ class ProjectHost:
             except Exception:
                 traceback.print_exc(limit=5, file=sys.stderr)
                 return
-            self._save_soon(project)
+            self._save_soon()
 
     def changes_since(self, since: int) -> dict[str, Any] | None:
         session = self._session
@@ -231,13 +231,11 @@ class ProjectHost:
     def project(self) -> Project | None:
         return self._session.project
 
-    def _save_soon(self, project: Project) -> None:
+    def _save_soon(self) -> None:
         with self._lock:
             if self._save_timer is not None:
                 self._save_timer.cancel()
-            self._save_timer = threading.Timer(
-                SAVE_DELAY, self._overviews.save, (project,)
-            )
+            self._save_timer = threading.Timer(SAVE_DELAY, self._overviews.save)
             self._save_timer.daemon = True
             self._save_timer.start()
 
@@ -270,7 +268,7 @@ class ProjectHost:
         except Exception:
             error = traceback.format_exc(limit=5)
             return self._advance(session, replace(session, error=error, loading=False))
-        self._overviews.save(project)
+        self._overviews.save()
         after = self._advance(session, session.loaded(result.data, result.pieces))
         gc.freeze()
         return after
@@ -281,7 +279,11 @@ class ProjectHost:
             return session
         try:
             fresh, data = compare(
-                Repository(root), diff.range, diff.base, session.project
+                Repository(root),
+                diff.range,
+                diff.base,
+                session.project,
+                self._overviews,
             )
         except Exception as error:
             return replace(session, diff_error=_describe(error))
@@ -304,8 +306,11 @@ class ProjectHost:
             if latest is not None:
                 latest = self._load_overview(latest, head)
             if latest is not None:
-                diff, data = build_diff(repository, diff_range, head, self._trees)
+                diff, data = build_diff(
+                    repository, diff_range, head, self._trees, self._overviews
+                )
                 self._advance(latest, replace(latest, diff=diff, diff_bytes=data))
+                self._overviews.save()
         except Exception as error:
             if latest is not None:
                 failed = replace(latest, diff_error=_describe(error))

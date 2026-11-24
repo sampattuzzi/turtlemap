@@ -4,9 +4,11 @@ import json
 from pathlib import Path
 
 from turtlemap.analysis.diff.project_diff import ProjectDiff
+from turtlemap.analysis.diff.status import ADDED
 from turtlemap.analysis.project import Project
 from turtlemap.analysis.diff.revisions import DiffRange
 from turtlemap.projects.git import Repository
+from turtlemap.projects.overview_cache import OverviewCache
 
 
 def head_project(
@@ -24,17 +26,38 @@ def head_project(
 
 
 def build_diff(
-    repository: Repository, diff_range: DiffRange, head: Project, trees: Path
+    repository: Repository,
+    diff_range: DiffRange,
+    head: Project,
+    trees: Path,
+    cache: OverviewCache,
 ) -> tuple[ProjectDiff, bytes]:
     folder = _tree_folder(trees, diff_range.base_sha, repository)
-    base = Project(folder, repository.extract(diff_range.base_sha, folder))
-    return compare(repository, diff_range, base, head)
+    base = Project(
+        folder,
+        repository.extract(diff_range.base_sha, folder),
+        display_root=head.display_root,
+    )
+    return compare(repository, diff_range, base, head, cache)
 
 
 def compare(
-    repository: Repository, diff_range: DiffRange, base: Project, head: Project
+    repository: Repository,
+    diff_range: DiffRange,
+    base: Project,
+    head: Project,
+    cache: OverviewCache,
 ) -> tuple[ProjectDiff, bytes]:
-    diff = ProjectDiff(base, head, repository.changes(diff_range), diff_range)
+    changes = repository.changes(diff_range)
+    cache.pieces(
+        base,
+        [
+            change.old_path or change.path
+            for change in changes
+            if change.status != ADDED
+        ],
+    )
+    diff = ProjectDiff(base, head, changes, diff_range)
     summary = json.dumps(diff.summary(), separators=(",", ":")).encode()
     return diff, gzip.compress(summary, 6)
 

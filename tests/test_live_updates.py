@@ -253,6 +253,25 @@ def test_a_comparison_between_commits_ignores_edits(tmp_path: Path) -> None:
     assert host.status()["revision"] == before
 
 
+def test_a_comparison_reuses_what_the_project_already_built(
+    tmp_path: Path, build_log: list[str]
+) -> None:
+    folder = make_repository(tmp_path, {"shapes.py": SQUARE, "drawing.py": DRAWING})
+    make_file(folder / "shapes.py", CIRCLE)
+    git(folder, "checkout", "-qb", "feature")
+    git(folder, "commit", "-qam", "2")
+    host = ProjectHost(cache_dir=tmp_path / "cache")
+    host.open(folder)
+    expect_eventually(lambda: host.status()["ready"])
+    build_log.clear()
+
+    host.open_diff("main...feature")
+    expect_eventually(lambda: host.status()["ready"])
+
+    assert build_log == ["shapes.py"]
+    assert compared_status(host, "cls:shapes.py:Circle") == "added"
+
+
 def make_opened_host(
     tmp_path: Path, files: dict[str, str] | None = None
 ) -> ProjectHost:
@@ -265,18 +284,29 @@ def make_opened_host(
 
 
 def make_compared_host(tmp_path: Path, spec: str) -> ProjectHost:
-    folder = tmp_path / "project"
-    make_file(folder / "shapes.py", SQUARE)
-    for arguments in [
-        ["init", "-q", "-b", "main"],
-        ["add", "-A"],
-        ["-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "1"],
-    ]:
-        subprocess.run(["git", *arguments], cwd=folder, check=True)
+    folder = make_repository(tmp_path, {"shapes.py": SQUARE})
     host = ProjectHost(cache_dir=tmp_path / "cache")
     host.open(folder, spec)
     expect_eventually(lambda: host.status()["ready"])
     return host
+
+
+def make_repository(tmp_path: Path, files: dict[str, str]) -> Path:
+    folder = tmp_path / "project"
+    for name, text in files.items():
+        make_file(folder / name, text)
+    git(folder, "init", "-q", "-b", "main")
+    git(folder, "add", "-A")
+    git(folder, "commit", "-qm", "1")
+    return folder
+
+
+def git(folder: Path, *arguments: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.email=t@example.com", "-c", "user.name=T", *arguments],
+        cwd=folder,
+        check=True,
+    )
 
 
 def fail_to_compare(*arguments: object) -> object:

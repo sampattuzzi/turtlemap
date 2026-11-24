@@ -145,7 +145,7 @@ def test_reuses_cached_overview_for_unchanged_files(
     make_server: ThreadingHTTPServer, tmp_path: Path
 ) -> None:
     make_opened(make_server, tmp_path)
-    cached = list((tmp_path / "cache").glob("*.json.gz"))
+    cached = list((tmp_path / "cache").glob("*/*.json.gz"))
     first = fetch_json(make_server, "/api/project")
     make_opened(make_server, tmp_path)
 
