@@ -96,6 +96,15 @@ def test_serves_the_page_without_a_token(make_server: ThreadingHTTPServer) -> No
     assert b"app.js" in body
 
 
+def test_serves_the_favicon_the_page_links(make_server: ThreadingHTTPServer) -> None:
+    page = fetch(make_server, "/", token=None)[1]
+    status, icon = fetch(make_server, "/favicon.svg", token=None)
+
+    assert b'rel="icon" href="favicon.svg"' in page
+    assert status == 200
+    assert icon.startswith(b"<svg")
+
+
 def test_refuses_paths_outside_the_static_folder(
     make_server: ThreadingHTTPServer,
 ) -> None:
