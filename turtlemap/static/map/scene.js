@@ -45,6 +45,7 @@ class NetDrawing {
     scene.svg.append(arrowMarkers());
     this.overlay = svg('svg', { class: 'wires overlay', width: scene.width, height: scene.height });
     scene.el.append(this.overlay);
+    this.feederList = [];
     for (const route of NET_ROUTES.values()) this.innerOffset(route.inner);
   }
   innerOffset(inner) {
@@ -82,6 +83,7 @@ class NetDrawing {
   traceRoutes() {
     for (const d of this.drawn) {
       d.routes = d.g.atoms.map((e) => this.routeOf(e, d));
+      for (const route of d.routes) for (const f of route.segs) f.passing.push({ d, route });
       d.traced = d.routes.every((route) => route.whole);
     }
   }
@@ -114,8 +116,9 @@ class NetDrawing {
     let d;
     if (side === 'R') { const start = rc.x + rc.w, out = start + (NET_SLACK.get(c) || 0); d = `M${start},${cy} L${routedPath(out, cy, rq.x + rq.w, portY, via, 30).slice(1)}`; }
     else d = routedPath(rq.x, portY, rc.x, cy, via, 30);
-    const feeder = { el: svg('path', { d, class: 'feeder' }) };
-    this.overlay.prepend(feeder.el);
+    const feeder = { el: svg('path', { d, class: 'feeder' }), hit: svg('path', { d, class: 'feeder-hit', 'data-feeder': this.feederList.length }), child: c, passing: [] };
+    this.feederList.push(feeder);
+    this.overlay.prepend(feeder.el, feeder.hit);
     return feeder;
   }
   highlight(id) {
@@ -133,9 +136,11 @@ class NetDrawing {
   listen() {
     const host = this.scene.el;
     host.addEventListener('mousemove', (e) => this.onMouseMove(e));
-    host.addEventListener('mouseout', (e) => { if (e.target.closest('.rel-hit') && !(e.relatedTarget instanceof Element && e.relatedTarget.closest('.rel-hit'))) { this.dropCard(); this.highlight(null); } });
+    host.addEventListener('mouseout', (e) => { if (e.target.closest('.rel-hit, .feeder-hit') && !(e.relatedTarget instanceof Element && e.relatedTarget.closest('.rel-hit, .feeder-hit'))) { this.dropCard(); this.highlight(null); } });
     host.addEventListener('mouseover', (e) => {
       if (e.target.closest('.rel-hit')) return;
+      const feeder = e.target.closest('.feeder-hit');
+      if (feeder) { this.hoverFeeder(this.feederList[+feeder.dataset.feeder]); return; }
       const b = e.target.closest('.nb');
       const id = b && (!b.classList.contains('open') || e.target.closest('.nhead')) ? b.dataset.id : null;
       if (id !== this.hovered) { this.hovered = id; this.highlight(id); }
@@ -144,13 +149,22 @@ class NetDrawing {
     host.addEventListener('click', (e) => this.onClick(e));
   }
   onClick(e) {
-    const hit = e.target.closest('.rel-hit');
+    const hit = e.target.closest('.rel-hit, .feeder-hit');
     if (!hit || !this.scene.ctx.followArrow) return;
     e.stopPropagation();
-    const d = this.drawn[+hit.dataset.drawn];
     this.dropCard();
     this.highlight(null);
-    this.scene.ctx.followArrow(d.g.a, d.g.b);
+    if (hit.classList.contains('rel-hit')) { const d = this.drawn[+hit.dataset.drawn]; this.scene.ctx.followArrow(d.g.a, [d.g.a, d.g.b]); return; }
+    const f = this.feederList[+hit.dataset.feeder];
+    const ends = f.passing.flatMap(({ route }) => [visibleEnd(this.N, this.effective, route.e.from), visibleEnd(this.N, this.effective, route.e.to)]);
+    if (ends.length) this.scene.ctx.followArrow(f.child, [...new Set(ends)]);
+  }
+  hoverFeeder(f) {
+    this.dropCard();
+    this.hovered = null;
+    this.highlight(null);
+    this.scene.el.classList.add('has-hot');
+    for (const { d, route } of f.passing) { d.path.classList.add('hot'); d.text.classList.add('hot'); lightRoute(d, route); }
   }
   onMouseMove(e) {
     if (!e.target.closest('.rel-hit')) return;
@@ -183,7 +197,11 @@ class NetDrawing {
       d.text.style.display = hidden ? 'none' : '';
       d.hit.style.display = hidden ? 'none' : '';
     }
-    for (const f of this.feeders.values()) if (f) { if (!f.box) f.box = pathBox(f.el); setCulled(f.el, f, !overlaps(f.box, view)); }
+    for (const f of this.feederList) {
+      if (!f.box) f.box = pathBox(f.el);
+      setCulled(f.el, f, !overlaps(f.box, view));
+      f.hit.style.display = f.culled ? 'none' : '';
+    }
   }
 }
 function effectiveOpen(N, expanded) {

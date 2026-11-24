@@ -42,8 +42,8 @@ and **uses**.
   box, faint feeder lines carry each dependency to the box's edge.
 - **Hover** over an item to light its whole path. Hover over an arrow to see
   what it is made of.
-- **Click an arrow** to open the boxes at both its ends and zoom out until
-  both fit on screen.
+- **Click an arrow**, or a feeder line inside an open box, to open the boxes
+  at both its ends and zoom out until both fit on screen.
 - **Shortcuts** (A → C when A already reaches C through B) are drawn very
   faintly, and their card names the way round.
 - **Arrows flow left to right.** Only a real cycle loops back, in its own lane.
