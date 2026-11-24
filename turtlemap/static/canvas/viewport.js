@@ -2,6 +2,9 @@ import { el } from '../core/dom.js';
 import { PointerGestures } from './gestures.js';
 import { EdgePointers } from './pointers.js';
 const CULL_MARGIN = 0.75;
+const FRAME_SIDE = 40;
+const FRAME_TOP = 56;
+const FRAME_BOTTOM = 64;
 export class Viewport {
   constructor(host) {
     this.host = host; this.s = 1; this.x = 0; this.y = 0;
@@ -49,14 +52,25 @@ export class Viewport {
     if (lines) this.crumb.replaceChildren(...lines);
   }
   glideTo(p) {
+    this.glide(this.host.clientWidth / 2 - p.x * this.s, this.host.clientHeight / 2 - p.y * this.s, this.s);
+  }
+  frame(scene, box) {
+    const r = scene.el.getBoundingClientRect(), hr = this.host.getBoundingClientRect();
+    const k = r.width / this.s / scene.width;
+    const at = { x: (r.left - hr.left - this.x) / this.s + box.x * k, y: (r.top - hr.top - this.y) / this.s + box.y * k, w: box.w * k, h: box.h * k };
     const W = this.host.clientWidth, H = this.host.clientHeight;
-    const x0 = this.x, y0 = this.y, x1 = W / 2 - p.x * this.s, y1 = H / 2 - p.y * this.s;
+    const room = { w: W - 2 * FRAME_SIDE, h: H - FRAME_TOP - FRAME_BOTTOM };
+    const s = Math.max(0.05, Math.min(this.s, room.w / at.w, room.h / at.h));
+    this.glide(FRAME_SIDE + room.w / 2 - (at.x + at.w / 2) * s, FRAME_TOP + room.h / 2 - (at.y + at.h / 2) * s, s);
+  }
+  glide(x1, y1, s1) {
+    const x0 = this.x, y0 = this.y, s0 = this.s;
     const begun = performance.now();
     this.edges.clear();
     const step = (now) => {
       const k = Math.min(1, (now - begun) / 320);
       const eased = 1 - (1 - k) ** 3;
-      this.x = x0 + (x1 - x0) * eased; this.y = y0 + (y1 - y0) * eased;
+      this.x = x0 + (x1 - x0) * eased; this.y = y0 + (y1 - y0) * eased; this.s = s0 + (s1 - s0) * eased;
       this.apply(k < 1);
       if (k < 1) requestAnimationFrame(step);
     };

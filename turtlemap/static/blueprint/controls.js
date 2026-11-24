@@ -13,6 +13,7 @@ export class BlueprintControls {
       openButton: (n) => this.openButton(unfoldKey(owner, n)),
       activate: (ref, n, v) => { const btn = v && v.el.querySelector(':scope > .box > .head [data-unfold]'); if (btn) btn.click(); else explorer.go(ref); },
       select: (n, v, sym) => explorer.selectNode(n, v, sym),
+      frame: (scene, box) => explorer.vp.frame(scene, box),
       afterNode: (n, v) => {
         if (!n.target || n.kind === 'entry') return;
         const embed = this.embed(unfoldKey(owner, n), n.target);

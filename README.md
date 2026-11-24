@@ -42,6 +42,8 @@ and **uses**.
   box, faint feeder lines carry each dependency to the box's edge.
 - **Hover** over an item to light its whole path. Hover over an arrow to see
   what it is made of.
+- **Click an arrow** to open the boxes at both its ends and zoom out until
+  both fit on screen.
 - **Shortcuts** (A → C when A already reaches C through B) are drawn very
   faintly, and their card names the way round.
 - **Arrows flow left to right.** Only a real cycle loops back, in its own lane.
@@ -97,7 +99,8 @@ blueprints.
 - **A white line** marks where the order of steps matters.
 - **⧉ on a call** unfolds the called function in place. **Go into** makes it
   the whole view.
-- **Hover over a wire** to see both ends and its full type.
+- **Hover over a wire** to see both ends and its full type. **Click it** to
+  zoom out until both ends fit on screen.
 - **Maths stays readable.** `north = cos(lat) * sin(dec) - …` is one node named
   `north`, with the expression written out.
 - **Nested functions and lambdas** are frames drawn around their own body.

@@ -141,6 +141,16 @@ class NetDrawing {
       if (id !== this.hovered) { this.hovered = id; this.highlight(id); }
     });
     host.addEventListener('mouseleave', () => { this.hovered = null; this.dropCard(); this.highlight(null); });
+    host.addEventListener('click', (e) => this.onClick(e));
+  }
+  onClick(e) {
+    const hit = e.target.closest('.rel-hit');
+    if (!hit || !this.scene.ctx.followArrow) return;
+    e.stopPropagation();
+    const d = this.drawn[+hit.dataset.drawn];
+    this.dropCard();
+    this.highlight(null);
+    this.scene.ctx.followArrow(d.g.a, d.g.b);
   }
   onMouseMove(e) {
     if (!e.target.closest('.rel-hit')) return;

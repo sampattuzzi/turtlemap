@@ -27,7 +27,7 @@ export class PointerGestures {
     if (e.shiftKey && this.viewport.onMarquee && !this.pointers.size) { this.startMarquee(e); return; }
     this.pointers.set(e.pointerId, { ...this.viewport.local(e), startX: e.clientX, startY: e.clientY, target: e.target });
     this.swallowClick = false;
-    if (this.pointers.size === 1) this.drag = { moved: false, background: !e.target.closest('.nb, .box, button') };
+    if (this.pointers.size === 1) this.drag = { moved: false, background: !e.target.closest('.nb, .box, button, .rel-hit, .wire-hit') };
     if (!this.drag) this.drag = { moved: false, background: false };
     if (this.pointers.size === 2) { this.drag.moved = true; this.pinch = this.twoFinger(); }
   }

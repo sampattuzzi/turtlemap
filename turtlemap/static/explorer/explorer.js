@@ -1,7 +1,7 @@
 import { codePanel } from '../blueprint/codepanel.js';
 import { BlueprintControls } from '../blueprint/controls.js';
 import { buildFunctionScene } from '../blueprint/nodes.js';
-import { messageScene } from '../canvas/scene.js';
+import { boundsOf, flash, messageScene } from '../canvas/scene.js';
 import { Viewport } from '../canvas/viewport.js';
 import { setCommentPick } from '../comments/store.js';
 import { CommentControls } from '../comments/controls.js';
@@ -110,6 +110,19 @@ export class Explorer {
     const after = this.scene && this.scene.netRects && this.scene.netRects.get(id);
     if (before && after) { vp.x = x0 - after.x * vp.s; vp.y = y0 - after.y * vp.s; vp.apply(); }
   }
+  followArrow(from, to) {
+    const N = net();
+    const expanded = this.trail.current.expanded;
+    for (const id of [from, to]) {
+      if (this.scene.effective.has(id) || !N.nodes.get(id).children.length) continue;
+      if (N.autoOpen.has(id)) expanded.delete(id); else expanded.add(id);
+    }
+    this.keepInPlace(from, () => this.render(true));
+    const boxes = [from, to].map((id) => this.scene.netRects.get(id)).filter(Boolean);
+    if (!boxes.length) return;
+    this.vp.frame(this.scene, boundsOf(boxes));
+    boxes.forEach((box) => flash(box.el));
+  }
   showEverything() {
     const c = this.trail.current;
     const keep = c.related;
@@ -135,6 +148,7 @@ export class Explorer {
       go: this.goTo,
       show: (id) => this.showOnMap(id),
       toggle: (id) => this.toggleNet(id),
+      followArrow: (from, to) => this.followArrow(from, to),
       select: (id) => {
         this.trail.selected = id;
         const unit = focusUnitOf(id);

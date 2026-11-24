@@ -32,6 +32,15 @@ export function pathBox(path) {
   if (x0 === Infinity) return { x: -1e9, y: -1e9, w: 2e9, h: 2e9 };
   return { x: x0 - 16, y: y0 - 16, w: x1 - x0 + 32, h: y1 - y0 + 32 };
 }
+export function boundsOf(boxes) {
+  const x = Math.min(...boxes.map((b) => b.x)), y = Math.min(...boxes.map((b) => b.y));
+  return { x, y, w: Math.max(...boxes.map((b) => b.x + b.w)) - x, h: Math.max(...boxes.map((b) => b.y + b.h)) - y };
+}
+export function flash(element) {
+  element.classList.remove('flash');
+  void element.offsetWidth;
+  element.classList.add('flash');
+}
 export function setCulled(element, state, culled) {
   if (state.culled === culled) return;
   state.culled = culled;
@@ -44,6 +53,7 @@ export class Scene {
     this.el.addEventListener('mousemove', (e) => this.pointAtWires(e));
     this.el.addEventListener('mouseout', (e) => { if (e.target.closest('.wire-hit') && !(e.relatedTarget instanceof Element && e.relatedTarget.closest('.wire-hit'))) this.dropWires(); });
     this.el.addEventListener('mouseleave', () => this.dropWires());
+    this.el.addEventListener('click', (e) => this.clickWire(e));
   }
   add(element, data = {}) { const v = { el: element, data, x: 0, y: 0 }; element.classList.add('node'); this.layer.append(element); this.nodes.push(v); return v; }
   wire(a, ak, b, bk, cls, type) { const w = { a, ak, b, bk, cls, type }; this.wires.push(w); return w; }
@@ -108,6 +118,15 @@ export class Scene {
       document.body.append(this.wireCard);
     }
     if (this.wireCard) placeCard(this.wireCard, e, [...this.el.querySelectorAll('.pin-hot')].map((pin) => pin.getBoundingClientRect()));
+  }
+  clickWire(e) {
+    const hit = e.target.closest('.wire-hit');
+    if (!hit || !this.svg.contains(hit) || !this.ctx || !this.ctx.frame) return;
+    e.stopPropagation();
+    const w = this.wires[+hit.dataset.wire];
+    this.dropWires();
+    this.ctx.frame(this, boundsOf([w.a, w.b]));
+    for (const v of new Set([w.a, w.b])) flash(v.el);
   }
   dropWires() {
     if (this.wireCard) { this.wireCard.remove(); this.wireCard = null; }
