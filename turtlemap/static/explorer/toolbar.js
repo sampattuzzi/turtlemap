@@ -115,29 +115,52 @@ export function shell(root, { extraButtons, onPick, onSettings, onCompared, line
   right.append(bar);
   const tab = el('button', { class: 'code-tab', title: 'Click to show or hide the code, drag to resize it' }, el('span', { class: 'chev' }, '⌄'), 'Code');
   const mainCol = el('div', { class: 'main-col' }, vpHost, el('div', { class: 'code-dock' }, tab), right);
-  row.append(left, mainCol);
+  const sideBar = el('div', { class: 'side-bar', title: 'Drag to resize the side panel' });
+  const sideTab = el('button', { class: 'side-tab-handle', title: 'Click to show or hide the side panel, drag to resize it' }, el('span', { class: 'chev' }, '⌄'), el('span', { class: 'label' }, 'Files'));
+  row.append(left, el('div', { class: 'side-dock' }, sideBar, sideTab), mainCol);
   root.append(row);
-  try { const saved = localStorage.getItem(`${SETTINGS_KEY}-bottom`); if (saved) right.style.setProperty('--bottom-h', saved); right.hidden = localStorage.getItem(`${SETTINGS_KEY}-code-hidden`) === '1'; } catch (e) {}
+  const phone = window.innerWidth <= 760;
+  try {
+    const savedBottom = localStorage.getItem(`${SETTINGS_KEY}-bottom`); if (savedBottom) right.style.setProperty('--bottom-h', savedBottom);
+    right.hidden = localStorage.getItem(`${SETTINGS_KEY}-code-hidden`) === '1';
+    const savedSide = localStorage.getItem(`${SETTINGS_KEY}-side`); if (savedSide) left.style.setProperty('--side-w', savedSide);
+    left.hidden = localStorage.getItem(`${SETTINGS_KEY}-side-hidden`) === '1';
+  } catch (e) {}
+  if (phone) left.hidden = true;
   const remember = () => { try { localStorage.setItem(`${SETTINGS_KEY}-bottom`, right.style.getPropertyValue('--bottom-h')); localStorage.setItem(`${SETTINGS_KEY}-code-hidden`, right.hidden ? '1' : '0'); } catch (err) {} };
-  const resizeFrom = (handle, onClick) => handle.addEventListener('pointerdown', (e) => {
+  const rememberSide = () => { if (phone) return; try { localStorage.setItem(`${SETTINGS_KEY}-side`, left.style.getPropertyValue('--side-w')); localStorage.setItem(`${SETTINGS_KEY}-side-hidden`, left.hidden ? '1' : '0'); } catch (err) {} };
+  const resizeBottom = (y) => {
+    const colRect = mainCol.getBoundingClientRect();
+    right.hidden = false;
+    right.style.setProperty('--bottom-h', `${Math.round(Math.min(colRect.height * 0.75, Math.max(90, colRect.bottom - y)))}px`);
+  };
+  const resizeSide = (x) => {
+    const rowRect = row.getBoundingClientRect();
+    left.hidden = false;
+    left.style.setProperty('--side-w', `${Math.round(Math.min(rowRect.width * 0.6, Math.max(160, x - rowRect.left)))}px`);
+  };
+  const toggleCode = () => { right.hidden = !right.hidden; };
+  const toggleSide = () => { left.hidden = !left.hidden; };
+  dragToResize(bar, 'y', resizeBottom, null, remember);
+  dragToResize(tab, 'y', resizeBottom, toggleCode, remember);
+  dragToResize(sideBar, 'x', resizeSide, null, rememberSide);
+  dragToResize(sideTab, 'x', resizeSide, toggleSide, rememberSide);
+  return { crumbs, left, right, vpHost };
+}
+function dragToResize(handle, axis, resize, toggle, remember) {
+  const along = (e) => (axis === 'x' ? e.clientX : e.clientY);
+  handle.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     handle.setPointerCapture(e.pointerId);
-    const colRect = mainCol.getBoundingClientRect();
     let dragged = false;
     const move = (ev) => {
-      if (!dragged && Math.abs(ev.clientY - e.clientY) < 4) return;
+      if (!dragged && Math.abs(along(ev) - along(e)) < 4) return;
       dragged = true;
-      right.hidden = false;
-      const h = Math.min(colRect.height * 0.75, Math.max(90, colRect.bottom - ev.clientY));
-      right.style.setProperty('--bottom-h', `${Math.round(h)}px`);
+      resize(along(ev));
     };
-    const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); if (!dragged && onClick) onClick(); remember(); };
+    const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); if (!dragged && toggle) toggle(); remember(); };
     handle.addEventListener('pointermove', move);
     handle.addEventListener('pointerup', up);
   });
-  resizeFrom(bar, null);
-  resizeFrom(tab, () => { right.hidden = !right.hidden; });
-  tab.addEventListener('click', (e) => { if (e.detail === 0) { right.hidden = !right.hidden; remember(); } });
-  if (window.innerWidth <= 760) { left.hidden = true; }
-  return { crumbs, left, right, vpHost };
+  if (toggle) handle.addEventListener('click', (e) => { if (e.detail === 0) { toggle(); remember(); } });
 }

@@ -101,7 +101,17 @@ button { cursor: pointer; }
 
 .body-row { flex: 1; display: flex; min-height: 0; position: relative; }
 .panel { background: var(--chrome); overflow: auto; min-width: 0; flex: none; }
-.panel.left { width: 250px; border-right: 1px solid var(--line); }
+.panel.left { width: var(--side-w, 250px); border-right: 1px solid var(--line); }
+.side-dock { position: relative; width: 0; flex: none; z-index: 6; }
+.side-bar { position: absolute; top: 0; bottom: 0; left: -5px; width: 9px; cursor: ew-resize; z-index: 3; touch-action: none; }
+.side-bar::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 3px; border-radius: 3px; background: transparent; }
+.side-bar:hover::after { background: var(--accent); }
+.body-row:has(> .panel.left[hidden]) .side-bar { left: 0; }
+.side-tab-handle { position: absolute; left: 0; top: 50%; transform: translateY(-50%); display: inline-flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 3px 14px 4px; border: 1px solid var(--line); border-left: 0; border-radius: 0 8px 8px 0; background: var(--chrome); color: var(--fg-dim); font-size: 0.82em; cursor: grab; touch-action: none; z-index: 4; }
+.side-tab-handle:hover { color: var(--fg); border-color: var(--fg-dim); }
+.side-tab-handle .label { writing-mode: vertical-rl; }
+.side-tab-handle .chev { display: inline-block; transform: rotate(90deg); transition: transform 0.15s; }
+.body-row:has(> .panel.left[hidden]) .side-tab-handle .chev { transform: rotate(-90deg); }
 .main-col { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .main-col > .viewport { flex: 1; min-height: 120px; }
 .panel.right { height: var(--bottom-h, 32%); min-height: 90px; max-height: 75%; border-top: 1px solid var(--line); display: flex; flex-direction: column; position: relative; flex: none; overflow: hidden; }
@@ -401,6 +411,7 @@ button { cursor: pointer; }
   .crumbs { flex-basis: 100%; order: 5; }
 }
 @media (min-width: 761px) { .phone-only { display: none; } }
+@media (max-width: 760px) { .side-dock { display: none; } }
 .tree { padding-bottom: 6px; }
 .tree-item.folder { cursor: pointer; color: var(--fg-dim); }
 .tree-item.folder:hover { color: var(--fg); }
