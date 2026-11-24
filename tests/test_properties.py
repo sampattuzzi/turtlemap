@@ -112,11 +112,56 @@ def test_links_a_property_read_to_its_getter_on_the_map(
     }
 
 
+def test_lists_a_property_as_a_method_and_not_also_as_a_field(
+    make_project: ProjectFactory,
+) -> None:
+    project = make_project(MODEL)
+
+    heating = symbol(project.overview(), "pkg/model.py", "Heating")
+
+    assert [name for name, _ in heating["fields"]] == ["rate"]
+    assert "total_rate" in [method["name"] for method in heating["methods"]]
+
+
+def test_keeps_the_type_a_property_returns_for_reads_through_it(
+    make_project: ProjectFactory,
+) -> None:
+    project = make_project({"pkg/shelf.py": """
+                class Item:
+                    def __init__(self, price: float) -> None:
+                        self.price = price
+
+
+                class Shelf:
+                    def __init__(self, item: Item) -> None:
+                        self._item = item
+
+                    @property
+                    def item(self) -> Item:
+                        return self._item
+
+                    def price(self) -> float:
+                        return self.item.price
+            """})
+
+    assert (
+        "m:pkg/shelf.py:Shelf.price",
+        "f:pkg/shelf.py:Item.price",
+        "reads",
+    ) in edges(project.overview())
+
+
 def blueprint(project: Project, path: str, qual: str) -> dict[str, Any]:
     found = project.function(path, qual)
     assert found is not None
     graph: dict[str, Any] = found["graph"]
     return graph
+
+
+def symbol(overview: dict[str, Any], path: str, qual: str) -> dict[str, Any]:
+    module = next(m for m in overview["modules"] if m["path"] == path)
+    found: dict[str, Any] = next(s for s in module["symbols"] if s["qual"] == qual)
+    return found
 
 
 def edges(overview: dict[str, Any]) -> set[tuple[str, str, str]]:
