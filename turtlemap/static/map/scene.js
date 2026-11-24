@@ -116,7 +116,8 @@ class NetDrawing {
     let d;
     if (side === 'R') { const start = rc.x + rc.w, out = start + (NET_SLACK.get(c) || 0); d = `M${start},${cy} L${routedPath(out, cy, rq.x + rq.w, portY, via, 30).slice(1)}`; }
     else d = routedPath(rq.x, portY, rc.x, cy, via, 30);
-    const feeder = { el: svg('path', { d, class: 'feeder' }), hit: svg('path', { d, class: 'feeder-hit', 'data-feeder': this.feederList.length }), child: c, passing: [] };
+    const into = side === 'L';
+    const feeder = { el: svg('path', { d, class: 'feeder', ...(into ? { 'marker-end': FEEDER_HEAD } : {}) }), into, hit: svg('path', { d, class: 'feeder-hit', 'data-feeder': this.feederList.length }), child: c, passing: [] };
     this.feederList.push(feeder);
     this.overlay.prepend(feeder.el, feeder.hit);
     return feeder;
@@ -125,7 +126,7 @@ class NetDrawing {
     const N = this.N;
     this.scene.el.classList.toggle('has-hot', Boolean(id));
     const inside = (x) => Boolean(id) && N.chain(x).some((n) => n.id === id);
-    for (const f of this.feeders.values()) if (f) f.el.classList.remove('hot');
+    for (const f of this.feederList) coolFeeder(f);
     if (id) this.lightRoutes(inside);
     const ends = this.drawn.map((d) => lightRelation(d, inside)).filter(Boolean);
     if (this.scene.onHot) this.scene.onHot(id ? ends : null);
@@ -258,6 +259,7 @@ function arrowMarkers() {
   defs.innerHTML = `
     <marker id="m-tri" viewBox="0 0 14 14" refX="13" refY="7" markerWidth="14" markerHeight="14" markerUnits="userSpaceOnUse" orient="auto"><path d="M1,1 L13,7 L1,13 z" style="fill:var(--canvas);stroke:var(--rel-inherits)" stroke-width="1.6"/></marker>
     <marker id="m-tri-bound" viewBox="0 0 14 14" refX="13" refY="7" markerWidth="14" markerHeight="14" markerUnits="userSpaceOnUse" orient="auto"><path d="M1,1 L13,7 L1,13 z" style="fill:var(--canvas);stroke:var(--rel-bound)" stroke-width="1.6"/></marker>
+    <marker id="m-feed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M1,1 L9,5 L1,9" style="fill:none;stroke:var(--fg-dim)" stroke-width="1.5"/></marker>
     <marker id="m-dia" viewBox="0 0 18 10" refX="1" refY="5" markerWidth="18" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M1,5 L9,1 L17,5 L9,9 z" style="fill:var(--rel-has)"/></marker>
     ${Object.entries(HOLDING_ENDS).map(([end, shape]) => `<marker id="m-hold-${end}" class="hold-marker" viewBox="0 0 24 16" refX="24" refY="8" markerWidth="24" markerHeight="16" markerUnits="userSpaceOnUse" orient="auto">${shape}</marker>`).join('')}
     ${['has', 'creates', 'calls', 'writes', 'reads', 'uses'].map((k) => `<marker id="m-arrow-${k}" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto"><path d="M1,1 L11,6 L1,11" style="fill:none;stroke:var(--rel-${k})" stroke-width="1.7"/></marker>`).join('')}`;
@@ -308,7 +310,16 @@ function arrowBox(d) {
   return { x, y, w: Math.max(a.x + a.w, t.x + t.w) - x, h: Math.max(a.y + a.h, t.y + t.h) - y };
 }
 function lightRoute(d, route) {
-  for (const f of route.segs) { f.el.classList.add('hot'); f.el.style.setProperty('--feed', `var(--rel-${d.g.kind})`); }
+  for (const f of route.segs) {
+    f.el.classList.add('hot');
+    f.el.style.setProperty('--feed', `var(--rel-${d.g.kind})`);
+    if (f.into) f.el.setAttribute('marker-end', d.path.getAttribute('marker-end'));
+  }
+}
+const FEEDER_HEAD = 'url(#m-feed)';
+function coolFeeder(f) {
+  f.el.classList.remove('hot');
+  if (f.into) f.el.setAttribute('marker-end', FEEDER_HEAD);
 }
 function spreadLabels(drawn) {
   const CELL = 200;
