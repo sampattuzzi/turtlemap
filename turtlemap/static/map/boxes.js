@@ -103,10 +103,10 @@ export const NET_SLACK = new Map();
 export const NET_COLUMNS = new Map();
 const MAP_PAD = 14;
 const MAP_TOP = 10;
-export function layoutNet(n, boxEl, edges, N = net()) {
+export function layoutNet(n, boxEl, edges, N = net(), outside = null) {
   const inner = boxEl.querySelector(':scope > .ninner');
   if (!inner) return;
-  const box = new MapBoxLayout(n, inner, N);
+  const box = new MapBoxLayout(n, inner, N, outside);
   box.layoutChildren(edges);
   const { pairs, skips, weights } = box.linkKids(edges);
   box.rank = rankColumns(box.kids, weights, (k) => ['field', 'member', 'constant', 'typevar'].includes(k.node.kind));
@@ -114,19 +114,48 @@ export function layoutNet(n, boxEl, edges, N = net()) {
   box.stackColumns(skips);
   box.relax();
   box.tighten();
-  if (ARRANGED_LAYOUTS.has(settings.layout)) arrangeMapColumns(settings.layout, Array.from(box.cols, (col) => col || []), box.nbrs, { anchor: mapAnchor, gapY: box.gapY, top: MAP_TOP });
+  if (ARRANGED_LAYOUTS.has(settings.layout)) arrangeMapColumns(settings.layout, Array.from(box.cols, (col) => col || []), box, { gapY: box.gapY, top: MAP_TOP });
   box.apply();
   box.record(skips);
 }
+export function outsideOf(rootEl) {
+  const anchors = new Map();
+  rootEl.querySelectorAll('.nb').forEach((b) => anchors.set(b.dataset.id, offsetWithin(b, rootEl).y + boxAnchor(b)));
+  return { anchors, top: (inner) => offsetWithin(inner, rootEl).y };
+}
+export function offsetWithin(node, root) {
+  let x = 0, y = 0, cur = node;
+  while (cur && cur !== root) { x += cur.offsetLeft; y += cur.offsetTop; cur = cur.offsetParent; }
+  return { x, y };
+}
+export function boxAnchor(box) {
+  const head = box.querySelector(':scope > .nhead');
+  return head ? head.offsetHeight / 2 : box.offsetHeight / 2;
+}
 class MapBoxLayout {
-  constructor(n, inner, N) {
-    Object.assign(this, { n, inner, N });
+  constructor(n, inner, N, outside) {
+    Object.assign(this, { n, inner, N, outside });
     this.kids = [...inner.children].map((elx) => ({ node: N.nodes.get(elx.dataset.id), el: elx, x: 0, y: 0 }));
     this.byId = new Map(this.kids.map((k) => [k.node.id, k]));
     this.items = [...this.kids];
     this.nbrs = new Map();
+    this.ports = new Map();
+    this.pulls = new Map();
+    this.ends = new Map();
+    this.inside = new Map();
+    this.extent = outside ? inner.offsetHeight : 0;
     this.routes = [];
   }
+  port(it, other) {
+    const ports = this.ports.get(it);
+    return ports && ports.has(other) ? ports.get(other) : mapAnchor(it);
+  }
+  portIn(k, id) {
+    if (id === k.node.id) return mapAnchor(k);
+    if (!this.inside.has(k)) this.inside.set(k, new Map([...k.el.querySelectorAll('.nb')].map((box) => [box.dataset.id, offsetWithin(box, k.el).y + boxAnchor(box)])));
+    return this.inside.get(k).get(id) ?? mapAnchor(k);
+  }
+  isOutside(id) { return !this.N.chain(id).includes(this.n); }
   under(id) {
     const c = this.N.chain(id), depth = this.n.depth;
     return c[depth] === this.n && c[depth + 1] ? this.byId.get(c[depth + 1].id) : null;
@@ -139,28 +168,51 @@ class MapBoxLayout {
       if (a) touching.get(a).push(e);
       if (b && b !== a) touching.get(b).push(e);
     }
-    for (const k of this.kids) layoutNet(k.node, k.el, touching.get(k), this.N);
+    for (const k of this.kids) layoutNet(k.node, k.el, touching.get(k), this.N, this.outside);
     for (const k of this.kids) { k.w = k.el.offsetWidth; k.h = k.el.offsetHeight; }
   }
   linkKids(edges) {
     const pairs = new Map(), skips = [], weights = new Map();
     for (const e of edges) {
       const a = this.under(e.from), b = this.under(e.to);
+      const count = e.atoms ? e.atoms.length : 1;
+      if (a && !b && this.isOutside(e.to)) this.pull(a, e.from, e.to);
+      if (b && !a && this.isOutside(e.from)) this.pull(b, e.to, e.from);
       if (!a || !b || a === b) continue;
       if (!weights.has(a)) weights.set(a, new Map());
-      weights.get(a).set(b, (weights.get(a).get(b) || 0) + (e.atoms ? e.atoms.length : 1));
+      weights.get(a).set(b, (weights.get(a).get(b) || 0) + count);
+      this.endsOf(a, b).push({ pa: this.portIn(a, e.from), pb: this.portIn(b, e.to), count });
       if (e.shortcut) { skips.push({ a, b }); continue; }
       if (!pairs.has(a)) pairs.set(a, new Set()); pairs.get(a).add(b);
     }
     return { pairs, skips, weights };
   }
-  near(a, b) {
+  endsOf(a, b) {
+    if (!this.ends.has(a)) this.ends.set(a, new Map());
+    const from = this.ends.get(a);
+    if (!from.has(b)) from.set(b, []);
+    return from.get(b);
+  }
+  pull(k, end, far) {
+    if (!this.outside || !this.outside.anchors.has(far)) return;
+    const y = this.outside.anchors.get(far) - this.outside.top(this.inner) - this.portIn(k, end);
+    if (!this.pulls.has(k)) this.pulls.set(k, []);
+    this.pulls.get(k).push({ y: Math.min(Math.max(y, MAP_TOP), Math.max(MAP_TOP, this.extent - MAP_PAD - k.h)) });
+  }
+  portsBetween(a, b) {
+    const ends = this.endsOf(a, b), total = ends.reduce((sum, e) => sum + e.count, 0);
+    const mean = (key) => ends.reduce((sum, e) => sum + e[key] * e.count, 0) / total;
+    return { pa: mean('pa'), pb: mean('pb') };
+  }
+  near(a, b, pa = mapAnchor(a), pb = mapAnchor(b)) {
     if (!this.nbrs.has(a)) this.nbrs.set(a, new Set()); this.nbrs.get(a).add(b);
     if (!this.nbrs.has(b)) this.nbrs.set(b, new Set()); this.nbrs.get(b).add(a);
+    if (!this.ports.has(a)) this.ports.set(a, new Map()); this.ports.get(a).set(b, pa);
+    if (!this.ports.has(b)) this.ports.set(b, new Map()); this.ports.get(b).set(a, pb);
   }
-  lane(from, ranks) {
+  lane(from, ranks, port) {
     const chain = [];
-    for (const r of ranks) { const d = { dummy: true, rank: r, w: 0, h: 6, x: 0, y: 0, origin: from }; this.near(chain.length ? chain[chain.length - 1] : from, d); chain.push(d); this.items.push(d); }
+    for (const r of ranks) { const d = { dummy: true, rank: r, w: 0, h: 6, x: 0, y: 0, origin: from, port }; this.near(chain.length ? chain[chain.length - 1] : from, d, chain.length ? 3 : port, 3); chain.push(d); this.items.push(d); }
     return chain;
   }
   addRoutes(pairs) {
@@ -168,12 +220,14 @@ class MapBoxLayout {
     for (const [a, bs] of pairs) {
       const r0 = rank.get(a);
       const ts = [...bs].map((b) => rank.get(b));
-      const ahead = this.lane(a, rankSpan(r0 + 1, Math.max(r0, ...ts)));
-      const behind = this.lane(a, rankSpan(Math.min(r0 + 1, ...ts), r0 + 1).reverse());
+      const ports = new Map([...bs].map((b) => [b, this.portsBetween(a, b)]));
+      const leaving = (some) => (some.length ? some.reduce((sum, b) => sum + ports.get(b).pa, 0) / some.length : mapAnchor(a));
+      const ahead = this.lane(a, rankSpan(r0 + 1, Math.max(r0, ...ts)), leaving([...bs].filter((b) => rank.get(b) > r0)));
+      const behind = this.lane(a, rankSpan(Math.min(r0 + 1, ...ts), r0 + 1).reverse(), leaving([...bs].filter((b) => rank.get(b) <= r0)));
       for (const b of bs) {
-        const t = rank.get(b);
+        const t = rank.get(b), { pa, pb } = ports.get(b);
         const via = t > r0 ? ahead.slice(0, t - r0 - 1) : behind.slice(0, r0 - t + 1);
-        this.near(via.length ? via[via.length - 1] : a, b);
+        if (via.length) this.near(via[via.length - 1], b, 3, pb); else this.near(a, b, pa, pb);
         this.routes.push({ a, b, via });
       }
     }
@@ -200,7 +254,7 @@ class MapBoxLayout {
       for (const it of col) { it.x = x; it.y = y; y += it.h + this.gapY; }
       x += w + gapX;
     });
-    for (const it of this.items) if (it.dummy) it.y = mapMid(it.origin) - 3;
+    for (const it of this.items) if (it.dummy) it.y = it.origin.y + it.port - 3;
     for (const col of this.cols) if (col) col.sort((a, b) => a.y - b.y);
   }
   relax() {
@@ -213,17 +267,18 @@ class MapBoxLayout {
   }
   wantedY(it) {
     const nb = [...(this.nbrs.get(it) || [])].filter((o) => this.rk(o) !== this.rk(it) || it.dummy);
-    return nb.length ? nb.reduce((acc, o) => acc + mapMid(o), 0) / nb.length - mapAnchor(it) : it.y;
+    const wanted = [...nb.map((o) => o.y + this.port(o, it) - this.port(it, o)), ...(this.pulls.get(it) || []).map((p) => p.y)];
+    return wanted.length ? wanted.reduce((acc, y) => acc + y, 0) / wanted.length : it.y;
   }
   tighten() {
-    const connected = (it) => (this.nbrs.get(it) || new Set()).size > 0;
+    const connected = (it) => (this.nbrs.get(it) || new Set()).size > 0 || this.pulls.has(it);
     for (const col of this.cols) {
       if (!col) continue;
       col.sort((a, b) => (connected(b) - connected(a)) || a.y - b.y);
       let prev = null;
       for (const it of col) {
         const lo = prev === null ? MAP_TOP : prev + (it.dummy ? 8 : this.gapY);
-        it.y = Math.min(Math.max(it.y, lo), lo + 36);
+        it.y = Math.min(Math.max(it.y, lo), this.pulls.has(it) ? Infinity : lo + 36);
         prev = it.y + it.h;
       }
     }
@@ -253,7 +308,7 @@ class MapBoxLayout {
 }
 function mapAnchor(it) { return it.dummy ? 3 : Math.min(it.h, 40) / 2; }
 function mapMid(o) { return o.y + mapAnchor(o); }
-function rankSpan(lo, hi) { return Array.from({ length: Math.max(0, hi - lo) }, (_, i) => lo + i); }
+export function rankSpan(lo, hi) { return Array.from({ length: Math.max(0, hi - lo) }, (_, i) => lo + i); }
 function columnGaps(cols) {
   const gaps = Array.from(cols, (col) => {
     const real = (col || []).filter((it) => !it.dummy).sort((p, q) => p.y - q.y);
@@ -265,19 +320,21 @@ function columnGaps(cols) {
   });
   return (r, want) => gaps[r].map(([lo, hi]) => (hi - lo < 8 ? (lo + hi) / 2 : Math.min(Math.max(want, lo + 4), hi - 4))).reduce((best, y) => (Math.abs(y - want) < Math.abs(best - want) ? y : best), Infinity);
 }
-function arrangeMapColumns(layout, columns, nbrs, { anchor, gapY, top }) {
+function arrangeMapColumns(layout, columns, box, { gapY, top }) {
   const layerOf = new Map();
   columns.forEach((col, i) => col.forEach((it) => layerOf.set(it, i)));
   const links = [];
-  for (const [a, others] of nbrs) for (const b of others) if (layerOf.get(a) < layerOf.get(b)) links.push({ a, b, pa: anchor(a), pb: anchor(b), weight: 1 });
-  const placed = arrangeLayers(layout, columns, links, {
+  for (const [a, others] of box.nbrs) for (const b of others) if (layerOf.get(a) < layerOf.get(b)) links.push({ a, b, pa: box.port(a, b), pb: box.port(b, a), weight: 1 });
+  const targets = [];
+  for (const [k, pulls] of box.pulls) { const target = { target: true, y: pulls.reduce((sum, p) => sum + p.y, 0) / pulls.length, h: 0 }; targets.push(target); links.push({ a: k, b: target, pa: 0, pb: 0, weight: 1 }); }
+  const placed = arrangeLayers(layout, targets.length ? [...columns, [], targets.sort((p, q) => p.y - q.y)] : columns, links, {
     height: (it) => it.h,
-    gap: (it) => (it.dummy ? 8 : gapY),
-    floor: () => top,
-    pinned: () => false,
+    gap: (it) => (it.dummy ? 8 : it.target ? 0 : gapY),
+    floor: (it) => (it.target ? it.y : top),
+    pinned: (it) => Boolean(it.target),
     isDummy: (it) => Boolean(it.dummy),
     candidates: (it, list) => list,
-    previous: new Map(columns.flat().map((it) => [it, it.y])),
+    previous: new Map([...columns.flat(), ...targets].map((it) => [it, it.y])),
   });
   if (placed) for (const [it, y] of placed) it.y = y;
 }

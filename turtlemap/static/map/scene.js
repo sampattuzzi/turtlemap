@@ -1,7 +1,8 @@
 import { Scene, loopBackPath, overlaps, pathBox, placeCard, routedPath, setCulled } from '../canvas/scene.js';
 import { KIND_ORDER, net } from '../core/data.js';
 import { el, svg } from '../core/dom.js';
-import { NET_COLUMNS, NET_ROUTES, NET_SLACK, layoutNet, moduleFileName, moduleNodeOf, netBoxEl, netLabel } from './boxes.js';
+import { NET_COLUMNS, NET_ROUTES, NET_SLACK, layoutNet, moduleFileName, moduleNodeOf, netBoxEl, netLabel, offsetWithin, outsideOf, rankSpan } from './boxes.js';
+import { settings } from '../core/settings.js';
 export function buildNetScene(expanded, ctx, filter = null) {
   const N = net();
   const scene = new Scene(ctx);
@@ -12,16 +13,18 @@ export function buildNetScene(expanded, ctx, filter = null) {
   rootEl.append(inner);
   const rootV = scene.add(rootEl);
   NET_ROUTES.clear(); NET_SLACK.clear(); NET_COLUMNS.clear();
-  const shown = visibleLinks(N, effective);
+  const direct = settings.ungrouped;
+  const shown = visibleLinks(N, effective, direct);
   const shortcuts = shortcutKeys([...shown.values()]);
   for (const l of shown.values()) l.shortcut = shortcuts.has(`${l.from}|${l.to}`);
   layoutNet(N.root, rootEl, [...shown.values()]);
+  if (direct) layoutNet(N.root, rootEl, [...shown.values()], N, outsideOf(rootEl));
   scene.measure();
   scene.finish(40);
   const { rects, sizes } = measureBoxes(rootEl, rootV);
   const drawnOpen = new Set([...effective].filter((id) => id === 'root' || rects.has(id)));
   const groups = arrowGroups(N, shown, rects, shortcuts);
-  const drawing = new NetDrawing(scene, N, { rootEl, rootV, rects, effective });
+  const drawing = new NetDrawing(scene, N, { rootEl, rootV, rects, effective, direct });
   drawing.drawArrows(groups);
   drawing.traceRoutes();
   spreadLabels(drawing.drawn);
@@ -33,8 +36,8 @@ export function buildNetScene(expanded, ctx, filter = null) {
   return scene;
 }
 class NetDrawing {
-  constructor(scene, N, { rootEl, rootV, rects, effective }) {
-    Object.assign(this, { scene, N, rootEl, rootV, rects, effective });
+  constructor(scene, N, { rootEl, rootV, rects, effective, direct }) {
+    Object.assign(this, { scene, N, rootEl, rootV, rects, effective, direct });
     this.drawn = [];
     this.offsets = new Map();
     this.feeders = new Map();
@@ -63,8 +66,9 @@ class NetDrawing {
     const ra = this.rects.get(g.a), rb = this.rects.get(g.b);
     const shift = groups.has(`${g.b}|${g.a}`) ? (g.a < g.b ? -4 : 4) : 0;
     const ends = { a: { x: ra.x + ra.w, y: ra.y + ra.anchorY + shift }, b: { x: rb.x - 2, y: rb.y + rb.anchorY + shift } };
-    const forward = rb.x >= ra.x + ra.w - 4;
-    const spans = this.absVia(NET_ROUTES.get(`${g.a}|${g.b}`));
+    const [sa, sb] = siblingEnds(this.N, g.a, g.b);
+    const forward = this.direct ? this.rects.get(sb).x >= this.rects.get(sa).x + this.rects.get(sa).w - 4 : rb.x >= ra.x + ra.w - 4;
+    const spans = this.direct && forward ? this.directSpans(g, sa, sb, ends) : this.absVia(NET_ROUTES.get(`${sa}|${sb}`));
     const { d, labelAt } = forward ? forwardArrow(g, ends, shift, spans) : loopBackArrow(g, ra, rb, ends, spans);
     const path = svg('path', { d, class: `rel k-${g.kind} weighted${g.count === 1 ? ' light' : ''}${g.shortcut ? ' shortcut' : ''}`, 'marker-end': g.kind === 'inherits' || g.kind === 'realizes' ? 'url(#m-tri)' : g.kind === 'bound' ? 'url(#m-tri-bound)' : `url(#m-arrow-${g.kind})` });
     path.style.setProperty('--w', `${(1.4 + 1.4 * Math.log2(g.count)).toFixed(2)}px`);
@@ -80,7 +84,29 @@ class NetDrawing {
     this.overlay.append(path, text, hit);
     this.drawn.push({ g, path, text, hit, forward, ends, labelBox: { x: +text.getAttribute('x') - label.length * 3.3, y: +text.getAttribute('y') - 10, w: label.length * 6.6, h: 13 } });
   }
+  directSpans(g, sa, sb, ends) {
+    const along = (x) => ends.a.y + (ends.b.y - ends.a.y) * Math.min(1, Math.max(0, (x - ends.a.x) / Math.max(1, ends.b.x - ends.a.x)));
+    const across = (box, ranks) => {
+      const cols = NET_COLUMNS.get(box);
+      if (!cols) return [];
+      const o = this.innerOffset(cols.inner);
+      return ranks.filter((r) => cols.colX[r] !== undefined).map((r) => ({ x: o.x + cols.colX[r], w: cols.colW[r], y: o.y + cols.gapNear(r, along(o.x + cols.colX[r] + cols.colW[r] / 2) - o.y) }));
+    };
+    const rankIn = (box, kid) => NET_COLUMNS.get(box).rank.get(kid);
+    const from = this.N.chain(g.a), to = this.N.chain(g.b);
+    const ia = from.findIndex((x) => x.id === sa), ib = to.findIndex((x) => x.id === sb);
+    const spans = [];
+    for (let j = from.length - 2; j >= ia; j--) { const q = from[j].id, cols = NET_COLUMNS.get(q); if (cols) spans.push(...across(q, rankSpan(rankIn(q, from[j + 1].id) + 1, cols.last + 1))); }
+    const parent = from[ia - 1].id;
+    if (NET_COLUMNS.has(parent)) spans.push(...across(parent, rankSpan(rankIn(parent, sa) + 1, rankIn(parent, sb))));
+    for (let j = ib; j < to.length - 1; j++) { const q = to[j].id; if (NET_COLUMNS.has(q)) spans.push(...across(q, rankSpan(0, rankIn(q, to[j + 1].id)))); }
+    return spans;
+  }
   traceRoutes() {
+    if (this.direct) {
+      for (const d of this.drawn) { d.routes = []; d.traced = d.g.atoms.every((e) => e.from === d.g.a && e.to === d.g.b); }
+      return;
+    }
     for (const d of this.drawn) {
       d.routes = d.g.atoms.map((e) => this.routeOf(e, d));
       for (const route of d.routes) for (const f of route.segs) f.passing.push({ d, route });
@@ -216,21 +242,18 @@ function visibleEnd(N, effective, id) {
   for (let i = 1; i < c.length; i++) if (!effective.has(c[i].id)) return c[i].id;
   return id;
 }
-function visibleLinks(N, effective) {
+function visibleLinks(N, effective, direct) {
   const shown = new Map();
   for (const e of N.edges) {
-    const [a, b] = siblingEnds(N, visibleEnd(N, effective, e.from), visibleEnd(N, effective, e.to));
-    if (a === b) continue;
+    const from = visibleEnd(N, effective, e.from), to = visibleEnd(N, effective, e.to);
+    const [sa, sb] = siblingEnds(N, from, to);
+    if (sa === sb) continue;
+    const [a, b] = direct ? [from, to] : [sa, sb];
     const key = `${a}|${b}`;
     if (!shown.has(key)) shown.set(key, { from: a, to: b, atoms: [] });
     shown.get(key).atoms.push(e);
   }
   return shown;
-}
-function offsetWithin(node, root) {
-  let x = 0, y = 0, cur = node;
-  while (cur && cur !== root) { x += cur.offsetLeft; y += cur.offsetTop; cur = cur.offsetParent; }
-  return { x, y };
 }
 function measureBoxes(rootEl, rootV) {
   const rects = new Map();
@@ -346,8 +369,8 @@ function shortcutKeys(links) {
     const cameFrom = new Map([[from, null]]);
     const queue = [...next.get(from)].filter((x) => x !== to);
     for (const x of queue) cameFrom.set(x, from);
-    while (queue.length) {
-      const v = queue.shift();
+    for (let i = 0; i < queue.length; i++) {
+      const v = queue[i];
       if (v === to) { const path = []; for (let at = to; at !== null; at = cameFrom.get(at)) path.unshift(at); return path; }
       for (const w of next.get(v) || []) if (!cameFrom.has(w)) { cameFrom.set(w, v); queue.push(w); }
     }

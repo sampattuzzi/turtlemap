@@ -58,6 +58,10 @@ function settingsButton(onChange) {
       pop.append(el('label', { class: 'layout-option', for: radio.id }, radio, el('span', {}, el('b', {}, option.label), el('small', {}, option.hint))));
     }
     pop.append(el('small', { class: 'popover-foot' }, 'Applies to function blueprints and the map. On the map, Balanced and Classic are the same.'));
+    pop.append(el('div', { class: 'popover-title popover-section' }, 'Map lines'));
+    const ungrouped = el('input', { type: 'checkbox', id: 'set-ungrouped', onchange: (ev) => { settings.ungrouped = ev.target.checked; saveSettings(); onChange(); } });
+    ungrouped.checked = settings.ungrouped;
+    pop.append(el('label', { class: 'layout-option', for: ungrouped.id }, ungrouped, el('span', {}, el('b', {}, 'Ungroup lines'), el('small', {}, 'Draw each line straight to the box inside a module that it links, instead of gathering it at the module. The layout lines those boxes up too.'))));
   });
   btn.title = 'Settings';
   btn.setAttribute('aria-label', 'Settings');

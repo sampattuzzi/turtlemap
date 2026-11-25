@@ -39,7 +39,9 @@ and **uses**.
 
 - **Thicker arrows** stand for more dependencies. One-off links are faded.
 - **Arrows only join neighbours**, boxes inside the same parent. Inside an open
-  box, faint feeder lines carry each dependency to the box's edge.
+  box, faint feeder lines carry each dependency to the box's edge. Turn on
+  **Ungroup lines** in the cog menu to draw each line straight to the box
+  inside that it really links instead.
 - **Hover** over an item to light its whole path. Hover over an arrow to see
   what it is made of.
 - **Click an arrow**, or a feeder line inside an open box, to open the boxes
@@ -154,6 +156,13 @@ It also picks the layout:
 | Straightest | The most straight wires, in taller blueprints |
 
 On the map, Balanced and Classic look the same.
+
+**Ungroup lines** draws each map line from the box where the dependency starts
+to the box where it ends, through the edges of any open modules in between,
+instead of gathering every line at the module's header. Every layout then lines
+up those inner boxes with what they link, so you can see, say, which module
+uses each helper in a helpers file. On a big map with everything open it can
+take a few times longer to draw.
 
 ## Privacy
 
