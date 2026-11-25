@@ -27,15 +27,25 @@ function describeCall(n, ins, outs) {
   return `Calls ${n.title}${ins.length ? ` with ${ins.join(', ')}` : ''}${outs.length ? `, giving ${outs.join(', ')}` : ''}.${n.note ? ' ' + n.note + '.' : ''}`;
 }
 export function codePanel(container, sym, node, ctx) {
+  const before = container.querySelector(':scope > .code-panel > .code-view');
   container.querySelectorAll(':scope > :not(.resize-bar)').forEach((c) => c.remove());
   const panel = el('div', { class: 'code-panel' });
   container.append(panel);
   const ex = el('div', { class: 'explain' });
   panel.append(ex);
-  if (!sym) { ex.append(el('div', { class: 'kind' }, 'Code'), el('p', {}, 'Click a node to see its line of code. Press ⧉ on a call (or double-click it) to unfold its code right there. Press Go into on an unfolded frame to make it the whole view; ← takes you back with everything still unfolded.')); return; }
+  if (!sym) { ex.append(el('div', { class: 'kind' }, 'Code'), el('p', {}, 'Click a node to see its line of code, or click a line of code to find its node. Press ⧉ on a call (or double-click it) to unfold its code right there. Press Go into on an unfolded frame to make it the whole view; ← takes you back with everything still unfolded.')); return; }
   if (node) explainNode(ex, sym, node, ctx); else explainSymbol(ex, sym, ctx);
   const codeRows = sym.codeLines || (sym.code ? sym.code.split('\n').map((t, i) => [sym.line + i, t]) : null);
-  if (codeRows) panel.append(codeView(sym, node, codeRows));
+  if (!codeRows) return;
+  const view = codeView(sym, node, codeRows);
+  panel.append(view);
+  if (before && before.dataset.qual === sym.qual && before.dataset.path === sym.file) view.scrollTop = before.scrollTop;
+  if (ctx.reveal) view.addEventListener('click', (e) => revealClickedLine(e, sym, ctx.reveal));
+}
+function revealClickedLine(e, sym, reveal) {
+  const row = e.target.closest('.ln[data-line]');
+  if (!row || e.target.closest('.no') || String(window.getSelection())) return;
+  reveal(sym, Number(row.dataset.line));
 }
 function explainNode(ex, sym, node, ctx) {
   ex.append(el('div', { class: 'kind' }, KIND[node.kind] ? KIND[node.kind][1] : 'Node'), el('h2', {}, node.kind === 'entry' ? sym.name : node.title));
@@ -59,7 +69,7 @@ function symbolKindLabel(sym) {
   return sym.kind === 'enum' ? 'enum' : 'class';
 }
 function codeView(sym, node, codeRows) {
-  const cv = el('div', { class: 'code-view' });
+  const cv = el('div', { class: 'code-view', 'data-path': sym.file, 'data-qual': sym.qual });
   const removed = Boolean(node && node.diff === 'removed');
   const target = removed ? node.baseLine : node ? node.line : null;
   const paint = codePainter(null, sym.file);

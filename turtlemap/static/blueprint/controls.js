@@ -17,7 +17,9 @@ export class BlueprintControls {
       afterNode: (n, v) => {
         if (!n.target || n.kind === 'entry') return;
         const embed = this.embed(unfoldKey(owner, n), n.target);
-        if (embed) v.el.querySelector('.embed-slot').append(embed);
+        if (!embed) return;
+        v.el.querySelector('.embed-slot').append(embed.el);
+        v.unfolded = embed.scene;
       },
     };
   }
@@ -55,22 +57,38 @@ export class BlueprintControls {
     wrap.append(el('div', { class: 'embed-label' },
       el('span', {}, ref.path !== explorer.trail.current.path ? `↗ ${shortFile(ref.path)} · ${sym.qual}` : sym.qual),
       el('button', { class: 'btn small go-into', title: 'Make this the whole view', onclick: (e) => { e.stopPropagation(); explorer.go(ref); } }, 'Go into ↘')));
-    wrap.append(this.embedBody(key, ref, sym));
-    return wrap;
+    const body = this.embedBody(key, ref, sym);
+    wrap.append(body.el);
+    return { el: wrap, scene: body.scene };
   }
   embedBody(key, ref, sym) {
     if (!FUNCTIONS.has(fnKey(ref))) {
       const note = embedNote('Reading…');
       ensureFunction(ref).then(() => this.explorer.render(true), (err) => { note.textContent = err.message; });
-      return note;
+      return { el: note, scene: null };
     }
     const id = ref.path + ref.sym;
-    if (this.unfolding.includes(id) || this.unfolding.length > 5) return embedNote('Already unfolded further out.');
+    if (this.unfolding.includes(id) || this.unfolding.length > 5) return { el: embedNote('Already unfolded further out.'), scene: null };
     this.unfolding.push(id);
     const inner = buildFunctionScene(sym, this.context(key));
     this.unfolding.pop();
-    return inner.el;
+    return { el: inner.el, scene: inner };
   }
 }
+export function nodesOnLine(scene, sym, line) {
+  const found = [];
+  gatherNodes(scene, sym, found);
+  const earlier = found.filter((f) => f.n.line <= line);
+  if (!earlier.length) return [];
+  const nearest = Math.max(...earlier.map((f) => f.n.line));
+  return earlier.filter((f) => f.n.line === nearest);
+}
+function gatherNodes(scene, sym, found) {
+  for (const v of scene.nodes) {
+    if (sameFunction(scene.fnSym, sym) && v.data.line && v.data.diff !== 'removed') found.push({ n: v.data, v, scene });
+    if (v.unfolded) gatherNodes(v.unfolded, sym, found);
+  }
+}
+function sameFunction(a, b) { return Boolean(a && b) && a.file === b.file && a.qual === b.qual; }
 function unfoldKey(owner, n) { return `${owner}>${n.target.path}::${n.target.sym}@${n.line || ''}:${n.title}`; }
 function embedNote(text) { return el('div', { class: 'note', style: 'padding:30px 10px 6px' }, text); }

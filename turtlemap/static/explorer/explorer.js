@@ -1,5 +1,5 @@
 import { codePanel } from '../blueprint/codepanel.js';
-import { BlueprintControls } from '../blueprint/controls.js';
+import { BlueprintControls, nodesOnLine } from '../blueprint/controls.js';
 import { buildFunctionScene } from '../blueprint/nodes.js';
 import { boundsOf, flash, messageScene } from '../canvas/scene.js';
 import { Viewport } from '../canvas/viewport.js';
@@ -142,6 +142,15 @@ export class Explorer {
     this.panel();
     showOnPhone(this.ui.right);
   }
+  revealLine(sym, line) {
+    const found = nodesOnLine(this.scene, sym, line);
+    if (!found.length) return;
+    const at = found.findIndex((f) => f.v.el.classList.contains('selected'));
+    const next = found[(at + 1) % found.length];
+    this.selectNode(next.n, next.v, sym);
+    this.vp.frame(next.scene, next.v.headH ? { x: next.v.x, y: next.v.y, w: next.v.headW, h: next.v.headH } : next.v);
+    flash(next.v.el);
+  }
   mapContext() {
     return {
       refresh: () => { if (this.trail.current.view !== 'fn') this.panel(); },
@@ -170,7 +179,7 @@ export class Explorer {
       this.comments.decorate();
       return;
     }
-    const ctx = { ...this.blueprints.context('root'), activate: this.goTo, show: (id) => this.showOnMap(id) };
+    const ctx = { ...this.blueprints.context('root'), activate: this.goTo, show: (id) => this.showOnMap(id), reveal: (sym, line) => this.revealLine(sym, line) };
     if (trail.selected && trail.selected.n) codePanel(ui.right, trail.selected.sym, trail.selected.n, ctx);
     else codePanel(ui.right, lookup(trail.current), null, ctx);
     this.comments.decorate();

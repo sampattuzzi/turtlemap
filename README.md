@@ -123,7 +123,10 @@ blueprints.
 - **Zoom into a lane or loop** and a breadcrumb in the corner lists the frames
   you are in and their conditions.
 
-The code panel highlights the line behind whichever node you select.
+The code panel highlights the line behind whichever node you select. It works
+the other way too: click a line of code to select its node and glide the
+blueprint to it. When several nodes share a line, click again to step through
+them.
 
 ### Getting around
 

@@ -171,6 +171,7 @@ function nodePins(n, connectedIns, connectedOuts) {
 export function buildFunctionScene(fnSym, ctx) {
   const g = freshGraph(fnSym);
   const scene = new Scene(ctx);
+  scene.fnSym = fnSym;
   const byId = new Map();
   const conIn = connectedPins(g.edges, (e) => e.to, (e) => e.tp);
   const conOut = connectedPins(g.edges, (e) => e.from, (e) => e.fp);

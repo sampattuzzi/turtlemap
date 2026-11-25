@@ -590,6 +590,7 @@ button { cursor: pointer; }
 .comment-pin:hover { background: var(--accent); color: var(--chrome); }
 .code-view .ln { position: relative; }
 .code-view .ln[data-line] > .no { cursor: pointer; }
+.code-view[data-qual] .ln[data-line] > .tx { cursor: pointer; }
 .code-view .ln.line-picked { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 .code-view .ln.line-picked > .no { color: var(--accent); opacity: 1; }
 .cmark { position: absolute; right: 8px; top: 0; border: 0; background: none; padding: 0 2px; font-size: 12px; cursor: pointer; }
