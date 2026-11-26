@@ -323,7 +323,7 @@ def test_wires_variables_from_the_pin_that_produced_them(tmp_path: Path) -> None
     assert len(graph["nodes"]) == 3
     assert input_pin(twice, "b")["lit"] == "2"
     assert source_of(graph, twice, "a") == (entry["id"], "value")
-    assert source_of(graph, returned, "int") == (twice["id"], "")
+    assert source_of(graph, returned, "int") == (twice["id"], "twice")
 
 
 def test_draws_an_early_return_inside_its_lane(tmp_path: Path) -> None:
@@ -1053,7 +1053,7 @@ def test_wires_a_class_chosen_at_runtime_into_the_make_node(tmp_path: Path) -> N
 
     make = the_node(graph, "Make kind")
     select = the_node(graph, "Select")
-    assert source_of(graph, make, "class") == (select["id"], "")
+    assert source_of(graph, make, "class") == (select["id"], "kind")
     assert [pin["name"] for pin in make["ins"]] == ["class", "size"]
 
 
@@ -1699,3 +1699,23 @@ def test_writes_a_library_function_passed_as_a_value_inline(tmp_path: Path) -> N
 
     assert nodes_of_kind(graph, "var") == []
     assert input_pin(the_node(graph, "reduce"), "add")["lit"] == "operator.add"
+
+
+def test_names_an_assigned_comprehension_after_its_variable(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def positions(room_ids: list[str], wanted: str) -> int:
+            room_index_by_id = {room_id: index for index, room_id in enumerate(room_ids)}
+            return room_index_by_id[wanted]
+    """,
+        "positions",
+    )
+
+    frame = nodes_of_kind(graph, "comprehension")[0]
+    lookup = the_node(graph, "[ ]")
+    assert frame["outs"][0]["name"] == "room_index_by_id"
+    assert source_of(graph, lookup, "room_index_by_id") == (
+        frame["id"],
+        "room_index_by_id",
+    )

@@ -61,8 +61,11 @@ class Expressions:
     def value(
         self, expression: m.Expr, *, exec_candidate: bool = False, out_name: str = ""
     ) -> Value:
-        found = self._computed(
-            expression, exec_candidate=exec_candidate, out_name=out_name
+        found = self._graph.named(
+            self._computed(
+                expression, exec_candidate=exec_candidate, out_name=out_name
+            ),
+            out_name,
         )
         if found.node is not None:
             node = self._graph.node(found.node)

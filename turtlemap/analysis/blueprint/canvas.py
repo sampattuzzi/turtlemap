@@ -1,6 +1,6 @@
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from turtlemap.analysis import model as m
@@ -264,6 +264,19 @@ class Graph:
         unique = unused_name(name, {pin.name for pin in node.outs})
         node.outs.append(Pin(unique, pin_type, cell=cell))
         return Value(pin_type, node.id, unique, annotation=annotation, reference=cell)
+
+    def named(self, value: Value, name: str) -> Value:
+        if not name or value.node is None or value.pin != "":
+            return value
+        node = self._by_id[value.node]
+        pin = node.output("")
+        if pin is None or node.output(name) is not None:
+            return value
+        pin.name = name
+        for edge in self.edges:
+            if edge["from"] == node.id and edge["fp"] == "":
+                edge["fp"] = name
+        return replace(value, pin=name)
 
     def link(self, source: GraphNode, label: str, target: GraphNode) -> None:
         if label == "then":
