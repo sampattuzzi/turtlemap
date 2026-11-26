@@ -5,9 +5,9 @@ export function plain(name) {
   if (name === '__init__' || name === 'constructor') return 'set up';
   return name.replace(/\bself\./g, '').replace(/(^|[.\s])_+/g, '$1').replace(/_+/g, ' ').replace(/\./g, ' › ');
 }
-export function routedPath(ax, ay, bx, by, via, minDx = 36, lean = 0) {
+export function routedPath(ax, ay, bx, by, via, minDx = 36) {
   let d = `M${ax},${ay}`, cx = ax, cy = ay;
-  const curveTo = (x, y) => { const dx = Math.max(Math.min(minDx, Math.abs(x - cx) * 0.5 + 12), Math.abs(x - cx) * 0.5); d += ` C${cx + dx + lean},${cy} ${x - dx + lean},${y} ${x},${y}`; cx = x; cy = y; };
+  const curveTo = (x, y) => { const dx = Math.max(Math.min(minDx, Math.abs(x - cx) * 0.5 + 12), Math.abs(x - cx) * 0.5); d += ` C${cx + dx},${cy} ${x - dx},${y} ${x},${y}`; cx = x; cy = y; };
   for (const p of via) { curveTo(p.x, p.y); d += ` L${p.x + p.w},${p.y}`; cx = p.x + p.w; }
   curveTo(bx, by);
   return d;

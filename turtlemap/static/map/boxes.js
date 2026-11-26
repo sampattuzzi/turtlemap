@@ -199,9 +199,14 @@ class MapBoxLayout {
     if (!this.ports.has(a)) this.ports.set(a, new Map()); this.ports.get(a).set(b, pa);
     if (!this.ports.has(b)) this.ports.set(b, new Map()); this.ports.get(b).set(a, pb);
   }
-  lane(from, ranks, port) {
+  lane(from, ranks, port, thickness) {
     const chain = [];
-    for (const r of ranks) { const d = { dummy: true, rank: r, w: 0, h: 6, x: 0, y: 0, origin: from, port }; this.near(chain.length ? chain[chain.length - 1] : from, d, chain.length ? 3 : port, 3); chain.push(d); this.items.push(d); }
+    for (const r of ranks) {
+      const d = { dummy: true, rank: r, w: 0, h: Math.max(6, thickness(r)), x: 0, y: 0, origin: from, port };
+      const prev = chain[chain.length - 1];
+      this.near(prev || from, d, prev ? prev.h / 2 : port, d.h / 2);
+      chain.push(d); this.items.push(d);
+    }
     return chain;
   }
   addRoutes(pairs) {
@@ -211,12 +216,14 @@ class MapBoxLayout {
       const ts = [...bs].map((b) => rank.get(b));
       const ports = new Map([...bs].map((b) => [b, this.portsBetween(a, b)]));
       const leaving = (some) => (some.length ? some.reduce((sum, b) => sum + ports.get(b).pa, 0) / some.length : mapAnchor(a));
-      const ahead = this.lane(a, rankSpan(r0 + 1, Math.max(r0, ...ts)), leaving([...bs].filter((b) => rank.get(b) > r0)));
-      const behind = this.lane(a, rankSpan(Math.min(r0 + 1, ...ts), r0 + 1).reverse(), leaving([...bs].filter((b) => rank.get(b) <= r0)));
+      const width = (b) => ribbonWidth(this.endsOf(a, b).reduce((sum, e) => sum + e.count, 0));
+      const passing = (keep) => [...bs].filter(keep).reduce((sum, b) => sum + width(b), 0);
+      const ahead = this.lane(a, rankSpan(r0 + 1, Math.max(r0, ...ts)), leaving([...bs].filter((b) => rank.get(b) > r0)), (r) => passing((b) => rank.get(b) > r));
+      const behind = this.lane(a, rankSpan(Math.min(r0 + 1, ...ts), r0 + 1).reverse(), leaving([...bs].filter((b) => rank.get(b) <= r0)), (r) => passing((b) => rank.get(b) <= r));
       for (const b of bs) {
         const t = rank.get(b), { pa, pb } = ports.get(b);
         const via = t > r0 ? ahead.slice(0, t - r0 - 1) : behind.slice(0, r0 - t + 1);
-        if (via.length) this.near(via[via.length - 1], b, 3, pb); else this.near(a, b, pa, pb);
+        if (via.length) this.near(via[via.length - 1], b, via[via.length - 1].h / 2, pb); else this.near(a, b, pa, pb);
         this.routes.push({ a, b, via });
       }
     }
@@ -243,7 +250,7 @@ class MapBoxLayout {
       for (const it of col) { it.x = x; it.y = y; y += it.h + this.gapY; }
       x += w + gapX;
     });
-    for (const it of this.items) if (it.dummy) it.y = it.origin.y + it.port - 3;
+    for (const it of this.items) if (it.dummy) it.y = it.origin.y + it.port - it.h / 2;
     for (const col of this.cols) if (col) col.sort((a, b) => a.y - b.y);
   }
   relax() {
@@ -295,7 +302,8 @@ class MapBoxLayout {
     }
   }
 }
-function mapAnchor(it) { return it.dummy ? 3 : Math.min(it.h, 40) / 2; }
+function mapAnchor(it) { return it.dummy ? it.h / 2 : Math.min(it.h, 40) / 2; }
+export function ribbonWidth(count) { return 2 + 2.4 * Math.log2(Math.max(1, count)); }
 function mapMid(o) { return o.y + mapAnchor(o); }
 export function rankSpan(lo, hi) { return Array.from({ length: Math.max(0, hi - lo) }, (_, i) => lo + i); }
 function columnGaps(cols) {
@@ -307,7 +315,7 @@ function columnGaps(cols) {
     out.push([top, Infinity]);
     return out;
   });
-  return (r, want) => gaps[r].map(([lo, hi]) => (hi - lo < 8 ? (lo + hi) / 2 : Math.min(Math.max(want, lo + 4), hi - 4))).reduce((best, y) => (Math.abs(y - want) < Math.abs(best - want) ? y : best), Infinity);
+  return (r, want, margin = 4) => gaps[r].map(([lo, hi]) => (hi - lo < 2 * margin ? (lo + hi) / 2 : Math.min(Math.max(want, lo + margin), hi - margin))).reduce((best, y) => (Math.abs(y - want) < Math.abs(best - want) ? y : best), Infinity);
 }
 function arrangeMapColumns(layout, columns, box, { gapY, top }) {
   const layerOf = new Map();
