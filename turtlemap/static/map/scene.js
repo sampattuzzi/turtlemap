@@ -3,6 +3,7 @@ import { KIND_ORDER, net } from '../core/data.js';
 import { el, svg } from '../core/dom.js';
 import { DIFF_SIGN, NET_COLUMNS, NET_ROUTES, NET_SLACK, combinedDiff, diffBadge, layoutNet, moduleFileName, moduleNodeOf, netBoxEl, netLabel, offsetWithin, outsideOf, rankSpan } from './boxes.js';
 import { settings } from '../core/settings.js';
+const JUNCTION_GAP = 18;
 export function buildNetScene(expanded, ctx, filter = null) {
   const N = net();
   const scene = new Scene(ctx);
@@ -60,7 +61,27 @@ class NetDrawing {
     const o = this.innerOffset(route.inner);
     return route.via.map((d) => ({ x: o.x + d.x, y: o.y + d.y + 3, w: d.w }));
   }
-  drawArrows(groups) { for (const g of groups.values()) this.drawArrow(g, groups); }
+  drawArrows(groups) {
+    this.junctions = this.direct ? this.junctionsOf(groups) : new Map();
+    for (const g of groups.values()) this.drawArrow(g, groups);
+  }
+  junctionsOf(groups) {
+    const targets = new Map();
+    for (const g of groups.values()) {
+      const holder = this.N.nodes.get(g.b).parent, rb = this.rects.get(g.b);
+      if (!holder || !this.rects.has(holder.id)) continue;
+      const key = `${g.a}|${holder.id}`;
+      if (!targets.has(key)) targets.set(key, []);
+      targets.get(key).push(rb.y + rb.anchorY);
+    }
+    const junctions = new Map();
+    for (const [key, ys] of targets) {
+      if (ys.length < 2) continue;
+      const holder = this.rects.get(key.slice(key.indexOf('|') + 1));
+      junctions.set(key, { x: holder.x - JUNCTION_GAP, w: 0, y: ys.reduce((a, b) => a + b, 0) / ys.length });
+    }
+    return junctions;
+  }
   drawArrow(g, groups) {
     g.kind = KIND_ORDER.find((k) => g.kinds.has(k));
     const ra = this.rects.get(g.a), rb = this.rects.get(g.b);
@@ -87,21 +108,26 @@ class NetDrawing {
     this.drawn.push({ g, path, text, hit, forward, ends, labelBox: labelBoxOf(text, label.length + (g.diff ? 2 : 0)) });
   }
   directSpans(g, sa, sb, ends) {
-    const along = (x) => ends.a.y + (ends.b.y - ends.a.y) * Math.min(1, Math.max(0, (x - ends.a.x) / Math.max(1, ends.b.x - ends.a.x)));
-    const across = (box, ranks) => {
+    const spans = [];
+    const reach = () => { const last = spans[spans.length - 1]; return last ? { x: last.x + last.w, y: last.y } : ends.a; };
+    const anchor = (id) => { const r = this.rects.get(id); return { x: r.x, y: r.y + r.anchorY }; };
+    const across = (box, ranks, aim) => {
       const cols = NET_COLUMNS.get(box);
-      if (!cols) return [];
-      const o = this.innerOffset(cols.inner);
-      return ranks.filter((r) => cols.colX[r] !== undefined).map((r) => ({ x: o.x + cols.colX[r], w: cols.colW[r], y: o.y + cols.gapNear(r, along(o.x + cols.colX[r] + cols.colW[r] / 2) - o.y) }));
+      if (!cols) return;
+      const o = this.innerOffset(cols.inner), from = reach();
+      const along = (x) => from.y + (aim.y - from.y) * Math.min(1, Math.max(0, (x - from.x) / Math.max(1, aim.x - from.x)));
+      for (const r of ranks) if (cols.colX[r] !== undefined) spans.push({ x: o.x + cols.colX[r], w: cols.colW[r], y: o.y + cols.gapNear(r, along(o.x + cols.colX[r] + cols.colW[r] / 2) - o.y) });
     };
     const rankIn = (box, kid) => NET_COLUMNS.get(box).rank.get(kid);
     const from = this.N.chain(g.a), to = this.N.chain(g.b);
     const ia = from.findIndex((x) => x.id === sa), ib = to.findIndex((x) => x.id === sb);
-    const spans = [];
-    for (let j = from.length - 2; j >= ia; j--) { const q = from[j].id, cols = NET_COLUMNS.get(q); if (cols) spans.push(...across(q, rankSpan(rankIn(q, from[j + 1].id) + 1, cols.last + 1))); }
+    const crossing = anchor(sb);
+    for (let j = from.length - 2; j >= ia; j--) { const q = from[j].id, cols = NET_COLUMNS.get(q); if (cols) across(q, rankSpan(rankIn(q, from[j + 1].id) + 1, cols.last + 1), crossing); }
     const parent = from[ia - 1].id;
-    if (NET_COLUMNS.has(parent)) spans.push(...across(parent, rankSpan(rankIn(parent, sa) + 1, rankIn(parent, sb))));
-    for (let j = ib; j < to.length - 1; j++) { const q = to[j].id; if (NET_COLUMNS.has(q)) spans.push(...across(q, rankSpan(0, rankIn(q, to[j + 1].id)))); }
+    if (NET_COLUMNS.has(parent)) across(parent, rankSpan(rankIn(parent, sa) + 1, rankIn(parent, sb)), crossing);
+    for (let j = ib; j < to.length - 1; j++) { const q = to[j].id; if (NET_COLUMNS.has(q)) across(q, rankSpan(0, rankIn(q, to[j + 1].id)), j + 1 === to.length - 1 ? ends.b : anchor(to[j + 1].id)); }
+    const junction = to.length - 2 >= ib ? this.junctions.get(`${g.a}|${to[to.length - 2].id}`) : null;
+    if (junction && junction.x > reach().x) spans.push(junction);
     return spans;
   }
   traceRoutes() {
