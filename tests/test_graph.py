@@ -1664,3 +1664,38 @@ def test_keeps_a_generator_that_reads_no_changing_value_off_the_execution_line(
     )
 
     assert graph["exec"] == []
+
+
+def test_reads_a_variable_once_across_steps_that_only_read_it(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(tmp_path, ROOM_CAPS, "openness")
+
+    reads = nodes_of_kind(graph, "get")
+    assert len(reads) == 1
+    assert source_of(graph, the_node(graph, "in"), "b") == (
+        reads[0]["id"],
+        "caps_by_room",
+    )
+    assert source_of(graph, the_node(graph, "[ ]"), "caps_by_room") == (
+        reads[0]["id"],
+        "caps_by_room",
+    )
+
+
+def test_writes_a_library_function_passed_as_a_value_inline(tmp_path: Path) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        import operator
+        from functools import reduce
+
+
+        def total(items: list[int]) -> int:
+            return reduce(operator.add, items)
+    """,
+        "total",
+    )
+
+    assert nodes_of_kind(graph, "var") == []
+    assert input_pin(the_node(graph, "reduce"), "add")["lit"] == "operator.add"

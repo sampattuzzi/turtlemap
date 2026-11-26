@@ -2,7 +2,6 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 
-from turtlemap.analysis.blueprint.callees import external_name
 from turtlemap.analysis.blueprint.syntax import Form
 from turtlemap.analysis.blueprint.canvas import Graph, GraphNode, Pin
 from turtlemap.analysis.blueprint.lookups import TypeLookups
@@ -217,19 +216,13 @@ class Scope:
         if isinstance(resolved, SymbolRef):
             return self._project_symbol_value(dotted, resolved, line)
         if isinstance(resolved, ExternalRef):
-            external = external_name(resolved)
             last = dotted.rsplit(".", 1)[-1]
             if last[:1].isupper():
                 return Value(
                     PinType(last, "class" if not last.isupper() else "any"),
                     literal=dotted,
                 )
-            return self._cached_variable(
-                dotted,
-                line,
-                lambda: self._graph.add("var", dotted, line, external=external),
-                UNKNOWN,
-            )
+            return Value(UNKNOWN, literal=dotted)
         if isinstance(resolved, ModuleRef):
             return Value(UNKNOWN, literal=dotted)
         return self._cached_variable(

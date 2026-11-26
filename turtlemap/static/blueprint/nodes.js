@@ -96,8 +96,9 @@ function comprehensionEl(n, connectedIns, connectedOuts, state) {
     el('span', { class: 'title' }, plain(n.title)),
     el('span', { class: 'grow' }));
   const resultPins = [el('span', { class: 'tag' }, result.type.label), pinEl('out', `out:${result.name}`, result.name, result.type, { connected: connectedOuts.has(result.name), diff: result.diff })];
-  const strip = el('div', { class: 'strip' }, elements.map((o) => pinEl('out', `out:${o.name}`, o.name, o.type, { connected: connectedOuts.has(o.name), diff: o.diff })));
+  const strip = el('div', { class: 'strip' });
   if ((n.execOuts || []).includes('start')) strip.append(pinEl('out', 'start', '', null));
+  strip.append(...elements.map((o) => pinEl('out', `out:${o.name}`, o.name, o.type, { connected: connectedOuts.has(o.name), diff: o.diff })));
   if (n.execOut) {
     head.append(el('span', { class: 'then' }, 'then'), pinEl('out', 'then', '', null));
     strip.append(el('span', { class: 'grow' }), ...resultPins);
@@ -124,8 +125,8 @@ function frameEl(n, connectedIns, connectedOuts, state, path) {
   const starts = n.kind === 'loop' && (n.execOuts || []).includes('start');
   if (starts || (n.kind !== 'branch' && n.outs.length)) {
     const strip = el('div', { class: 'strip' });
-    for (const o of n.outs) strip.append(pinEl('out', `out:${o.name}`, o.name, o.type, { connected: connectedOuts.has(o.name), diff: o.diff }));
     if (starts) strip.append(pinEl('out', 'start', '', null));
+    for (const o of n.outs) strip.append(pinEl('out', `out:${o.name}`, o.name, o.type, { connected: connectedOuts.has(o.name), diff: o.diff }));
     box.append(strip);
   }
   wrap.append(box);

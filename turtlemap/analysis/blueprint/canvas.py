@@ -22,6 +22,7 @@ FRAME_KINDS = frozenset({"closure", "loop", "branch", "lane", "comprehension"})
 STRIP_KINDS = frozenset({"closure", "loop", "lane", "comprehension"})
 STATE_HOLDERS = frozenset({"get", "var"})
 STATE_READERS = frozenset({"op", "select", "call", "ext", "method", "break"})
+READ_ONLY_STEPS = frozenset({"op", "select", "break", "get"})
 
 
 _NOTE_LIMIT = 160
@@ -271,7 +272,8 @@ class Graph:
             source.exec_outs = [*(source.exec_outs or []), label]
         target.exec_in = True
         self.exec.append({"from": source.id, "fp": label, "to": target.id})
-        self.moment += 1
+        if target.kind not in READ_ONLY_STEPS:
+            self.moment += 1
 
     def strip_exec_when_only_returns(self, head: GraphNode) -> None:
         frame = head.id if head.kind in FRAME_KINDS else None
