@@ -19,6 +19,8 @@ FRAME_KINDS = frozenset({"closure", "loop", "branch", "lane", "comprehension"})
 
 
 STRIP_KINDS = frozenset({"closure", "loop", "lane", "comprehension"})
+STATE_HOLDERS = frozenset({"get", "var"})
+STATE_READERS = frozenset({"expr", "op", "select", "call", "ext", "method", "break"})
 
 
 _NOTE_LIMIT = 160
@@ -59,6 +61,7 @@ class GraphNode:
     parent: str | None = None
     reach: str | None = None
     badge: str | None = None
+    reads_state: bool = False
 
     def output(self, name: str) -> Pin | None:
         return next((pin for pin in self.outs if pin.name == name), None)
@@ -114,6 +117,7 @@ class Graph:
         self.frame: str | None = None
         self.moment = 0
         self.signatures: dict[str, Signature] = {}
+        self.changed_in_place: set[str] = set()
         self._by_id: dict[str, GraphNode] = {}
 
     def node(self, node_id: str) -> GraphNode:
@@ -222,6 +226,20 @@ class Graph:
             self.edges.append(
                 {"from": value.node, "fp": value.pin, "to": node.id, "tp": unique}
             )
+        if self._holds_state(value):
+            node.reads_state = True
+
+    def needs_ordering(self, node: GraphNode) -> bool:
+        return node.reads_state and node.kind in STATE_READERS and not node.exec_in
+
+    def _holds_state(self, value: Value) -> bool:
+        source = self._by_id.get(value.node) if value.node is not None else None
+        if source is None or source.kind not in STATE_HOLDERS:
+            return False
+        names = (
+            [pin.name for pin in source.ins] if source.kind == "get" else [source.title]
+        )
+        return any(name in self.changed_in_place for name in names)
 
     def output(
         self,

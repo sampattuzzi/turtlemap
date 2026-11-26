@@ -14,6 +14,7 @@ from turtlemap.languages.language import ComprehensionShape
 KEEP_IF = "keep if"
 YIELD_FROM = "yield from"
 RESULTS_TITLE = "Results"
+START = "start"
 
 
 @dataclass(frozen=True)
@@ -39,28 +40,13 @@ class Comprehensions:
         self._graph = flow.graph
         self._evaluate = evaluate
         self._text = text
-        self._depth = 0
 
     def value(self, expression: m.Comprehension) -> Value:
         shape = self._profile.comprehensions[expression.kind]
-        self._depth += 1
-        try:
-            with self._scope.local_bindings(expression.bound):
-                outer = self._clause(expression, 0, shape)
-        finally:
-            self._depth -= 1
+        with self._scope.local_bindings(expression.bound):
+            outer = self._clause(expression, 0, shape)
         outer.frame.badge = shape.badge
-        if self._depth == 0 and self._reads_changing_values(outer.frame):
-            self._flow.step(outer.frame)
         return outer.result
-
-    def _reads_changing_values(self, frame: GraphNode) -> bool:
-        return any(
-            pin.cell
-            for node in self._graph.nodes
-            if self._graph.encloses(frame.id, node.id)
-            for pin in node.ins
-        )
 
     def _clause(
         self, expression: m.Comprehension, index: int, shape: ComprehensionShape
@@ -71,6 +57,8 @@ class Comprehensions:
         frame = self._frame(clause, items)
         result = self._graph.output(frame, "", PinType(produces.label, produces.cat))
         self._bind_targets(frame, items, clause)
+        outside = self._flow.tails
+        self._flow.resume([(frame, START)])
         with self._graph.inside(frame.id):
             conditions = [self._evaluate(test) for test in clause.conditions]
             if index == len(expression.clauses) - 1:
@@ -82,6 +70,9 @@ class Comprehensions:
                 pins = [(YIELD_FROM, inner.result)]
                 elements = inner.elements
             self._band(clause.line, pins, conditions)
+        self._flow.resume(outside)
+        if frame.exec_outs and START in frame.exec_outs:
+            self._flow.step(frame)
         typed = _result_type(produces, elements)
         frame.outs[0].type = typed
         return _Clause(frame, replace(result, type=typed), elements)

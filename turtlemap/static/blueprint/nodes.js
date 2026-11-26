@@ -98,6 +98,7 @@ function comprehensionEl(n, connectedIns, connectedOuts, state) {
     el('span', { class: 'grow' }));
   const resultPins = [el('span', { class: 'tag' }, result.type.label), pinEl('out', `out:${result.name}`, result.name, result.type, { connected: connectedOuts.has(result.name), diff: result.diff })];
   const strip = el('div', { class: 'strip' }, elements.map((o) => pinEl('out', `out:${o.name}`, o.name, o.type, { connected: connectedOuts.has(o.name), diff: o.diff })));
+  if ((n.execOuts || []).includes('start')) strip.append(pinEl('out', 'start', '', null));
   if (n.execOut) {
     head.append(el('span', { class: 'then' }, 'then'), pinEl('out', 'then', '', null));
     strip.append(el('span', { class: 'grow' }), ...resultPins);

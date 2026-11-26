@@ -1636,13 +1636,40 @@ def test_keeps_a_value_changed_through_a_chained_call_as_a_variable(
     ]
 
 
-def test_runs_a_generator_that_reads_a_changing_value_after_the_loop_changing_it(
+def test_runs_a_calculation_that_reads_a_changing_dict_on_the_execution_line(
     tmp_path: Path,
 ) -> None:
     graph = make_graph(tmp_path, ROOM_CAPS, "openness")
 
     expect_well_formed(graph)
+    assert "room in rooms -start-> Calculate" in exec_order(graph)
     assert exec_order(graph)[-2:] == [
         "For each room_id, cap in emitters -then-> room in rooms",
         "room in rooms -then-> Return",
     ]
+
+
+def test_runs_a_call_that_changes_a_value_before_the_call_chained_on_it(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(tmp_path, ROOM_CAPS, "openness")
+
+    assert exec_order(graph)[2:4] == [
+        "For each room_id, cap in emitters -start-> caps_by_room.setdefault",
+        "caps_by_room.setdefault -then-> append",
+    ]
+
+
+def test_keeps_a_generator_that_reads_no_changing_value_off_the_execution_line(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(
+        tmp_path,
+        """
+        def biggest(rooms: dict[str, list[float]]) -> tuple:
+            return tuple(max(rooms[room]) for room in rooms)
+    """,
+        "biggest",
+    )
+
+    assert graph["exec"] == []

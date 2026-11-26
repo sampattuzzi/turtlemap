@@ -15,6 +15,7 @@ COMPOUNDS = (m.If, m.For, m.While, m.Match)
 class Variables:
     names: frozenset[str] = frozenset()
     ahead: dict[int, list[str]] = field(default_factory=dict)
+    changed_in_place: frozenset[str] = frozenset()
 
     def declared_ahead_of(self, statement: Compound) -> list[str]:
         return self.ahead.get(id(statement), [])
@@ -44,7 +45,12 @@ def find_variables(function: Closure, receivers: frozenset[str]) -> Variables:
         ahead[id(compound)] = [
             name for name in mentioned_names(compound) if name in needed
         ]
-    return Variables(frozenset(found), ahead)
+    changed_in_place = {use.name for use in uses.uses if use.mutate}
+    return Variables(
+        frozenset(found),
+        ahead,
+        frozenset(changed_in_place | uses.mutated_by_closures),
+    )
 
 
 def stored_names(statement: Compound) -> list[str]:

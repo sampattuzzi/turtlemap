@@ -62,6 +62,18 @@ class Expressions:
     def value(
         self, expression: m.Expr, *, exec_candidate: bool = False, out_name: str = ""
     ) -> Value:
+        found = self._computed(
+            expression, exec_candidate=exec_candidate, out_name=out_name
+        )
+        if found.node is not None:
+            node = self._graph.node(found.node)
+            if self._graph.needs_ordering(node):
+                self._flow.step(node)
+        return found
+
+    def _computed(
+        self, expression: m.Expr, *, exec_candidate: bool, out_name: str
+    ) -> Value:
         literal = self._lookups.literal(expression)
         if literal is not None:
             return literal

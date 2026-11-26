@@ -41,6 +41,7 @@ class BuildContext:
         self.variables = find_variables(
             function.node, module.language.profile.receiver_names
         )
+        self.graph.changed_in_place |= self.variables.changed_in_place
         self.lookups: TypeLookups = (
             parent.lookups if parent is not None else TypeLookups(types, module)
         )
