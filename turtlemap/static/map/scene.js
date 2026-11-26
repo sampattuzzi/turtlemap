@@ -3,6 +3,7 @@ import { KIND_ORDER, net } from '../core/data.js';
 import { el, svg } from '../core/dom.js';
 import { DIFF_SIGN, NET_COLUMNS, NET_ROUTES, NET_SLACK, combinedDiff, diffBadge, layoutNet, moduleFileName, moduleNodeOf, netBoxEl, netLabel, offsetWithin, rankSpan, ribbonWidth } from './boxes.js';
 const EDGE_GAP = 10;
+const FEEDER_STACK = 8;
 export function buildNetScene(expanded, ctx, filter = null) {
   const N = net();
   const scene = new Scene(ctx);
@@ -64,6 +65,9 @@ class NetDrawing {
   }
   drawArrows(groups) {
     const items = [...groups.values()].map((g) => this.arrowItem(g));
+    const sources = new Map();
+    for (const it of items) { if (!sources.has(it.b)) sources.set(it.b, new Set()); sources.get(it.b).add(it.a); }
+    for (const it of items) it.layer = sources.get(it.b).size > 1 ? `to|${it.b}` : it.a;
     stackEnds(items, this.rects);
     const offsets = this.sharedOffsets(items);
     for (const it of items) this.drawArrow(it, offsets);
@@ -72,7 +76,7 @@ class NetDrawing {
     g.kind = KIND_ORDER.find((k) => g.kinds.has(k));
     const ra = this.rects.get(g.a), rb = this.rects.get(g.b), route = NET_ROUTES.get(`${g.a}|${g.b}`);
     const spans = this.absVia(route);
-    return { g, a: g.a, b: g.b, ra, rb, route, forward: rb.x >= ra.x + ra.w - 4, raw: ribbonWidth(g.count), outKey: spans.length ? spans[0].y : rb.y + rb.anchorY, inKey: spans.length ? spans[spans.length - 1].y : ra.y + ra.anchorY };
+    return { g, a: g.a, b: g.b, ra, rb, route, forward: rb.x >= ra.x + ra.w - 4, raw: g.shortcut ? 1.4 : ribbonWidth(g.count), outKey: spans.length ? spans[0].y : rb.y + rb.anchorY, inKey: spans.length ? spans[spans.length - 1].y : ra.y + ra.anchorY };
   }
   sharedOffsets(items) {
     const through = new Map();
@@ -80,8 +84,11 @@ class NetDrawing {
     const offsets = new Map();
     for (const [d, list] of through) {
       list.sort((p, q) => p.ys - q.ys);
+      const total = list.reduce((t, it) => t + it.w, 0), cols = NET_COLUMNS.get(list[0].route.box);
+      const middle = d.y + (d.h || 6) / 2;
+      const centre = cols && d.rank !== undefined ? cols.gapNear(d.rank, middle, total / 2 + 3) : middle;
       const at = new Map();
-      let y = -list.reduce((t, it) => t + it.w, 0) / 2;
+      let y = centre - total / 2;
       for (const it of list) { at.set(it, y + it.w / 2); y += it.w; }
       offsets.set(d, at);
     }
@@ -96,13 +103,17 @@ class NetDrawing {
     const { g, ra, rb, route, forward } = it;
     const ends = { a: { x: ra.x + ra.w, y: it.ys }, b: { x: rb.x - 2, y: it.yt } };
     const o = route ? this.innerOffset(route.inner) : null;
-    const spans = route ? route.via.map((d) => ({ x: o.x + d.x, y: o.y + d.y + (d.h || 6) / 2 + offsets.get(d).get(it), w: d.w })) : [];
+    const spans = route ? route.via.map((d) => ({ x: o.x + d.x, y: o.y + offsets.get(d).get(it), w: d.w })) : [];
     const { d, labelAt } = forward ? forwardArrow(g, ends, spans) : loopBackArrow(g, ra, rb, ends, spans);
     const changed = g.diff ? ` diff-${g.diff}` : '';
-    const path = ribbonPath(d, it.w, g.kind, forward, `rel ribbon k-${g.kind} weighted${g.count === 1 ? ' light' : ''}${g.shortcut ? ' shortcut' : ''}${changed}`);
-    if (g.kind === 'has') path.setAttribute('marker-start', 'url(#m-dia)');
+    const cls = `rel ribbon k-${g.kind} weighted${g.count === 1 ? ' light' : ''}${g.shortcut ? ' shortcut' : ''}${changed}`;
+    const parts = [ribbonPath(d, it.w, g.kind, forward, cls)];
     const end = g.kinds.size === 1 && g.kind === 'has' ? holdingEnd(this.N, g.atoms) : null;
-    if (end) path.setAttribute('marker-end', `url(#m-hold-${end})`);
+    if (g.kind === 'has' && g.kinds.size === 1) {
+      const tips = svg('path', { d, class: 'ribbon-tip', 'marker-start': 'url(#m-dia)' });
+      if (end) tips.setAttribute('marker-end', `url(#m-hold-${end})`);
+      parts[parts.length - 1].append(tips);
+    }
     const label = arrowLabel(this.N, g);
     const text = svg('text', { x: labelAt.x, y: labelAt.y - 5, class: `rel-label k-${g.kind}${changed}`, 'text-anchor': 'middle' });
     if (g.diff) { const sign = svg('tspan', { class: 'rel-sign' }); sign.textContent = `${DIFF_SIGN[g.diff]} `; text.append(sign); }
@@ -110,9 +121,9 @@ class NetDrawing {
     if (g.count === 1) text.classList.add('light');
     if (g.shortcut) text.classList.add('shortcut');
     const hit = svg('path', { d, class: 'rel-hit', 'data-drawn': this.drawn.length });
-    this.ribbonGroup(g.a).append(path);
+    this.ribbonGroup(it.layer).append(parts[0]);
     this.overlay.append(text, hit);
-    this.drawn.push({ g, path, text, hit, forward, ends, labelBox: labelBoxOf(text, label.length + (g.diff ? 2 : 0)) });
+    this.drawn.push({ g, parts, text, hit, forward, ends, labelBox: labelBoxOf(text, label.length + (g.diff ? 2 : 0)) });
   }
   traceRoutes() {
     for (const d of this.drawn) {
@@ -124,17 +135,7 @@ class NetDrawing {
       const state = combinedDiff(f.passing.map(({ route }) => route.e.diff));
       if (state) f.el.classList.add(`diff-${state}`);
     }
-    for (const list of groupBy(this.feederList, (f) => f.port).values()) {
-      for (const f of list) f.w = ribbonWidth(Math.max(1, f.passing.length));
-      list.sort((p, q) => p.cy - q.cy);
-      let y = list[0].portY - list.reduce((t, f) => t + f.w, 0) / 2;
-      for (const f of list) {
-        const d = f.shape(y + f.w / 2);
-        y += f.w;
-        f.el.setAttribute('d', ribbonArea(d, f.w));
-        f.hit.setAttribute('d', d);
-      }
-    }
+    this.shapeFeeders();
   }
   routeOf(e, d) {
     const out = this.legOf(d.g.a, visibleEnd(this.N, this.effective, e.from), 'R'), into = this.legOf(d.g.b, visibleEnd(this.N, this.effective, e.to), 'L');
@@ -157,19 +158,42 @@ class NetDrawing {
   feederPath(side, q, c) {
     const cols = NET_COLUMNS.get(q), rq = this.rects.get(q), rc = this.rects.get(c);
     if (!cols || !rq || !rc || !cols.rank.has(c)) return null;
-    const o = this.innerOffset(cols.inner);
-    const portY = rq.y + rq.anchorY, cy = rc.y + rc.anchorY, r0 = cols.rank.get(c);
-    const ranks = side === 'R' ? Array.from({ length: cols.last - r0 }, (_, i) => r0 + 1 + i) : Array.from({ length: r0 }, (_, i) => i);
-    const want = (r) => (side === 'R' ? cy + ((portY - cy) * (r - r0)) / (cols.last + 1 - r0) : portY + ((cy - portY) * (r + 1)) / (r0 + 1));
-    const via = ranks.filter((r) => cols.colX[r] !== undefined).map((r) => ({ x: o.x + cols.colX[r], w: cols.colW[r], y: o.y + cols.gapNear(r, want(r) - o.y) }));
-    const shape = (port) => (side === 'R'
-      ? `M${rc.x + rc.w},${cy} L${routedPath(rc.x + rc.w + (NET_SLACK.get(c) || 0), cy, rq.x + rq.w, port, via, 0).slice(1)}`
-      : routedPath(rq.x, port, rc.x, cy, via, 0));
-    const d = shape(portY);
-    const feeder = { el: svg('path', { d, class: 'feeder ribbon-feeder' }), hit: svg('path', { d, class: 'feeder-hit', 'data-feeder': this.feederList.length }), child: c, passing: [], side, port: `${side}|${q}`, portY, cy, shape };
+    const r0 = cols.rank.get(c);
+    const ranks = (side === 'R' ? rankSpan(r0 + 1, cols.last + 1) : rankSpan(0, r0)).filter((r) => cols.colX[r] !== undefined);
+    const portY = rq.y + rq.anchorY, cy = rc.y + rc.anchorY;
+    const feeder = { el: svg('path', { class: 'feeder ribbon-feeder' }), hit: svg('path', { class: 'feeder-hit', 'data-feeder': this.feederList.length }), child: c, passing: [], side, q, cols, ranks, rq, rc, port: `${side}|${q}`, portY, cy };
     this.feederList.push(feeder);
     this.overlay.prepend(feeder.el, feeder.hit);
     return feeder;
+  }
+  shapeFeeders() {
+    for (const list of groupBy(this.feederList, (f) => f.port).values()) {
+      const { cols, rq, side } = list[0], o = this.innerOffset(cols.inner);
+      const raw = list.map((f) => ribbonWidth(Math.max(1, f.passing.length))), room = Math.min(FEEDER_STACK, Math.max(4, 2 * rq.anchorY - 4));
+      const fit = Math.min(1, room / raw.reduce((t, w) => t + w, 0));
+      list.forEach((f, i) => { f.w = Math.max(0.8, raw[i] * fit); });
+      list.sort((p, q) => p.cy - q.cy);
+      const total = list.reduce((t, f) => t + f.w, 0);
+      const lanes = new Map();
+      for (const r of new Set(list.flatMap((f) => f.ranks))) {
+        const using = list.filter((f) => f.ranks.includes(r));
+        const want = Math.max(...using.map((f) => f.rc.y + f.rc.h)) + total / 2 + 6;
+        let y = o.y + cols.gapNear(r, want - o.y, total / 2 + 3) - using.reduce((t, f) => t + f.w, 0) / 2;
+        for (const f of using) { lanes.set(`${r}|${f.child}`, y + f.w / 2); y += f.w; }
+      }
+      let port = list[0].portY - total / 2;
+      for (const f of list) {
+        const via = f.ranks.map((r) => ({ x: o.x + cols.colX[r], w: cols.colW[r], y: lanes.get(`${r}|${f.child}`) }));
+        const py = port + f.w / 2;
+        port += f.w;
+        const { rc } = f, cy = f.cy;
+        const d = side === 'R'
+          ? `M${rc.x + rc.w},${cy} L${routedPath(rc.x + rc.w + (NET_SLACK.get(f.child) || 0), cy, rq.x + rq.w, py, via, 0).slice(1)}`
+          : routedPath(rq.x, py, rc.x, cy, via, 0);
+        f.el.setAttribute('d', ribbonArea(d, f.w));
+        f.hit.setAttribute('d', d);
+      }
+    }
   }
   pin(id) {
     this.pinned = id && this.rects.has(id) && !this.effective.has(id) ? id : null;
@@ -179,7 +203,7 @@ class NetDrawing {
     const focus = id || this.pinned;
     this.scene.el.classList.toggle('has-hot', Boolean(focus));
     for (const f of this.feederList) coolFeeder(f);
-    for (const d of this.drawn) { d.path.classList.remove('hot'); d.text.classList.remove('hot'); }
+    for (const d of this.drawn) heat(d, false);
     const ends = this.drawFocus(focus);
     if (this.scene.onHot) this.scene.onHot(focus ? ends : null);
   }
@@ -216,7 +240,8 @@ class NetDrawing {
     const near = leaving ? levels.findIndex((l) => l.spans.length) : levels.length - 1 - [...levels].reverse().findIndex((l) => l.spans.length);
     const shared = (k) => (leaving ? k >= near && near >= 0 : k <= near && near < levels.length);
     const points = levels.map(({ box, spans }, k) => {
-      const y = Math.min(shared(k) ? want : own, box.y + box.h - margin);
+      const held = spans.length ? (leaving ? spans[spans.length - 1].y : spans[0].y) : null;
+      const y = held !== null && shared(k) ? held : Math.min(shared(k) ? want : own, box.y + box.h - margin);
       const edge = { x: leaving ? box.x + box.w + EDGE_GAP : box.x - EDGE_GAP, y, w: 0 };
       return leaving ? [...spans, edge] : [edge, ...spans];
     });
@@ -243,8 +268,11 @@ class NetDrawing {
     const floor = Math.max(this.headerFloor(out.slice(out.findIndex((x) => x.id === sa), -1), margin), this.headerFloor(into.slice(into.findIndex((x) => x.id === sb), -1), margin));
     const home = line.outgoing ? ra : rb;
     const shared = Math.max((home.el && home.el.classList.contains('open') ? home.y + home.anchorY * 2 : home.y + home.h) + margin, floor);
-    const spans = this.focusSpans(sa, sb, shared, margin);
-    const via = forward ? [...this.levelSpans(line.a, sa, shared, true, margin, ay), ...spans, ...this.levelSpans(line.b, sb, shared, false, margin, by)] : spans;
+    const held = (list, fallback) => (list.length ? list[list.length - 1].y : fallback);
+    const leaving = forward ? this.levelSpans(line.a, sa, shared, true, margin, ay) : [];
+    const spans = this.focusSpans(sa, sb, held(leaving, shared), margin);
+    const entering = forward ? this.levelSpans(line.b, sb, held(spans, held(leaving, shared)), false, margin, by) : [];
+    const via = forward ? [...leaving, ...spans, ...entering] : spans;
     return Object.assign(line, { ra, rb, outer, inner, forward, via, raw, outKey: by, inKey: ay });
   }
   drawFocusLine(line, group) {
@@ -290,7 +318,7 @@ class NetDrawing {
     this.hovered = null;
     this.highlight(null);
     this.scene.el.classList.add('has-hot');
-    for (const { d, route } of f.passing) { d.path.classList.add('hot'); d.text.classList.add('hot'); lightRoute(d, route); }
+    for (const { d, route } of f.passing) { heat(d, true); lightRoute(d, route); }
   }
   onMouseMove(e) {
     if (!e.target.closest('.rel-hit')) return;
@@ -305,7 +333,7 @@ class NetDrawing {
     if (!under.length) return false;
     this.hoverKey = key;
     this.scene.el.classList.add('has-hot');
-    for (const d of under) { d.path.classList.add('hot'); d.text.classList.add('hot'); for (const route of d.routes) lightRoute(d, route); }
+    for (const d of under) { heat(d, true); for (const route of d.routes) lightRoute(d, route); }
     const carded = under.filter((d) => !d.traced);
     if (carded.length) { this.card = edgeCardEl(carded.map((d) => d.g)); document.body.append(this.card); }
     return true;
@@ -319,7 +347,7 @@ class NetDrawing {
     for (const d of this.drawn) {
       if (!d.box) d.box = arrowBox(d);
       const hidden = !overlaps(d.box, view);
-      setCulled(d.path, d, hidden);
+      for (const part of d.parts) setCulled(part, part, hidden);
       d.text.style.display = hidden ? 'none' : '';
       d.hit.style.display = hidden ? 'none' : '';
     }
@@ -461,7 +489,11 @@ function ribbonPath(d, width, kind, forward, cls) {
   if (marker) group.append(svg('path', { d, class: 'ribbon-tip', 'marker-end': marker }));
   return group;
 }
-function ribbonArea(d, width) {
+function heat(d, on) {
+  for (const part of d.parts) part.classList.toggle('hot', on);
+  d.text.classList.toggle('hot', on);
+}
+function ribbonSegments(d) {
   const segments = [];
   let at = null;
   for (const [, cmd, args] of d.matchAll(/([MLC])([^MLC]*)/g)) {
@@ -472,16 +504,23 @@ function ribbonArea(d, width) {
     const step = cmd === 'C' ? 3 : 1;
     for (let i = 0; i + step <= points.length; i += step) { const pts = points.slice(i, i + step); segments.push({ from: at, pts }); at = pts[pts.length - 1]; }
   }
-  if (!segments.length) return d;
-  const half = width / 2, shift = (p, dy) => `${(+p[0].toFixed(2))},${(+(p[1] + dy).toFixed(2))}`;
+  return segments;
+}
+function segmentsArea(segments, width) {
+  const half = width / 2, shift = (p, dy) => `${+p[0].toFixed(2)},${+(p[1] + dy).toFixed(2)}`;
   let top = `M${shift(segments[0].from, -half)}`;
   for (const sgm of segments) top += ` ${sgm.pts.length === 3 ? 'C' : 'L'}${sgm.pts.map((p) => shift(p, -half)).join(' ')}`;
-  let bottom = ` L${shift(segments[segments.length - 1].pts[segments[segments.length - 1].pts.length - 1], half)}`;
+  const end = segments[segments.length - 1].pts;
+  let bottom = ` L${shift(end[end.length - 1], half)}`;
   for (let i = segments.length - 1; i >= 0; i--) {
     const sgm = segments[i];
     bottom += sgm.pts.length === 3 ? ` C${shift(sgm.pts[1], half)} ${shift(sgm.pts[0], half)} ${shift(sgm.from, half)}` : ` L${shift(sgm.from, half)}`;
   }
   return `${top}${bottom} Z`;
+}
+function ribbonArea(d, width) {
+  const segments = ribbonSegments(d);
+  return segments.length ? segmentsArea(segments, width) : d;
 }
 function stackEnds(items, rects) {
   const outs = groupBy(items, (it) => it.a), ins = groupBy(items, (it) => it.b);
@@ -508,7 +547,7 @@ function placeSlots(byBox, rects, key, field) {
     const r = rects.get(id), total = list.reduce((t, it) => t + it.w, 0);
     list.sort((p, q) => p[key] - q[key]);
     const open = r.el && r.el.classList.contains('open');
-    let y = open ? r.y + 3 : Math.max(r.y + 1, r.y + r.h / 2 - total / 2);
+    let y = Math.max(r.y + 1, r.y + (open ? r.anchorY : r.h / 2) - total / 2);
     for (const it of list) { it[field] = y + it.w / 2; y += it.w; }
   }
 }
@@ -526,7 +565,7 @@ function labelBoxOf(text, chars) {
   return { x: +text.getAttribute('x') - chars * 3.3, y: +text.getAttribute('y') - 10, w: chars * 6.6, h: 13 };
 }
 function arrowBox(d) {
-  const a = pathBox(d.path), t = d.labelBox;
+  const a = pathBox(d.hit), t = d.labelBox;
   const x = Math.min(a.x, t.x), y = Math.min(a.y, t.y);
   return { x, y, w: Math.max(a.x + a.w, t.x + t.w) - x, h: Math.max(a.y + a.h, t.y + t.h) - y };
 }

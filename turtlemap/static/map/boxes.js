@@ -290,7 +290,7 @@ class MapBoxLayout {
   }
   record(skips) {
     const { inner, colX, colW, rank } = this;
-    for (const r of this.routes) NET_ROUTES.set(`${r.a.node.id}|${r.b.node.id}`, { inner, via: r.via });
+    for (const r of this.routes) NET_ROUTES.set(`${r.a.node.id}|${r.b.node.id}`, { inner, via: r.via, box: this.n.id });
     const gapNear = columnGaps(this.cols);
     NET_COLUMNS.set(this.n.id, { inner, colX, colW, gapNear, last: this.lastRank, rank: new Map(this.kids.map((k) => [k.node.id, rank.get(k)])) });
     for (const { a, b } of skips) {
@@ -298,7 +298,7 @@ class MapBoxLayout {
       const ranks = t > r0 ? rankSpan(r0 + 1, t) : rankSpan(t, r0 + 1).reverse();
       const reach = Math.max(1, Math.abs(t - r0));
       const via = ranks.map((r) => ({ x: colX[r], w: colW[r], y: gapNear(r, ya + ((yb - ya) * Math.abs(r - r0)) / reach) - 3 }));
-      NET_ROUTES.set(`${a.node.id}|${b.node.id}`, { inner, via });
+      NET_ROUTES.set(`${a.node.id}|${b.node.id}`, { inner, via, box: this.n.id });
     }
   }
 }
