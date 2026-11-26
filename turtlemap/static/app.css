@@ -402,17 +402,22 @@ button { cursor: pointer; }
 .rel.weighted { stroke-width: var(--w); }
 .rel.weighted.hot { stroke-width: calc(var(--w) + 1.2px); }
 .scene:not(.has-hot) .rel.light { opacity: 0.35; }
-.rel-label.light:not(.hot) { display: none; }
+.rel-label:not(.hot) { display: none; }
 .scene:not(.has-hot) .rel.shortcut { opacity: 0.16; stroke-width: 1.2px; }
 .rel-label.shortcut:not(.hot) { display: none; }
 .feeder { fill: none; stroke: var(--fg-dim); stroke-width: 1.1px; opacity: 0.3; pointer-events: none; }
 .scene.has-hot .feeder:not(.hot) { opacity: 0.06; }
 .feeder.hot { stroke: var(--feed, var(--fg)); stroke-width: 2.2px; opacity: 1; }
+.feeder.ribbon-feeder { fill: var(--fg-dim); stroke: none; }
+.feeder.ribbon-feeder.hot { fill: var(--feed, var(--fg)); opacity: 0.9; }
 .rel.focus-line { pointer-events: none; }
 .ribbons { opacity: 0.72; }
 .focus-ribbons { opacity: 0.9; }
 .rel.ribbon { stroke-dasharray: none; stroke-linecap: butt; }
 .rel.ribbon.weighted.hot { stroke-width: var(--w); }
+g.rel.ribbon { stroke: none; }
+.ribbon-area { stroke-width: 0.8px; stroke-linejoin: round; }
+.ribbon-tip { fill: none; stroke: none; }
 .rel-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
 .feeder-hit { fill: none; stroke: transparent; stroke-width: 10; pointer-events: stroke; cursor: pointer; }
 .edge-card { position: fixed; z-index: 60; width: max-content; max-width: min(520px, calc(100vw - 32px)); background: var(--chrome); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 12px 32px rgba(0,0,0,0.45); padding: 10px 12px; display: grid; gap: 8px; pointer-events: none; font-size: 12.5px; max-height: calc(100vh - 24px); overflow: hidden; }

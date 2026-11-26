@@ -2,7 +2,7 @@ import { Scene, loopBackPath, overlaps, pathBox, placeCard, routedPath, setCulle
 import { KIND_ORDER, net } from '../core/data.js';
 import { el, svg } from '../core/dom.js';
 import { DIFF_SIGN, NET_COLUMNS, NET_ROUTES, NET_SLACK, combinedDiff, diffBadge, layoutNet, moduleFileName, moduleNodeOf, netBoxEl, netLabel, offsetWithin, rankSpan, ribbonWidth } from './boxes.js';
-const FOCUS_DROP = 24;
+const EDGE_GAP = 10;
 export function buildNetScene(expanded, ctx, filter = null) {
   const N = net();
   const scene = new Scene(ctx);
@@ -99,10 +99,7 @@ class NetDrawing {
     const spans = route ? route.via.map((d) => ({ x: o.x + d.x, y: o.y + d.y + (d.h || 6) / 2 + offsets.get(d).get(it), w: d.w })) : [];
     const { d, labelAt } = forward ? forwardArrow(g, ends, spans) : loopBackArrow(g, ra, rb, ends, spans);
     const changed = g.diff ? ` diff-${g.diff}` : '';
-    const path = svg('path', { d, class: `rel ribbon k-${g.kind} weighted${g.count === 1 ? ' light' : ''}${g.shortcut ? ' shortcut' : ''}${changed}` });
-    const marker = ribbonMarker(g.kind, it.w);
-    if (marker) path.setAttribute('marker-end', marker);
-    path.style.setProperty('--w', `${it.w.toFixed(2)}px`);
+    const path = ribbonPath(d, it.w, g.kind, forward, `rel ribbon k-${g.kind} weighted${g.count === 1 ? ' light' : ''}${g.shortcut ? ' shortcut' : ''}${changed}`);
     if (g.kind === 'has') path.setAttribute('marker-start', 'url(#m-dia)');
     const end = g.kinds.size === 1 && g.kind === 'has' ? holdingEnd(this.N, g.atoms) : null;
     if (end) path.setAttribute('marker-end', `url(#m-hold-${end})`);
@@ -126,6 +123,17 @@ class NetDrawing {
     for (const f of this.feederList) {
       const state = combinedDiff(f.passing.map(({ route }) => route.e.diff));
       if (state) f.el.classList.add(`diff-${state}`);
+    }
+    for (const list of groupBy(this.feederList, (f) => f.port).values()) {
+      for (const f of list) f.w = ribbonWidth(Math.max(1, f.passing.length));
+      list.sort((p, q) => p.cy - q.cy);
+      let y = list[0].portY - list.reduce((t, f) => t + f.w, 0) / 2;
+      for (const f of list) {
+        const d = f.shape(y + f.w / 2);
+        y += f.w;
+        f.el.setAttribute('d', ribbonArea(d, f.w));
+        f.hit.setAttribute('d', d);
+      }
     }
   }
   routeOf(e, d) {
@@ -154,11 +162,11 @@ class NetDrawing {
     const ranks = side === 'R' ? Array.from({ length: cols.last - r0 }, (_, i) => r0 + 1 + i) : Array.from({ length: r0 }, (_, i) => i);
     const want = (r) => (side === 'R' ? cy + ((portY - cy) * (r - r0)) / (cols.last + 1 - r0) : portY + ((cy - portY) * (r + 1)) / (r0 + 1));
     const via = ranks.filter((r) => cols.colX[r] !== undefined).map((r) => ({ x: o.x + cols.colX[r], w: cols.colW[r], y: o.y + cols.gapNear(r, want(r) - o.y) }));
-    let d;
-    if (side === 'R') { const start = rc.x + rc.w, out = start + (NET_SLACK.get(c) || 0); d = `M${start},${cy} L${routedPath(out, cy, rq.x + rq.w, portY, via, 30).slice(1)}`; }
-    else d = routedPath(rq.x, portY, rc.x, cy, via, 30);
-    const into = side === 'L';
-    const feeder = { el: svg('path', { d, class: 'feeder', ...(into ? { 'marker-end': FEEDER_HEAD } : {}) }), into, hit: svg('path', { d, class: 'feeder-hit', 'data-feeder': this.feederList.length }), child: c, passing: [] };
+    const shape = (port) => (side === 'R'
+      ? `M${rc.x + rc.w},${cy} L${routedPath(rc.x + rc.w + (NET_SLACK.get(c) || 0), cy, rq.x + rq.w, port, via, 0).slice(1)}`
+      : routedPath(rq.x, port, rc.x, cy, via, 0));
+    const d = shape(portY);
+    const feeder = { el: svg('path', { d, class: 'feeder ribbon-feeder' }), hit: svg('path', { d, class: 'feeder-hit', 'data-feeder': this.feederList.length }), child: c, passing: [], side, port: `${side}|${q}`, portY, cy, shape };
     this.feederList.push(feeder);
     this.overlay.prepend(feeder.el, feeder.hit);
     return feeder;
@@ -179,7 +187,9 @@ class NetDrawing {
     for (const x of this.focusEls) x.remove();
     this.focusEls = [];
     if (!id) return [];
-    const lines = focusLines(this.N, this.effective, this.rects, id).map((line) => this.focusItem(line));
+    const found = focusLines(this.N, this.effective, this.rects, id);
+    const band = found.reduce((t, line) => t + ribbonWidth(line.atoms.length), 0);
+    const lines = found.map((line) => this.focusItem(line, band));
     stackEnds(lines, this.rects);
     stackShared(lines);
     const group = svg('g', { class: 'ribbons focus-ribbons' });
@@ -188,17 +198,32 @@ class NetDrawing {
     for (const line of lines) this.drawFocusLine(line, group);
     return lines.map((line) => relationEnds({ g: line, ends: line.ends }, line.outgoing));
   }
-  levelSpans(id, top, want, leaving, margin) {
+  levelSpans(id, top, want, leaving, margin, own) {
     const chain = this.N.chain(id), at = chain.findIndex((x) => x.id === top);
+    want = Math.max(want, this.headerFloor(chain.slice(at, -1), margin));
     const levels = [];
     for (let j = at; j < chain.length - 1; j++) {
-      const cols = NET_COLUMNS.get(chain[j].id);
-      if (!cols) continue;
-      const rank = cols.rank.get(chain[j + 1].id), o = this.innerOffset(cols.inner);
-      const ranks = leaving ? rankSpan(rank + 1, cols.last + 1) : rankSpan(0, rank);
-      levels.push(ranks.filter((r) => cols.colX[r] !== undefined).map((r) => ({ x: o.x + cols.colX[r], w: cols.colW[r], y: o.y + cols.gapNear(r, want - o.y, margin) })));
+      const cols = NET_COLUMNS.get(chain[j].id), box = this.rects.get(chain[j].id);
+      if (!box) continue;
+      const spans = [];
+      if (cols) {
+        const rank = cols.rank.get(chain[j + 1].id), o = this.innerOffset(cols.inner);
+        const ranks = leaving ? rankSpan(rank + 1, cols.last + 1) : rankSpan(0, rank);
+        for (const r of ranks) if (cols.colX[r] !== undefined) spans.push({ x: o.x + cols.colX[r], w: cols.colW[r], y: o.y + cols.gapNear(r, want - o.y, margin) });
+      }
+      levels.push({ box, spans });
     }
-    return (leaving ? levels.reverse() : levels).flat();
+    const near = leaving ? levels.findIndex((l) => l.spans.length) : levels.length - 1 - [...levels].reverse().findIndex((l) => l.spans.length);
+    const shared = (k) => (leaving ? k >= near && near >= 0 : k <= near && near < levels.length);
+    const points = levels.map(({ box, spans }, k) => {
+      const y = Math.min(shared(k) ? want : own, box.y + box.h - margin);
+      const edge = { x: leaving ? box.x + box.w + EDGE_GAP : box.x - EDGE_GAP, y, w: 0 };
+      return leaving ? [...spans, edge] : [edge, ...spans];
+    });
+    return (leaving ? points.reverse() : points).flat();
+  }
+  headerFloor(containers, margin) {
+    return Math.max(-Infinity, ...containers.map((c) => this.rects.get(c.id)).filter(Boolean).map((box) => box.y + 2 * box.anchorY + margin));
   }
   focusSpans(sa, sb, want, margin) {
     const parent = this.N.nodes.get(sa).parent, cols = parent && NET_COLUMNS.get(parent.id);
@@ -207,32 +232,32 @@ class NetDrawing {
     const ranks = rb > ra ? rankSpan(ra + 1, rb) : rankSpan(rb, ra + 1).reverse();
     return ranks.filter((r) => cols.colX[r] !== undefined).map((r) => ({ x: o.x + cols.colX[r], w: cols.colW[r], y: o.y + cols.gapNear(r, want - o.y, margin) }));
   }
-  focusItem(line) {
+  focusItem(line, band) {
     const ra = this.rects.get(line.a), rb = this.rects.get(line.b);
     const ay = ra.y + ra.anchorY, by = rb.y + rb.anchorY;
     const [sa, sb] = siblingEnds(this.N, line.a, line.b);
     const outer = this.rects.get(sa), inner = this.rects.get(sb);
     const forward = inner.x >= outer.x + outer.w - 4;
-    const raw = ribbonWidth(line.atoms.length), margin = raw / 2 + 4, shared = (line.outgoing ? ay : by) + FOCUS_DROP;
+    const raw = ribbonWidth(line.atoms.length), margin = band / 2 + 6;
+    const out = this.N.chain(line.a), into = this.N.chain(line.b);
+    const floor = Math.max(this.headerFloor(out.slice(out.findIndex((x) => x.id === sa), -1), margin), this.headerFloor(into.slice(into.findIndex((x) => x.id === sb), -1), margin));
+    const home = line.outgoing ? ra : rb;
+    const shared = Math.max((home.el && home.el.classList.contains('open') ? home.y + home.anchorY * 2 : home.y + home.h) + margin, floor);
     const spans = this.focusSpans(sa, sb, shared, margin);
-    const via = forward ? [...this.levelSpans(line.a, sa, shared, true, margin), ...spans, ...this.levelSpans(line.b, sb, shared, false, margin)] : spans;
-    return Object.assign(line, { ra, rb, outer, inner, forward, via, raw, outKey: via.length ? via[0].y : by, inKey: via.length ? via[via.length - 1].y : ay });
+    const via = forward ? [...this.levelSpans(line.a, sa, shared, true, margin, ay), ...spans, ...this.levelSpans(line.b, sb, shared, false, margin, by)] : spans;
+    return Object.assign(line, { ra, rb, outer, inner, forward, via, raw, outKey: by, inKey: ay });
   }
   drawFocusLine(line, group) {
     const { ra, rb, outer, inner, via } = line;
     const a = { x: ra.x + ra.w, y: line.ys }, b = { x: rb.x - 2, y: line.yt };
     line.ends = { a, b };
     let d;
-    if (line.forward) d = routedPath(a.x, a.y, b.x, b.y, via, 50);
+    if (line.forward) d = routedPath(a.x, a.y, b.x, b.y, via, 0);
     else {
       const lane = via.length ? via : [{ x: Math.min(outer.x, inner.x), w: outer.x + outer.w - Math.min(outer.x, inner.x), y: Math.min(outer.y, inner.y) - 12 }];
       d = loopBackPath(a.x, a.y, b.x, b.y, lane);
     }
-    const path = svg('path', { d, class: `rel ribbon focus-line weighted hot k-${line.kind}${line.diff ? ` diff-${line.diff}` : ''}` });
-    const marker = ribbonMarker(line.kind, line.w);
-    if (marker) path.setAttribute('marker-end', marker);
-    path.style.setProperty('--w', `${line.w.toFixed(2)}px`);
-    group.append(path);
+    group.append(ribbonPath(d, line.w, line.kind, line.forward, `rel ribbon focus-line weighted hot k-${line.kind}${line.diff ? ` diff-${line.diff}` : ''}`));
   }
   listen() {
     const host = this.scene.el;
@@ -401,8 +426,8 @@ function fieldHolds(field, target) {
 function forwardArrow(g, ends, spans) {
   const { x: x1, y: y1 } = ends.a, { x: x2, y: y2 } = ends.b;
   const out = x1 + (NET_SLACK.get(g.a) || 0);
-  const dx = Math.max(50, Math.abs(x2 - out) * 0.45);
-  const curve = spans.length ? routedPath(out, y1, x2, y2, spans, 50) : `M${out},${y1} C${out + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
+  const dx = Math.abs(x2 - out) * 0.5;
+  const curve = spans.length ? routedPath(out, y1, x2, y2, spans, 0) : `M${out},${y1} C${out + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
   const tail = spans.length ? spans[spans.length - 1] : null;
   return {
     d: out > x1 + 1 ? `M${x1},${y1} L${curve.slice(1)}` : curve,
@@ -420,6 +445,44 @@ function ribbonMarker(kind, width) {
   if (kind === 'bound') return 'url(#m-tri-bound)';
   return width < 5 ? `url(#m-arrow-${kind})` : null;
 }
+function ribbonPath(d, width, kind, forward, cls) {
+  const marker = ribbonMarker(kind, width);
+  if (!forward) {
+    const path = svg('path', { d, class: cls });
+    path.style.setProperty('--w', `${width.toFixed(2)}px`);
+    if (marker) path.setAttribute('marker-end', marker);
+    return path;
+  }
+  const group = svg('g', { class: cls });
+  const area = svg('path', { d: ribbonArea(d, width), class: 'ribbon-area' });
+  area.style.fill = `var(--rel-${kind}, var(--rel-uses))`;
+  area.style.stroke = area.style.fill;
+  group.append(area);
+  if (marker) group.append(svg('path', { d, class: 'ribbon-tip', 'marker-end': marker }));
+  return group;
+}
+function ribbonArea(d, width) {
+  const segments = [];
+  let at = null;
+  for (const [, cmd, args] of d.matchAll(/([MLC])([^MLC]*)/g)) {
+    const n = (args.match(/-?\d+(?:\.\d+)?(?:e-?\d+)?/g) || []).map(Number);
+    const points = [];
+    for (let i = 0; i + 1 < n.length; i += 2) points.push([n[i], n[i + 1]]);
+    if (cmd === 'M') { at = points[0]; continue; }
+    const step = cmd === 'C' ? 3 : 1;
+    for (let i = 0; i + step <= points.length; i += step) { const pts = points.slice(i, i + step); segments.push({ from: at, pts }); at = pts[pts.length - 1]; }
+  }
+  if (!segments.length) return d;
+  const half = width / 2, shift = (p, dy) => `${(+p[0].toFixed(2))},${(+(p[1] + dy).toFixed(2))}`;
+  let top = `M${shift(segments[0].from, -half)}`;
+  for (const sgm of segments) top += ` ${sgm.pts.length === 3 ? 'C' : 'L'}${sgm.pts.map((p) => shift(p, -half)).join(' ')}`;
+  let bottom = ` L${shift(segments[segments.length - 1].pts[segments[segments.length - 1].pts.length - 1], half)}`;
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const sgm = segments[i];
+    bottom += sgm.pts.length === 3 ? ` C${shift(sgm.pts[1], half)} ${shift(sgm.pts[0], half)} ${shift(sgm.from, half)}` : ` L${shift(sgm.from, half)}`;
+  }
+  return `${top}${bottom} Z`;
+}
 function stackEnds(items, rects) {
   const outs = groupBy(items, (it) => it.a), ins = groupBy(items, (it) => it.b);
   const room = (r) => Math.max(6, (r.el && r.el.classList.contains('open') ? RIBBON_STACK : r.h) - 4);
@@ -435,7 +498,7 @@ function stackShared(lines) {
   for (const line of lines) for (const p of line.via) { const k = `${Math.round(p.x)},${Math.round(p.y)}`; if (!at.has(k)) at.set(k, []); at.get(k).push({ line, p }); }
   for (const list of at.values()) {
     if (list.length < 2) continue;
-    list.sort((u, v) => (u.line.outgoing ? u.line.ys : u.line.yt) - (v.line.outgoing ? v.line.ys : v.line.yt));
+    list.sort((u, v) => (u.line.outgoing ? u.line.rb.y - v.line.rb.y : u.line.ra.y - v.line.ra.y));
     let y = -list.reduce((t, { line }) => t + line.w, 0) / 2;
     for (const { line, p } of list) { p.y += y + line.w / 2; y += line.w; }
   }
@@ -471,13 +534,10 @@ function lightRoute(d, route) {
   for (const f of route.segs) {
     f.el.classList.add('hot');
     f.el.style.setProperty('--feed', `var(--rel-${d.g.kind})`);
-    if (f.into) f.el.setAttribute('marker-end', d.path.getAttribute('marker-end'));
   }
 }
-const FEEDER_HEAD = 'url(#m-feed)';
 function coolFeeder(f) {
   f.el.classList.remove('hot');
-  if (f.into) f.el.setAttribute('marker-end', FEEDER_HEAD);
 }
 function spreadLabels(drawn) {
   const CELL = 200;
