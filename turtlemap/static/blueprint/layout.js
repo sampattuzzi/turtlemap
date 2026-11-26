@@ -126,6 +126,10 @@ function dummyRoutes(g, rank) {
   const routes = new Map();
   for (const list of bundles.values()) {
     const src = list[0].from, r0 = rank.get(src), exec = list[0].exec;
+    if (src.overhead) {
+      for (const e of list) { routes.set(`${e.from.id}|${e.fp}|${e.to.id}|${e.tp}`, []); link(src, e.to, e.fp, e.tp, exec); }
+      continue;
+    }
     const far = Math.max(r0, ...list.map((e) => rank.get(e.to)));
     const chain = [];
     for (let r = r0 + 1; r < far; r++) {

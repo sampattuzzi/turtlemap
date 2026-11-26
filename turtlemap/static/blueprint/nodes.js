@@ -214,12 +214,17 @@ export function buildFunctionScene(fnSym, ctx) {
   for (const v of byId.values()) if (isFrame(v.data)) { v.headW = v.w; v.headH = v.h; }
   const { routes, dummies, routeKey } = framedLayout(g, byId, (v) => scene.measureNode(v));
   scene.dummies = dummies;
-  for (const e of g.edges) Object.assign(scene.wire(byId.get(e.from), `out:${e.fp}`, byId.get(e.to), `in:${e.tp}`, e.cell ? 'cell' : null, e.type), { via: routes.get(routeKey(e)), diff: e.diff });
-  for (const e of g.exec) Object.assign(scene.wire(byId.get(e.from), e.fp, byId.get(e.to), 'exec-in', 'exec'), { via: routes.get(routeKey(e)), diff: e.diff });
+  for (const e of g.edges) Object.assign(scene.wire(byId.get(e.from), `out:${e.fp}`, byId.get(e.to), `in:${e.tp}`, e.cell ? 'cell' : null, e.type), { via: routes.get(routeKey(e)), diff: e.diff, drop: fromStrip(e.from, e.fp) });
+  for (const e of g.exec) Object.assign(scene.wire(byId.get(e.from), e.fp, byId.get(e.to), 'exec-in', 'exec'), { via: routes.get(routeKey(e)), diff: e.diff, drop: e.fp === 'start' && (STRIP_KINDS.has(e.from.kind) || e.from.kind === 'lane') });
   if (doc) { const entry = byId.get(g.nodes[0]); doc.x = entry.x; doc.y = Math.min(...[...byId.values()].map((v) => v.y)) - doc.h - 20; }
   scene.finish();
   scene.crumbs = (view) => crumbsAt(scene, view);
   return scene;
+}
+const STRIP_KINDS = new Set(['loop', 'comprehension', 'closure']);
+function fromStrip(n, pin) {
+  if (!STRIP_KINDS.has(n.kind)) return false;
+  return n.kind === 'loop' || pin !== n.outs[0].name;
 }
 function crumbsAt(scene, view) {
   const x = view.x + view.w / 2, y = view.y + view.h / 2;

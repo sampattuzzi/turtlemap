@@ -12,6 +12,10 @@ export function routedPath(ax, ay, bx, by, via, minDx = 36, lean = 0) {
   curveTo(bx, by);
   return d;
 }
+export function dropPath(ax, ay, bx, by) {
+  const down = Math.max(18, Math.min(60, (by - ay) * 0.6)), dx = Math.max(24, (bx - ax) * 0.5);
+  return `M${ax},${ay} C${ax},${ay + down} ${bx - dx},${by} ${bx},${by}`;
+}
 export function loopBackPath(ax, ay, bx, by, via, turn = LOOP_TURN) {
   const first = via[0], right = first.x + first.w;
   const bend = (y0, y1) => turn * Math.min(1, 0.45 + Math.abs(y1 - y0) / 160);
@@ -85,7 +89,9 @@ export class Scene {
     for (const w of this.wires) {
       const pa = w.a.pins[w.ak], pb = w.b.pins[w.bk];
       if (!pa || !pb) continue;
-      const path = svg('path', { d: routedPath(w.a.x + pa.dx, w.a.y + pa.dy, w.b.x + pb.dx, w.b.y + pb.dy, (w.via || []).map((d) => ({ x: d.x, y: d.y + d.pins.d.dy, w: d.w }))), class: `wire ${w.cls || ''}${w.diff ? ` wire-${w.diff}` : ''}` });
+      const [ax, ay, bx, by] = [w.a.x + pa.dx, w.a.y + pa.dy, w.b.x + pb.dx, w.b.y + pb.dy];
+      const d = w.drop ? dropPath(ax, ay, bx, by) : routedPath(ax, ay, bx, by, (w.via || []).map((p) => ({ x: p.x, y: p.y + p.pins.d.dy, w: p.w })));
+      const path = svg('path', { d, class: `wire ${w.cls || ''}${w.diff ? ` wire-${w.diff}` : ''}` });
       if (!w.cls) path.style.stroke = `var(--t-${w.type ? w.type.cat : 'any'})`;
       if (w.cls === 'cell') path.style.stroke = `color-mix(in srgb, var(--t-${w.type ? w.type.cat : 'any'}) 45%, #5f646d)`;
       w.path = path; this.svg.append(path);

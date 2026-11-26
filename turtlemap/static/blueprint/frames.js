@@ -57,7 +57,7 @@ export function framedLayout(g, byId, remeasure) {
     let head = null;
     if (frame) {
       const fv = byId.get(frame);
-      head = { id: `${frame.id}#head`, kind: 'entry', execOut: true, ins: [], outs: [] };
+      head = { id: `${frame.id}#head`, kind: 'entry', execOut: true, overhead: true, ins: [], outs: [] };
       const pins = { then: fv.pins.start };
       for (const [key, pin] of Object.entries(fv.pins)) if (key.startsWith('out:') && !headerPin(frame, key.slice(4))) pins[key] = pin;
       views.set(head, { w: fv.headW, h: fv.headH, x: 0, y: 0, pins });
