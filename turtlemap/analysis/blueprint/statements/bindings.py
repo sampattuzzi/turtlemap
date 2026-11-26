@@ -4,6 +4,7 @@ from turtlemap.analysis.types import (
 )
 from turtlemap.analysis import model as m
 from turtlemap.analysis.blueprint.text import pin_name
+from turtlemap.analysis.blueprint.syntax import Form, chain
 from turtlemap.analysis.blueprint.values import BOOL, Value
 from turtlemap.analysis.blueprint.code_shapes import assigned_names
 from turtlemap.analysis.blueprint.code_shapes import flat_targets, target_label
@@ -80,6 +81,7 @@ class Bindings:
             node = self.context.graph.add(
                 "set", f"Set {self.context.text(target)}", line
             )
+            node.form = chain(f".{target.attr} =")
             self.context.graph.connect(
                 node,
                 pin_name(target.value),
@@ -93,6 +95,7 @@ class Bindings:
             node = self.context.graph.add(
                 "set", f"Set {self.context.text(target)}", line
             )
+            node.form = chain("[", "] =")
             self.context.graph.connect(node, pin_name(target.value), container)
             self.context.graph.connect(node, "key", key)
             self.context.graph.connect(node, "value", value)
@@ -108,12 +111,14 @@ class Bindings:
             scope.settle(name, value.type)
             reference = scope.known_reference(name, line) or reference
             node = self.context.graph.add("set", "Set", line)
+            node.form = chain("=")
             self.context.graph.connect(node, name, reference)
             self.context.graph.connect(node, "value", value)
             self.context.flow.step(node)
             return
         if name in scope.declared_globals:
             node = self.context.graph.add("set", f"Set {name}", line)
+            node.form = Form("store")
             self.context.graph.connect(node, "value", value)
             self.context.flow.step(node)
             value = self.context.graph.output(node, name, value.type, value.annotation)
@@ -124,6 +129,7 @@ class Bindings:
     ) -> Value:
         graph = self.context.graph
         node = graph.add("var", name, line, note=note if value is None else None)
+        node.form = Form("store")
         if value is not None:
             graph.connect(node, "value", value)
         else:
@@ -151,6 +157,7 @@ class Bindings:
 
     def _unpack(self, value: Value, target: m.Sequence, line: int) -> list[Value]:
         node = self.context.graph.add("op", "Unpack", line)
+        node.form = Form("store")
         self.context.graph.connect(node, "value", value)
         return [
             self.context.graph.output(node, self.target_label(element), UNKNOWN)
@@ -188,6 +195,7 @@ class Bindings:
             node = self.context.graph.add(
                 "set", f"Set {target.id} {symbol}=", statement.line
             )
+            node.form = chain(f"{symbol}=")
             self.context.graph.connect(node, target.id, current)
             self.context.graph.connect(node, "value", value)
             self.context.flow.step(node)
@@ -206,6 +214,7 @@ class Bindings:
         node = self.context.graph.add(
             "set", f"Set {self.context.text(target)} {symbol}=", statement.line
         )
+        node.form = _augmented_form(target, symbol, key is not None)
         self.context.graph.connect(node, pin_name(base), container)
         if key is not None:
             self.context.graph.connect(node, "key", key)
@@ -225,6 +234,7 @@ class Bindings:
         step = _step_title(self.context.text(statement))
         value = None if step is not None else self.context.expressions.value(operand)
         node = self.context.graph.add("set", step or f"{symbol}=", statement.line)
+        node.form = Form("suffix", step) if step else chain(f"{symbol}=")
         self.context.graph.connect(node, name, reference)
         if value is not None:
             self.context.graph.connect(node, "value", value)
@@ -250,6 +260,15 @@ class Bindings:
             node = self.context.graph.add(
                 "set", f"Delete {self.context.text(target)}", statement.line
             )
+            node.form = (
+                chain("[", head="del", closer="]")
+                if key is not None
+                else (
+                    chain(head="del", closer=f".{target.attr}")
+                    if isinstance(target, m.Member)
+                    else Form("prefix", "del")
+                )
+            )
             self.context.graph.connect(node, pin_name(base), container)
             if key is not None:
                 self.context.graph.connect(node, "key", key)
@@ -258,6 +277,7 @@ class Bindings:
     def assert_statement(self, statement: m.Assert) -> None:
         condition = self.context.expressions.value(statement.test)
         node = self.context.graph.add("raise", "Assert", statement.line)
+        node.form = Form("ending", "assert")
         self.context.graph.connect(node, "condition", condition, BOOL)
         if statement.msg is not None:
             self.context.graph.connect(
@@ -275,6 +295,7 @@ class Bindings:
 
     def emit_return(self, value: Value | None, line: int) -> None:
         node = self.context.graph.add("return", "Return", line)
+        node.form = Form("ending", "return")
         if value is not None:
             declared = self.context.return_type
             name = declared.label if declared is not None else "value"
@@ -295,6 +316,14 @@ class Bindings:
         return target_label(
             target, self.context.profile.spread_prefix, self.context.text
         )
+
+
+def _augmented_form(target: m.Expr, symbol: str, keyed: bool) -> Form:
+    if keyed:
+        return chain("[", f"] {symbol}=")
+    if isinstance(target, m.Member):
+        return chain(f".{target.attr} {symbol}=")
+    return chain(f"{symbol}=")
 
 
 def _step_title(text: str) -> str | None:

@@ -8,10 +8,10 @@ from turtlemap.analysis.blueprint.evaluation.calls import Calls
 from turtlemap.analysis.blueprint.canvas import Flow
 from turtlemap.analysis.blueprint.evaluation.comprehensions import Comprehensions
 from turtlemap.analysis.blueprint.evaluation.constructions import Constructions
-from turtlemap.analysis.blueprint.evaluation.folding import Folding
 from turtlemap.analysis.blueprint.lookups import TypeLookups
 from turtlemap.analysis.blueprint.evaluation.operations import Operations
 from turtlemap.analysis.blueprint.scope import Scope
+from turtlemap.analysis.blueprint.syntax import Form
 from turtlemap.analysis.blueprint.values import CALLABLE, Value
 from turtlemap.analysis.types import UNKNOWN, PinType
 from turtlemap.analysis.workspace.parsed import SymbolRef
@@ -44,7 +44,6 @@ class Expressions:
         self._graph = flow.graph
         self._language = lookups.module.language
         self._profile = lookups.profile
-        self.folding = Folding(lookups, callees, scope, flow.graph, self.value)
         self.calls = Calls(lookups, callees, scope, flow, owner, self.value)
         self.attributes = AttributeReads(
             lookups, scope, flow.graph, function, self.value
@@ -79,8 +78,6 @@ class Expressions:
             return literal
         if isinstance(expression, m.Name):
             return self._scope.value_of(expression.id, expression.line)
-        if self.folding.folds(expression, named=bool(out_name)):
-            return self.folding.expression(expression, out_name)
         if isinstance(expression, m.Call):
             return self.calls.value(
                 expression, exec_candidate=exec_candidate, out_name=out_name
@@ -103,6 +100,7 @@ class Expressions:
             "Yield from" if expression.delegate else "Yield",
             expression.line,
         )
+        node.form = Form("ending", "yield from" if expression.delegate else "yield")
         if value is not None:
             self._graph.connect(node, "value", value)
         self._flow.step(node)

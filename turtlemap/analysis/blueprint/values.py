@@ -60,13 +60,6 @@ class Signature:
     anonymous: bool
 
 
-@dataclass(frozen=True)
-class Folded:
-    inputs: list[tuple[str, Value]]
-    result: PinType
-    lines: list[str]
-
-
 Environment = dict[str, Value]
 
 

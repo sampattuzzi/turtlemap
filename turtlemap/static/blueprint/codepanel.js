@@ -11,7 +11,6 @@ const DESCRIPTIONS = new Map([
   ['select', (n, ins) => (n.ins.length > 3 ? `Picks one value depending on ${ins[0]}: ${ins.slice(1).join(', ')}. ${n.note || ''}` : 'Gives back "if true" when the condition holds, otherwise "if false". This is how an if-and-return shows up as dataflow.')],
   ['branch', () => 'Decides which way the white execution line goes next: True or False.'],
   ['return', (n, ins) => `Gives back ${ins.length ? n.ins[0].type.label : 'nothing'} to whoever called this function.`],
-  ['expr', (n) => `${n.title} works out ${n.expr.join(' ')} from ${n.ins.map((p) => p.name).join(', ') || 'fixed values'}.`],
   ['op', (n) => `${n.title}: works out a ${n.outs[0] ? n.outs[0].type.label : 'value'} from its inputs.`],
   ['lit', (n) => `The fixed value ${n.title}.`],
   ['var', (n) => `Reads ${n.title}, which is defined at module level.`],

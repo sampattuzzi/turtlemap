@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from turtlemap.analysis import model as m
+from turtlemap.analysis.blueprint.syntax import Form, rows
 from turtlemap.analysis.blueprint.text import shorten, unused_name
 from turtlemap.analysis.blueprint.values import Signature, Value
 from turtlemap.analysis.types import PinType
@@ -20,7 +21,7 @@ FRAME_KINDS = frozenset({"closure", "loop", "branch", "lane", "comprehension"})
 
 STRIP_KINDS = frozenset({"closure", "loop", "lane", "comprehension"})
 STATE_HOLDERS = frozenset({"get", "var"})
-STATE_READERS = frozenset({"expr", "op", "select", "call", "ext", "method", "break"})
+STATE_READERS = frozenset({"op", "select", "call", "ext", "method", "break"})
 
 
 _NOTE_LIMIT = 160
@@ -62,6 +63,7 @@ class GraphNode:
     reach: str | None = None
     badge: str | None = None
     reads_state: bool = False
+    form: Form | None = None
 
     def output(self, name: str) -> Pin | None:
         return next((pin for pin in self.outs if pin.name == name), None)
@@ -101,6 +103,14 @@ class GraphNode:
             out["reach"] = self.reach
         if self.badge is not None:
             out["badge"] = self.badge
+        if self.form is not None:
+            found = rows(
+                self.form,
+                [pin.name for pin in self.ins],
+                [pin.name for pin in self.outs],
+            )
+            if found:
+                out["syntax"] = [[list(part) for part in row] for row in found]
         return out
 
 

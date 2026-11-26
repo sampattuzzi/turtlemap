@@ -11,7 +11,7 @@ export class BlueprintControls {
     const explorer = this.explorer;
     return {
       openButton: (n) => this.openButton(unfoldKey(owner, n)),
-      activate: (ref, n, v) => { const btn = v && v.el.querySelector(':scope > .box > .head [data-unfold]'); if (btn) btn.click(); else explorer.go(ref); },
+      activate: (ref, n, v) => { const btn = v && v.el.querySelector(':scope > .box > .syn-rows [data-unfold]'); if (btn) btn.click(); else explorer.go(ref); },
       select: (n, v, sym) => explorer.selectNode(n, v, sym),
       frame: (scene, box) => explorer.vp.frame(scene, box),
       afterNode: (n, v) => {

@@ -2,10 +2,11 @@ from collections.abc import Callable, Sequence
 
 from turtlemap.analysis import model as m
 from turtlemap.analysis.blueprint.canvas import GraphNode, Tail
+from turtlemap.analysis.blueprint.syntax import Form, call
 from turtlemap.analysis.blueprint.statements.bindings import Bindings
 from turtlemap.analysis.blueprint.statements.context import BuildContext
 from turtlemap.analysis.blueprint.text import LABEL_LIMIT, short_name, shorten
-from turtlemap.analysis.blueprint.values import BOOL, Environment, Folded, Value
+from turtlemap.analysis.blueprint.values import BOOL, Environment, Value
 from turtlemap.analysis.types import UNKNOWN
 
 FIRST_SET_BY_BRANCH = "first set by the branch"
@@ -50,18 +51,10 @@ class ControlFlow:
             lanes.append((lane, body))
         self._run_lanes(branch, lanes, falls_through=arms[-1][0] is not None)
 
-    def _condition(self, test: m.Expr, *, first: bool) -> Folded | Value:
-        folding = self.context.expressions.folding
-        if folding.folds(test, named=True):
-            return folding.fold(test)
+    def _condition(self, test: m.Expr, *, first: bool) -> Value:
         return self.context.expressions.value(test, exec_candidate=first)
 
-    def _show_condition(
-        self, lane: GraphNode, condition: Folded | Value, text: str
-    ) -> None:
-        if isinstance(condition, Folded):
-            self.context.expressions.folding.write(lane, condition)
-            return
+    def _show_condition(self, lane: GraphNode, condition: Value, text: str) -> None:
         lane.expression = [text]
         self.context.graph.connect(lane, text, condition, BOOL)
 
@@ -171,20 +164,24 @@ class ControlFlow:
 
     def _raise_node(self, exception: m.Expr | None, line: int) -> GraphNode:
         if exception is None:
-            return self.context.graph.add("raise", "Re-raise", line)
+            node = self.context.graph.add("raise", "Re-raise", line)
+            node.form = Form("prefix", "raise")
+            return node
         if isinstance(exception, m.Call) and self._raises_class(exception):
             return self._raise_class(exception, line)
         value = self.context.expressions.value(exception)
-        title = (
-            f"Raise {short_name(self.context.text(exception))}"
-            if value.literal is not None
-            else "Raise"
-        )
+        name = short_name(self.context.text(exception))
+        title = f"Raise {name}" if value.literal is not None else "Raise"
         node = self.context.graph.add(
             "raise",
             title,
             line,
             target=value.type.ref if value.literal is not None else None,
+        )
+        node.form = (
+            Form("prefix", f"raise {name}")
+            if value.literal is not None
+            else Form("ending", "raise")
         )
         if value.literal is None:
             self.context.graph.connect(node, "error", value)
@@ -203,6 +200,7 @@ class ControlFlow:
             target=callee.target,
             external=callee.external,
         )
+        node.form = call(f"raise {name}")
         self.context.calls.connect_arguments(node, arguments)
         return node
 

@@ -2,6 +2,7 @@ from collections.abc import Callable, Sequence
 
 from turtlemap.analysis import model as m
 from turtlemap.analysis.blueprint.canvas import GraphNode
+from turtlemap.analysis.blueprint.syntax import Form
 from turtlemap.analysis.blueprint.code_shapes import flat_targets
 from turtlemap.analysis.blueprint.statements.bindings import Bindings
 from turtlemap.analysis.blueprint.statements.context import BuildContext
@@ -46,20 +47,12 @@ class Loops:
 
     def while_loop(self, statement: m.While) -> None:
         self.bindings.declare_ahead(statement, FIRST_SET_BY_LOOP)
-        folding = self.context.expressions.folding
-        if folding.folds(statement.test, named=True):
-            node = folding.inline_condition(
-                statement.test, lambda: self._loop_node("While", statement.line)
-            )
-        else:
-            condition = self.context.expressions.value(
-                statement.test, exec_candidate=True
-            )
-            node = self._loop_node(
-                f"While {shorten(self.context.text(statement.test), LABEL_LIMIT)}",
-                statement.line,
-            )
-            self.context.graph.connect(node, "condition", condition, BOOL)
+        condition = self.context.expressions.value(statement.test, exec_candidate=True)
+        node = self._loop_node(
+            f"While {shorten(self.context.text(statement.test), LABEL_LIMIT)}",
+            statement.line,
+        )
+        self.context.graph.connect(node, "condition", condition, BOOL)
         self.context.flow.step(node)
         self._body(node, statement.body, [], statement.line)
         self.run(statement.orelse)
@@ -71,7 +64,9 @@ class Loops:
         self._jump("Continue", statement.line)
 
     def _jump(self, title: str, line: int) -> None:
-        self.context.flow.step(self.context.graph.add("jump", title, line))
+        node = self.context.graph.add("jump", title, line)
+        node.form = Form("prefix", title.lower())
+        self.context.flow.step(node)
         self.context.flow.resume([])
 
     def _loop_node(self, title: str, line: int, note: str | None = None) -> GraphNode:

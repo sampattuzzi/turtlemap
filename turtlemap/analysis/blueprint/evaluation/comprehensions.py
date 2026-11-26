@@ -6,6 +6,7 @@ from turtlemap.analysis.blueprint.canvas import Flow, GraphNode
 from turtlemap.analysis.blueprint.code_shapes import flat_targets, target_label
 from turtlemap.analysis.blueprint.lookups import TypeLookups
 from turtlemap.analysis.blueprint.scope import Scope
+from turtlemap.analysis.blueprint.syntax import Form
 from turtlemap.analysis.blueprint.text import LABEL_LIMIT, shorten
 from turtlemap.analysis.blueprint.values import BOOL, Value
 from turtlemap.analysis.types import UNKNOWN, PinType
@@ -106,6 +107,7 @@ class Comprehensions:
         self, line: int, pins: list[tuple[str, Value]], conditions: list[Value]
     ) -> None:
         band = self._graph.add("collect", RESULTS_TITLE, line)
+        band.form = Form("labelled")
         for name, value in pins:
             self._graph.connect(band, name, value)
         for condition in conditions:

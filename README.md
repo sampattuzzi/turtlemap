@@ -103,8 +103,14 @@ blueprints.
   the whole view.
 - **Hover over a wire** to see both ends and its full type. **Click it** to
   zoom out until both ends fit on screen.
-- **Maths stays readable.** `north = cos(lat) * sin(dec) - …` is one node named
-  `north`, with the expression written out.
+- **Nodes read like the code.** A node has no title: its body is its code,
+  laid out one part per row, such as `len(`, the argument, then `)`. Each
+  input sits on the left edge, labelled with the value it reads or its
+  literal. Each output sits on the right edge, written `→ name` when it is
+  assigned. Every operator and call is a node of its own.
+- **Steps that must run in order** have a coloured bar along the top carrying
+  their white execution pins. Pure nodes have no bar, only a coloured left
+  edge.
 - **Nested functions and lambdas** are frames drawn around their own body.
 - **Loops** are frames too, like a callback: items come in on the header, each
   item and the start ▶ come out of the strip below it, and **then** carries on

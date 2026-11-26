@@ -3,6 +3,7 @@ from collections.abc import Callable, Sequence
 
 from turtlemap.analysis import model as m
 from turtlemap.analysis.blueprint.canvas import Graph, GraphNode
+from turtlemap.analysis.blueprint.syntax import Form
 from turtlemap.analysis.blueprint.lookups import TypeLookups
 from turtlemap.analysis.blueprint.scope import Scope
 from turtlemap.analysis.blueprint.text import pin_name
@@ -122,6 +123,7 @@ class AttributeReads:
             node = self._graph.add(
                 "method", f"{base_name}.{attribute}", line, target=getter
             )
+            node.form = Form("suffix", f".{attribute}")
         self._graph.connect(node, self._lookups.profile.instance_receiver, base)
         value = self._graph.output(node, attribute, self._returned_by(getter))
         self._getters[key] = value
@@ -153,6 +155,7 @@ class AttributeReads:
                 node = self._graph.add(
                     "break", f"Break {label}", line, target=base.type.ref
                 )
+                node.form = Form("fields")
             self._graph.connect(node, base_name, base)
             self._breaks[key] = node
         read = self._fields.get((key, attribute))

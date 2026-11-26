@@ -523,7 +523,9 @@ def test_shares_a_module_variable_between_a_step_and_a_closure_that_reads_it(
     assert feeds(graph, variable, step) and feeds(graph, variable, read)
     assert read["parent"] == frame["id"]
     loop = only(graph, lambda node: node["kind"] == "loop")
-    assert feeds(graph, step, loop) and feeds(graph, read, loop)
+    check = only(graph, lambda node: node["title"] == "===")
+    assert feeds(graph, step, check) and feeds(graph, read, check)
+    assert feeds(graph, check, loop)
     assert call["note"] == "not awaited"
     assert feeds(graph, frame, call)
     assert frame["outs"][0]["type"]["label"] == "async () ⇒ Promise"

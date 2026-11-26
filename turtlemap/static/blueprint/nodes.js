@@ -39,7 +39,7 @@ function pinEl(side, key, name, tp, opts = {}) {
 export const OPEN_ICON = '<svg width="11" height="11" viewBox="0 0 12 12"><rect x="1" y="3.5" width="7.5" height="7.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4 1h7v7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
 export const KIND = {
   loop: ['--h-loop', 'Loop'], entry: ['--h-entry', 'Start of the function'], break: ['--h-break', 'Read fields'], make: ['--h-make', 'Build a value'], call: ['--h-call', 'Call a function in this project'],
-  method: ['--h-method', 'Call a method'], ext: ['--h-ext', 'Library call'], op: ['--h-op', 'Operator'], expr: ['--h-op', 'Work out a value'], lit: ['--h-lit', 'Fixed value'], var: ['--h-var', 'Module variable'],
+  method: ['--h-method', 'Call a method'], ext: ['--h-ext', 'Library call'], op: ['--h-op', 'Operator'], lit: ['--h-lit', 'Fixed value'], var: ['--h-var', 'Module variable'],
   select: ['--h-select', 'Pick one value'], branch: ['--h-branch', 'Branch'], return: ['--h-return', 'Give back'], raise: ['--h-raise', 'Raise an error'], set: ['--h-set', 'Store a value'],
   get: ['--h-var', 'Read a variable now'], closure: ['--h-closure', 'A function made here'],
   lane: ['--h-lane', 'One way through the branch'], jump: ['--h-raise', 'Leave this pass of the loop'],
@@ -54,7 +54,6 @@ function targetChanged(n) {
   const pins = n.kind === 'break' ? n.outs : n.ins;
   return pins.some((pin) => DIFF.status[`f:${n.target.path}:${n.target.sym}.${pin.name.split('.')[0]}`]);
 }
-function expressionEl(n, path) { return codeBlockEl(n.expr, n.ins, path); }
 function codeBlockEl(lines, ins, path, pins = null) {
   const names = ins.map((pin) => pin.name).sort((a, b) => b.length - a.length);
   const colours = new Map(ins.map((pin) => [pin.name, `var(--t-${pin.type ? pin.type.cat : 'any'})`]));
@@ -132,56 +131,79 @@ function frameEl(n, connectedIns, connectedOuts, state, path) {
   wrap.append(box);
   return wrap;
 }
-function nodeEl(n, ctx, connectedIns, connectedOuts, path) {
+function nodeEl(n, ctx, sources, connectedOuts, path) {
   const state = n.diff || (targetChanged(n) ? 'modified' : null);
+  const connectedIns = new Set(sources.keys());
   if (n.kind === 'closure') return closureEl(n, connectedOuts, state);
   if (n.kind === 'comprehension') return comprehensionEl(n, connectedIns, connectedOuts, state);
   if (n.kind === 'collect') return collectEl(n, connectedIns, state);
   if (isFrame(n)) return frameEl(n, connectedIns, connectedOuts, state, path);
-  const wrap = el('div', { class: `k-${n.kind}${state ? ` diff-${state}` : ''}`, 'data-node': n.id });
-  const box = el('div', { class: 'box' });
+  const [hc, about] = KIND[n.kind] || KIND.ext;
+  const runs = n.execIn || n.execOut || (n.execOuts || []).length > 0;
+  const wrap = el('div', { class: `k-${n.kind}${state ? ` diff-${state}` : ''}`, 'data-node': n.id, title: `${about}: ${n.title}` });
+  const box = el('div', { class: `box syn${runs ? '' : ' pure'}`, style: `--hc: var(${hc})` });
   wrap.append(box);
-  box.append(nodeHead(n, ctx, state));
-  const [left, right] = nodePins(n, connectedIns, connectedOuts);
-  if (n.expr) box.append(expressionEl(n, path));
-  box.append(el('div', { class: 'rows' }, left, right));
-  if (n.note) box.append(el('div', { class: 'note' }, n.note));
+  if (runs) box.append(execBar(n));
   if (n.code) box.append(codeBlockEl([n.code], n.ins, path));
+  const paint = codePainter(null, path);
+  const rows = el('div', { class: 'syn-rows' }, syntaxOf(n).map((row) => syntaxRow(row, n, sources, connectedOuts, paint)));
+  const extras = [diffBadge(state), openButton(n, ctx)].filter(Boolean);
+  if (extras.length) rows.firstChild.querySelector(':scope > .grow').after(...extras);
+  box.append(rows);
+  if (n.note) box.append(el('div', { class: 'note' }, n.note));
   box.append(el('div', { class: 'embed-slot' }));
   return wrap;
 }
 const OPENABLE_KINDS = ['call', 'method', 'ext', 'var'];
-function nodeHead(n, ctx, state) {
-  const [hc] = KIND[n.kind] || KIND.ext;
+function openButton(n, ctx) {
   const target = n.target && lookup(n.target);
   const openable = target && target.kind === 'function' && OPENABLE_KINDS.includes(n.kind);
-  return el('div', { class: 'head', style: `--hc: var(${hc})` }, diffBadge(state),
-    el('span', { class: 'title' }, nodeTitle(n)),
-    openable && ctx.openButton ? ctx.openButton(n) : null);
+  return openable && ctx.openButton ? ctx.openButton(n) : null;
 }
-function nodeTitle(n) {
-  if (n.kind !== 'break' && n.kind !== 'make') return plain(n.title);
-  const [verb, ...rest] = n.title.split(' ');
-  return `${verb} ${plain(rest.join(' '))}`;
+function execBar(n) {
+  const outs = [n.execOut ? pinEl('out', 'then', '', null) : null, ...(n.execOuts || []).map((label) => pinEl('out', label, label, null, { raw: true }))];
+  return el('div', { class: 'syn-bar' }, n.execIn ? pinEl('in', 'exec-in', '', null) : null, el('span', { class: 'grow' }), ...outs);
 }
-function nodePins(n, connectedIns, connectedOuts) {
-  const left = el('div', { class: 'col in' }), right = el('div', { class: 'col out' });
-  if (n.execIn) left.append(pinEl('in', 'exec-in', '', null));
-  if (n.execOut) right.append(pinEl('out', 'then', '', null));
-  for (const label of n.execOuts || []) right.append(pinEl('out', label, label, null, { raw: true }));
-  for (const p of n.ins) left.append(pinEl('in', `in:${p.name}`, p.name, p.type, { lit: p.lit, connected: connectedIns.has(p.name) || p.lit != null, diff: p.diff, cell: p.cell }));
-  for (const o of n.outs) right.append(pinEl('out', `out:${o.name}`, o.name, o.type, { connected: connectedOuts.has(o.name), diff: o.diff, cell: o.cell }));
-  return [left, right];
+function syntaxOf(n) {
+  if (n.syntax) return n.syntax;
+  return [[['text', n.title]], ...n.ins.map((p) => [['in', p.name]]), ...n.outs.map((o) => (o.name ? [['text', `→ ${o.name}`], ['out', o.name]] : [['out', '']]))];
+}
+function syntaxRow(row, n, sources, connectedOuts, paint) {
+  const gutter = el('span', { class: 'syn-gutter' }), parts = [], outs = [];
+  for (const [kind, value] of row) {
+    if (kind === 'text') parts.push(el('span', { class: 'syn-text' }, ...paint(value, null)));
+    else if (kind === 'out') outs.push(syntaxOutput(n.outs.find((o) => o.name === value), connectedOuts));
+    else {
+      const pin = n.ins.find((p) => p.name === value);
+      if (!pin) continue;
+      const [socket, label] = syntaxInput(pin, sources.get(value));
+      if (socket) gutter.append(socket);
+      parts.push(label);
+    }
+  }
+  return el('div', { class: 'syn-row' }, gutter, ...parts, el('span', { class: 'grow' }), ...outs);
+}
+function syntaxInput(p, source) {
+  const tip = `${p.name}: ${p.cell ? 'the variable itself, ' : ''}${p.type.label}`;
+  if (p.lit != null) return [null, el('span', { class: 'lit', title: tip, style: `color:var(--t-${p.type.cat})` }, p.lit)];
+  const socket = el('span', { class: `pin syn-socket${p.diff ? ` pin-${p.diff}` : ''}`, 'data-pin': `in:${p.name}`, title: tip },
+    el('span', { class: 'shape', html: shapeSVG(p.type, Boolean(source), p.cell) }));
+  const label = source ? source.label : p.name;
+  return [socket, label ? el('span', { class: `syn-label${source ? '' : ' unset'}`, title: tip }, label) : null];
+}
+function syntaxOutput(o, connectedOuts) {
+  if (!o) return null;
+  return pinEl('out', `out:${o.name}`, '', o.type, { connected: connectedOuts.has(o.name), diff: o.diff, cell: o.cell });
 }
 export function buildFunctionScene(fnSym, ctx) {
   const g = freshGraph(fnSym);
   const scene = new Scene(ctx);
   scene.fnSym = fnSym;
   const byId = new Map();
-  const conIn = connectedPins(g.edges, (e) => e.to, (e) => e.tp);
+  const sources = inputSources(g.edges);
   const conOut = connectedPins(g.edges, (e) => e.from, (e) => e.fp);
   for (const n of g.nodes) {
-    const v = scene.add(nodeEl(n, ctx, conIn.get(n) || new Set(), conOut.get(n) || new Set(), fnSym.file), n);
+    const v = scene.add(nodeEl(n, ctx, sources.get(n) || new Map(), conOut.get(n) || new Set(), fnSym.file), n);
     listenToNode(scene, v, n, fnSym, ctx);
     byId.set(n, v);
     if (ctx.afterNode) ctx.afterNode(n, v);
@@ -204,6 +226,19 @@ function crumbsAt(scene, view) {
   const inner = around[around.length - 1];
   if (!inner || (inner.y >= view.y && inner.x >= view.x)) return null;
   return around.map((v) => el('div', { class: `crumb-line crumb-${v.data.kind}` }, v.data.kind === 'loop' || v.data.kind === 'comprehension' ? '↻ ' : v.data.kind === 'lane' ? '↳ ' : 'ƒ ', plain(v.data.reach || v.data.title)));
+}
+function inputSources(edges) {
+  const found = new Map();
+  for (const e of edges) {
+    if (!found.has(e.to)) found.set(e.to, new Map());
+    found.get(e.to).set(e.tp, { label: sourceLabel(e) });
+  }
+  return found;
+}
+function sourceLabel(e) {
+  if (e.fp) return e.fp;
+  if (e.from.kind === 'var' || e.from.kind === 'get') return e.from.title;
+  return '';
 }
 function connectedPins(edges, nodeOf, pinOf) {
   const connected = new Map();

@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 
 from turtlemap.analysis.blueprint.callees import external_name
+from turtlemap.analysis.blueprint.syntax import Form
 from turtlemap.analysis.blueprint.canvas import Graph, GraphNode, Pin
 from turtlemap.analysis.blueprint.lookups import TypeLookups
 from turtlemap.analysis.blueprint.values import (
@@ -165,6 +166,7 @@ class Scope:
         if cached is not None:
             return cached
         node = self._graph.add("get", "Get", line)
+        node.form = Form("value")
         self._graph.connect(node, name, reference)
         value = self._graph.output(node, name, reference.type)
         self._reads[key] = value
@@ -173,6 +175,7 @@ class Scope:
     def _undeclared(self, name: str, line: int) -> Value:
         with self._graph.inside(self.frame):
             node = self._graph.add("var", name, line, note="set later")
+            node.form = Form("store")
             reference = self._graph.output(node, name, UNKNOWN, cell=True)
             self.declare(name, reference)
         return reference
@@ -240,6 +243,7 @@ class Scope:
             return when_true
         result = select_type(when_true, when_false)
         node = self._graph.add("select", "Select", line)
+        node.form = Form("select")
         self._graph.connect(node, "condition", condition, BOOL)
         self._graph.connect(node, "if true", when_true)
         self._graph.connect(node, "if false", when_false)
@@ -274,6 +278,7 @@ class Scope:
             return cached
         with self._graph.inside(self.frame):
             node = create()
+        node.form = Form("value")
         value = self._graph.output(
             node, key.removeprefix("cell:").rsplit(".", 1)[-1], pin_type, cell=cell
         )

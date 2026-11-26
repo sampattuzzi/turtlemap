@@ -7,6 +7,7 @@ from turtlemap.analysis import model as m
 from turtlemap.analysis.blueprint.canvas import (
     GraphNode,
 )
+from turtlemap.analysis.blueprint.syntax import Form
 from turtlemap.analysis.blueprint.statements.context import BuildContext
 
 
@@ -17,6 +18,7 @@ class EntryNode:
     def node(self) -> GraphNode:
         function = self.context.function.node
         node = self.context.graph.add("entry", function.name, function.line)
+        node.form = Form("entry", function.name)
         self._bind_receiver(node, function)
         self.bind_parameters(node)
         return node

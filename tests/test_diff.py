@@ -226,8 +226,8 @@ def test_merged_graph_keeps_removed_nodes_and_marks_new_ones(tmp_path: Path) -> 
     by_title: dict[str, Any] = {
         node["title"]: node for node in payload["graph"]["nodes"]
     }
-    assert by_title["Calculate"]["diff"] == "added"
-    assert by_title["Calculate"]["expr"] == ["2.0 * len(self.items)"]
+    assert by_title["*"]["diff"] == "added"
+    assert by_title["len"]["diff"] == "added"
     assert by_title["Return"]["diff"] == "modified"
     assert "diff" not in by_title["total"]
 

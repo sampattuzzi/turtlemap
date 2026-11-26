@@ -2,7 +2,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
 from turtlemap.analysis import model as m
+from turtlemap.analysis.blueprint import syntax
 from turtlemap.analysis.blueprint.callees import Callee, Callees
+from turtlemap.analysis.blueprint.syntax import Form
 from turtlemap.analysis.blueprint.canvas import Flow, GraphNode
 from turtlemap.analysis.blueprint.lookups import TypeLookups
 from turtlemap.analysis.blueprint.scope import Scope
@@ -58,6 +60,7 @@ class Calls:
             )[0]
         value = self._evaluate(expression.value)
         node = self._graph.add("ext", "await", expression.line, note="awaits")
+        node.form = Form("prefix", "await")
         self._graph.connect(node, "awaitable", value)
         if exec_candidate:
             self._flow.step(node)
@@ -81,6 +84,7 @@ class Calls:
             external=callee.external,
             note=callee.note,
         )
+        node.form = self._form(call, callee, awaited=awaited)
         if awaited:
             node.notes.append("awaits")
         elif callee.is_async:
@@ -154,6 +158,14 @@ class Calls:
             receiver=receiver,
             receiver_name="callable",
         )
+
+    def _form(self, call: m.Call, callee: Callee, *, awaited: bool) -> Form:
+        keywords = frozenset(keyword.arg for keyword in call.keywords if keyword.arg)
+        if callee.receiver is not None and isinstance(call.func, m.Member):
+            receiver = callee.receiver_name or self._profile.instance_receiver
+            return syntax.method(call.func.attr, receiver, keywords, awaited=awaited)
+        head = f"await {callee.title}" if awaited else callee.title
+        return syntax.call(head, keywords)
 
     def _receiver(self, function: m.Member) -> Value:
         base = function.value

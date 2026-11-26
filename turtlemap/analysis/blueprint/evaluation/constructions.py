@@ -2,6 +2,7 @@ from collections.abc import Callable, Sequence
 
 from turtlemap.analysis import model as m
 from turtlemap.analysis.blueprint.canvas import Graph
+from turtlemap.analysis.blueprint.syntax import Form
 from turtlemap.analysis.blueprint.text import pin_name, shorten
 from turtlemap.analysis.blueprint.values import STR, Value
 from turtlemap.analysis.types import PinType
@@ -31,6 +32,7 @@ class Constructions:
         node = self._graph.add(
             "make", "Format text", expression.line, code=self._text(expression)
         )
+        node.form = Form("value")
         for name, value in pieces.items():
             self._graph.connect(node, name, value)
         return self._graph.output(node, "", STR)
@@ -79,6 +81,7 @@ class Constructions:
         result: PinType,
     ) -> Value:
         node = self._graph.add("make", f"Make {label}", line)
+        node.form = Form("build", label)
         for name, value in inputs:
             self._graph.connect(node, name, value)
         return self._graph.output(node, label, result)
