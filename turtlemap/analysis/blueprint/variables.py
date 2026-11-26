@@ -266,15 +266,25 @@ def _mutated_receiver(value: m.Expr) -> str | None:
     if isinstance(value, m.Await):
         value = value.value
     if isinstance(value, m.Call) and isinstance(value.func, m.Member):
-        receiver = value.func.value
-        return receiver.id if isinstance(receiver, m.Name) else None
+        return _root_name(value.func.value)
     return None
 
 
 def _stored_container(target: m.Expr) -> str | None:
-    if isinstance(target, (m.Member, m.Subscript)) and isinstance(target.value, m.Name):
-        return target.value.id
+    if isinstance(target, (m.Member, m.Subscript)):
+        return _root_name(target.value)
     return None
+
+
+def _root_name(value: m.Expr) -> str | None:
+    while not isinstance(value, m.Name):
+        if isinstance(value, m.Call):
+            value = value.func
+        elif isinstance(value, (m.Member, m.Subscript)):
+            value = value.value
+        else:
+            return None
+    return value.id
 
 
 def _nested_locals(node: m.Node) -> set[str]:

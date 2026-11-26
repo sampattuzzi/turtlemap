@@ -1602,3 +1602,47 @@ def test_keeps_the_key_and_value_pins_in_the_innermost_clause_of_a_dict(
     assert [pin["name"] for pin in bands[outer["id"]]["ins"]] == ["yield from"]
     assert outer["outs"][0]["type"]["label"] == "dict[str, int]"
     assert inner["outs"][0]["type"]["label"] == "Iterator"
+
+
+ROOM_CAPS = """
+    from functools import reduce
+
+
+    def openness(rooms: list[str], emitters: list[tuple[str, float]]) -> tuple:
+        caps_by_room: dict[str, list[float]] = {}
+        for room_id, cap in emitters:
+            caps_by_room.setdefault(room_id, []).append(cap)
+        return tuple(
+            reduce(min, caps_by_room[room]) if room in caps_by_room else None
+            for room in rooms
+        )
+"""
+
+
+def test_keeps_a_value_changed_through_a_chained_call_as_a_variable(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(tmp_path, ROOM_CAPS, "openness")
+
+    caps = the_node(graph, "caps_by_room")
+    setdefault = the_node(graph, "caps_by_room.setdefault")
+    assert caps["kind"] == "var"
+    assert input_pin(caps, "value")["lit"] == "{}"
+    assert "lit" not in input_pin(setdefault, "self")
+    assert source_of(graph, setdefault, "self") == (caps["id"], "caps_by_room")
+    assert exec_order(graph)[:2] == [
+        "openness -then-> caps_by_room",
+        "caps_by_room -then-> For each room_id, cap in emitters",
+    ]
+
+
+def test_runs_a_generator_that_reads_a_changing_value_after_the_loop_changing_it(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph(tmp_path, ROOM_CAPS, "openness")
+
+    expect_well_formed(graph)
+    assert exec_order(graph)[-2:] == [
+        "For each room_id, cap in emitters -then-> room in rooms",
+        "room in rooms -then-> Return",
+    ]

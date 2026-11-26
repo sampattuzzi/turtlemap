@@ -166,7 +166,8 @@ button { cursor: pointer; }
 .node.k-frame > .frame-box { height: 100%; box-sizing: border-box; overflow: visible; box-shadow: none; }
 .node.k-frame .head, .node.k-frame .strip { pointer-events: auto; }
 .node.k-frame .head .title { flex: none; }
-.node.k-frame .head .grow { flex: 1; }
+.node.k-frame .head .grow, .node.k-frame .strip .grow { flex: 1; }
+.node.k-comprehension .strip .tag { margin-right: -8px; }
 .node.k-frame .head .then { font-family: var(--font-pin); font-weight: 400; font-size: 0.85em; opacity: 0.75; }
 .node.k-frame .head .pin { color: #fff; }
 .node.k-frame .head > .pin:first-of-type { margin-left: -15px; }

@@ -2,7 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 from turtlemap.analysis import model as m
-from turtlemap.analysis.blueprint.canvas import Graph, GraphNode
+from turtlemap.analysis.blueprint.canvas import Flow, GraphNode
 from turtlemap.analysis.blueprint.code_shapes import flat_targets, target_label
 from turtlemap.analysis.blueprint.lookups import TypeLookups
 from turtlemap.analysis.blueprint.scope import Scope
@@ -28,23 +28,39 @@ class Comprehensions:
         self,
         lookups: TypeLookups,
         scope: Scope,
-        graph: Graph,
+        flow: Flow,
         evaluate: Callable[[m.Expr], Value],
         text: Callable[[m.Node], str],
     ) -> None:
         self._lookups = lookups
         self._profile = lookups.profile
         self._scope = scope
-        self._graph = graph
+        self._flow = flow
+        self._graph = flow.graph
         self._evaluate = evaluate
         self._text = text
+        self._depth = 0
 
     def value(self, expression: m.Comprehension) -> Value:
         shape = self._profile.comprehensions[expression.kind]
-        with self._scope.local_bindings(expression.bound):
-            outer = self._clause(expression, 0, shape)
+        self._depth += 1
+        try:
+            with self._scope.local_bindings(expression.bound):
+                outer = self._clause(expression, 0, shape)
+        finally:
+            self._depth -= 1
         outer.frame.badge = shape.badge
+        if self._depth == 0 and self._reads_changing_values(outer.frame):
+            self._flow.step(outer.frame)
         return outer.result
+
+    def _reads_changing_values(self, frame: GraphNode) -> bool:
+        return any(
+            pin.cell
+            for node in self._graph.nodes
+            if self._graph.encloses(frame.id, node.id)
+            for pin in node.ins
+        )
 
     def _clause(
         self, expression: m.Comprehension, index: int, shape: ComprehensionShape

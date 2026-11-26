@@ -54,7 +54,7 @@ class Expressions:
             self._profile, flow.graph, self.value, self._text
         )
         self.comprehensions = Comprehensions(
-            lookups, scope, flow.graph, self.value, self._text
+            lookups, scope, flow, self.value, self._text
         )
         self._handlers = self._expression_handlers()
         self.nested: Nested | None = None
