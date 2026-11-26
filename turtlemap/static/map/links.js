@@ -1,6 +1,6 @@
 import { isTestPath, net } from '../core/data.js';
 import { el } from '../core/dom.js';
-import { moduleNodeOf, refOf } from './boxes.js';
+import { refOf } from './boxes.js';
 const LINKS_OPEN_AT_FIRST = 12;
 const LINK_FOLDS = new Map();
 let linkFoldsFor = null;
@@ -26,91 +26,83 @@ function addLink(links, id, kinds) {
   kinds.forEach((k) => links.get(id).add(k));
 }
 function linkSection(ex, title, links, actions) {
-  const tree = linkTree(links);
   ex.append(el('div', { class: 'kind' }, title, links.size ? el('span', { class: 'link-count' }, ` ${links.size}`) : null));
   if (!links.size) { ex.append(el('p', { class: 'udim' }, 'Nothing outside it.')); return; }
-  const box = el('div', { class: 'links link-tree' });
-  const fold = { open: openLinkGroups(title, tree), toggle: (id) => { if (!fold.open.delete(id)) fold.open.add(id); draw(); } };
-  const draw = () => box.replaceChildren(...linkRowEls(tree, 0, fold, actions));
+  const shelves = linkShelves(links);
+  const box = el('div', { class: 'links link-list' });
+  const fold = { open: openLinkFiles(title, shelves), toggle: (id) => { if (!fold.open.delete(id)) fold.open.add(id); draw(); } };
+  const draw = () => box.replaceChildren(...shelves.flatMap((shelf) => shelfEls(shelf, fold, actions)));
   draw();
   ex.append(box);
 }
-function linkTree(links) {
+function linkShelves(links) {
   const N = net();
-  const top = linkBranch(N.root);
+  const shelves = new Map();
   for (const [id, kinds] of links) {
-    let at = top;
-    at.count += 1;
-    for (const step of N.chain(id).slice(1)) {
-      if (!at.children.has(step.id)) at.children.set(step.id, linkBranch(step));
-      at = at.children.get(step.id);
-      at.count += 1;
-    }
-    at.kinds = kinds;
+    const home = homeOf(N.chain(id));
+    const where = shelfOf(home);
+    if (!shelves.has(where.key)) shelves.set(where.key, { ...where, files: new Map() });
+    const files = shelves.get(where.key).files;
+    if (!files.has(home.id)) files.set(home.id, { home, ends: [] });
+    files.get(home.id).ends.push({ node: N.nodes.get(id), kinds, label: endLabel(N.chain(id), home) });
   }
-  return top;
+  return [...shelves.values()].sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label)).map((shelf) => ({
+    ...shelf,
+    files: [...shelf.files.values()].sort((a, b) => a.home.name.localeCompare(b.home.name)).map((file) => ({ ...file, ends: file.ends.sort((a, b) => a.label.localeCompare(b.label)) })),
+  }));
 }
-function linkBranch(node) {
-  return { node, kinds: null, children: new Map(), count: 0 };
+function homeOf(chain) {
+  return chain.find((x) => x.kind === 'module' || x.kind === 'libmodule') || chain.find((x) => x.kind === 'library') || chain[chain.length - 1];
 }
-function openLinkGroups(title, tree) {
-  if (!LINK_FOLDS.has(title)) LINK_FOLDS.set(title, firstOpenGroups(tree));
+function shelfOf(home) {
+  if (home.kind === 'libmodule' || home.kind === 'library') {
+    const library = home.kind === 'library' ? home : home.parent;
+    return { key: library.id, label: library.name, rank: 2 };
+  }
+  const path = home.kind === 'module' ? home.path : home.id.slice(home.id.indexOf(':') + 1);
+  const folder = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
+  return { key: `dir:${folder}`, label: folder || `${net().root.name}/`, rank: isTestPath(path) ? 1 : 0 };
+}
+function endLabel(chain, home) {
+  const below = chain.slice(chain.indexOf(home) + 1);
+  if (!below.length) return home.kind === 'library' ? 'the library itself' : 'the module itself';
+  return below.map(stepName).join('.');
+}
+function openLinkFiles(title, shelves) {
+  if (!LINK_FOLDS.has(title)) LINK_FOLDS.set(title, firstOpenFiles(shelves));
   return LINK_FOLDS.get(title);
 }
-function firstOpenGroups(tree) {
+function firstOpenFiles(shelves) {
+  const files = shelves.flatMap((shelf) => shelf.files);
   const open = new Set();
-  const queue = linkRows(tree);
-  let visible = queue.length;
-  while (queue.length) {
-    const row = queue.shift();
-    const kids = linkRows(row.tree);
-    if (!kids.length) continue;
-    if (visible + kids.length > LINKS_OPEN_AT_FIRST) break;
-    open.add(row.tree.node.id);
-    visible += kids.length;
-    queue.push(...kids);
+  let visible = files.length;
+  for (const file of files) {
+    if (visible + file.ends.length > LINKS_OPEN_AT_FIRST) break;
+    open.add(file.home.id);
+    visible += file.ends.length;
   }
   return open;
 }
-function linkRows(tree) {
-  return [...tree.children.values()].sort(byLinkOrder).map(mergedRow);
+function shelfEls(shelf, fold, actions) {
+  return [el('div', { class: 'link-shelf' }, breakable(shelf.label)), ...shelf.files.flatMap((file) => fileEls(file, fold, actions))];
 }
-function byLinkOrder(a, b) {
-  return linkRank(a.node) - linkRank(b.node) || stepName(a.node).localeCompare(stepName(b.node));
+function fileEls(file, fold, actions) {
+  const { home, ends } = file;
+  const isOpen = fold.open.has(home.id);
+  const toggle = () => fold.toggle(home.id);
+  const row = el('div', { class: 'link-file' },
+    el('button', { class: 'link-chev', title: isOpen ? 'Collapse' : 'Expand', onclick: toggle }, isOpen ? '▾' : '▸'),
+    el('button', { class: 'link-file-name', title: `Show ${home.name} on the map`, onclick: () => actions.show(home.id) }, breakable(home.name)),
+    el('span', { class: 'link-count' }, ends.length));
+  return isOpen ? [row, ...ends.map((end) => endEl(end, actions))] : [row];
 }
-function linkRank(node) {
-  if (node.kind === 'library' || node.kind === 'libmodule' || node.kind === 'name') return 2;
-  const module = moduleNodeOf(node.id);
-  const path = module ? module.path : node.kind === 'package' ? node.id.slice('pkg:'.length) : '';
-  return isTestPath(path) ? 1 : 0;
+function endEl(end, actions) {
+  return el('div', { class: 'link-end-row' },
+    el('span', { class: 'link-bullet', 'aria-hidden': 'true' }, '•'),
+    el('button', { class: 'link-end', title: [...end.kinds].join(', '), onclick: () => followLink(end.node, actions) }, breakable(end.label)));
 }
-function mergedRow(tree) {
-  const steps = [tree.node];
-  while (!tree.kinds && tree.children.size === 1) {
-    tree = tree.children.values().next().value;
-    steps.push(tree.node);
-  }
-  return { steps, tree };
-}
-function linkRowEls(tree, depth, fold, actions) {
-  return linkRows(tree).flatMap((row) => {
-    const isOpen = fold.open.has(row.tree.node.id);
-    const rowEl = linkRowEl(row, depth, isOpen, fold, actions);
-    return isOpen ? [rowEl, ...linkRowEls(row.tree, depth + 1, fold, actions)] : [rowEl];
-  });
-}
-function linkRowEl(row, depth, isOpen, fold, actions) {
-  const { steps, tree } = row;
-  const group = tree.children.size > 0;
-  const toggle = () => fold.toggle(tree.node.id);
-  const label = steps.flatMap((step, i) => [i ? el('span', { class: 'link-sep' }, ' › ') : null, el('span', {}, stepName(step))]);
-  const name = tree.kinds
-    ? el('button', { class: 'link-end', title: [...tree.kinds].join(', '), onclick: () => followLink(tree.node, actions) }, label)
-    : el('button', { class: 'link-group', onclick: toggle }, label);
-  return el('div', { class: 'link-row', style: `padding-left:${depth * 14}px` },
-    group ? el('button', { class: 'link-chev', title: isOpen ? 'Collapse' : 'Expand', onclick: toggle }, isOpen ? '▾' : '▸') : el('span', { class: 'link-chev' }),
-    name,
-    group ? el('span', { class: 'link-count' }, tree.count) : null);
+function breakable(text) {
+  return text.split(/(?<=[/._])|(?<=[a-z0-9])(?=[A-Z])/).flatMap((part, i) => (i ? [el('wbr'), part] : [part]));
 }
 function stepName(step) {
   return step.kind === 'function' || step.kind === 'method' ? `${step.name}()` : step.name;

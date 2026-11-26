@@ -256,11 +256,15 @@ button { cursor: pointer; }
 .explain .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .explain .links { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; font-family: var(--font-pin); font-size: 0.88em; }
 .explain .links button { background: none; border: 0; padding: 0; color: var(--accent); text-align: left; }
-.explain .link-tree { align-items: stretch; gap: 1px; }
-.explain .link-row { display: flex; align-items: baseline; gap: 4px; }
-.explain .links .link-chev { flex: none; width: 1em; color: var(--fg-dim); }
-.explain .links .link-group { color: var(--fg); }
-.explain .links .link-sep, .explain .link-count { color: var(--fg-dim); }
+.explain .link-list { align-items: stretch; gap: 1px; min-width: 0; }
+.explain .link-shelf { color: var(--fg-dim); font-size: 0.92em; margin-top: 6px; overflow-wrap: anywhere; }
+.explain .link-shelf:first-child { margin-top: 0; }
+.explain .link-file { display: grid; grid-template-columns: 1.1em minmax(0, 1fr) auto; align-items: baseline; gap: 4px; padding-left: 0.4em; }
+.explain .link-end-row { display: grid; grid-template-columns: 0.9em minmax(0, 1fr); align-items: baseline; gap: 4px; padding-left: 1.9em; }
+.explain .links .link-chev { color: var(--fg-dim); }
+.explain .links .link-file-name { color: var(--fg); font-weight: 600; }
+.explain .links .link-file-name, .explain .links .link-end { min-width: 0; overflow-wrap: anywhere; }
+.explain .link-bullet, .explain .link-count { color: var(--fg-dim); }
 .explain .link-count { font-size: 0.9em; }
 .code-view { font-family: var(--font-code); font-size: 0.86em; line-height: 1.65; background: var(--code-bg); overflow: auto; flex: 1; min-width: 0; padding: 6px 0 24px; }
 .code-view .ln { display: flex; gap: 12px; padding: 0 12px; white-space: pre; }
