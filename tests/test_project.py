@@ -338,6 +338,66 @@ def test_links_methods_called_on_the_result_of_a_call(
     ) in found
 
 
+def test_links_methods_called_on_elements_of_a_collection(
+    make_project: ProjectFactory,
+) -> None:
+    found = edges(
+        make_project(
+            {
+                **SHOP,
+                "src/shop/tills.py": """
+                    from shop.models import Basket
+
+
+                    def each(baskets: list[Basket]) -> None:
+                        for basket in baskets:
+                            basket.total()
+
+
+                    def every(baskets: list[Basket]) -> list[float]:
+                        return [basket.total() for basket in baskets]
+
+
+                    def named(baskets: dict[str, Basket]) -> float:
+                        return baskets["a"].total()
+                """,
+            }
+        ).overview()
+    )
+
+    for caller in ("each", "every", "named"):
+        assert (
+            f"fn:src/shop/tills.py:{caller}",
+            "m:src/shop/models.py:Basket.total",
+            "calls",
+        ) in found
+
+
+def test_links_a_method_passed_on_without_being_called(
+    make_project: ProjectFactory,
+) -> None:
+    found = edges(
+        make_project(
+            {
+                **SHOP,
+                "src/shop/later.py": """
+                    from shop.models import Basket
+
+
+                    def later(basket: Basket) -> object:
+                        return basket.total
+                """,
+            }
+        ).overview()
+    )
+
+    assert (
+        "fn:src/shop/later.py:later",
+        "m:src/shop/models.py:Basket.total",
+        "uses",
+    ) in found
+
+
 def test_links_methods_to_the_fields_they_read_and_write(
     make_project: ProjectFactory,
 ) -> None:

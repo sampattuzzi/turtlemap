@@ -237,6 +237,7 @@ class CodeDependencies:
         self.owner = owner
         self.local_types: dict[str, PinType] = {}
         self.locals: frozenset[str] = frozenset()
+        self._called: set[int] = set()
 
     def collect_constant(self, statement: m.Assign) -> None:
         if statement.annotation is not None:
@@ -296,12 +297,18 @@ class CodeDependencies:
     def _visit(self, node: m.Node) -> None:
         if isinstance(node, m.Assign):
             self._track_assignment(node)
+        elif isinstance(node, m.For):
+            self._track_element(node.target, node.iter)
+        elif isinstance(node, m.Comprehension):
+            for clause in node.clauses:
+                self._track_element(clause.target, clause.iterable)
         elif isinstance(node, m.Call):
             self._call(node)
         elif isinstance(node, m.Member):
             self._field_access(node)
             self._constant_access(node)
             self._property_access(node)
+            self._method_reference(node)
         elif isinstance(node, m.TypeName):
             self._type_name(node)
         elif (
@@ -339,6 +346,7 @@ class CodeDependencies:
 
     def _call(self, call: m.Call) -> None:
         func = call.func
+        self._called.add(id(func))
         resolved = self._callee(func)
         target = self.collector.node_id(resolved)
         if target is None:
@@ -404,7 +412,22 @@ class CodeDependencies:
                 )
         if isinstance(node, m.Call):
             return self._returned_type(node)
+        if isinstance(node, m.Subscript):
+            container = self._type_of(node.value)
+            if container is None or isinstance(node.index, m.Slice):
+                return container
+            return self._element_of(container)
         return None
+
+    def _element_of(self, container: PinType | None) -> PinType | None:
+        if container is None or container.items is None:
+            return None
+        return self.collector.types.class_type(container.items)
+
+    def _track_element(self, target: m.Expr, iterable: m.Expr) -> None:
+        element = self._element_of(self._type_of(iterable))
+        if element is not None and isinstance(target, m.Name):
+            self.local_types[target.id] = element
 
     def _track_assignment(self, node: m.Assign) -> None:
         if node.annotation is not None:
@@ -458,6 +481,19 @@ class CodeDependencies:
         self.collector.link(
             self.source, f"f:{holder.path}:{holder.sym}.{node.attr}", kind
         )
+
+    def _method_reference(self, node: m.Member) -> None:
+        if node.store or id(node) in self._called:
+            return
+        receiver = self._type_of(node.value)
+        workspace = self.collector.types.workspace
+        if receiver is None or receiver.ref is None:
+            return
+        if workspace.parsed_class(receiver.ref) is None:
+            return
+        found = workspace.find_method(receiver.ref, node.attr)
+        if found is not None and not workspace.reads_as_property(found):
+            self.collector.link(self.source, self.collector.node_id(found), "uses")
 
     def _property_access(self, node: m.Member) -> None:
         if node.store:
