@@ -16,17 +16,25 @@ function linksAcross(n) {
   const usedBy = new Map(), uses = new Map();
   for (const e of N.edges) {
     const from = inside(e.from), to = inside(e.to);
-    if (from && !to) addLink(uses, e.to, e.kinds);
-    else if (to && !from) addLink(usedBy, e.from, e.kinds);
+    if (from && !to) addLink(uses, e.to, e);
+    else if (to && !from) addLink(usedBy, e.from, e);
   }
   return { usedBy, uses };
 }
-function addLink(links, id, kinds) {
-  if (!links.has(id)) links.set(id, new Set());
-  kinds.forEach((k) => links.get(id).add(k));
+function addLink(links, id, edge) {
+  if (!links.has(id)) links.set(id, { kinds: new Set(), changes: new Set() });
+  const link = links.get(id);
+  edge.kinds.forEach((k) => link.kinds.add(k));
+  link.changes.add(edge.diff || 'same');
+}
+function linkChange(link) {
+  if (link.changes.size === 1 && link.changes.has('removed')) return 'removed';
+  return link.changes.has('added') && !link.changes.has('same') && !link.changes.has('modified') ? 'added' : null;
 }
 function linkSection(ex, title, links, actions) {
-  ex.append(el('div', { class: 'kind' }, title, links.size ? el('span', { class: 'link-count' }, ` ${links.size}`) : null));
+  const current = [...links.values()].filter((link) => linkChange(link) !== 'removed').length;
+  const removed = links.size - current;
+  ex.append(el('div', { class: 'kind' }, title, current ? el('span', { class: 'link-count' }, ` ${current}`) : null, removed ? el('span', { class: 'link-count link-gone' }, ` · ${removed} removed`) : null));
   if (!links.size) { ex.append(el('p', { class: 'udim' }, 'Nothing outside it.')); return; }
   const shelves = linkShelves(links);
   const box = el('div', { class: 'links link-list' });
@@ -38,13 +46,13 @@ function linkSection(ex, title, links, actions) {
 function linkShelves(links) {
   const N = net();
   const shelves = new Map();
-  for (const [id, kinds] of links) {
+  for (const [id, link] of links) {
     const home = homeOf(N.chain(id));
     const where = shelfOf(home);
     if (!shelves.has(where.key)) shelves.set(where.key, { ...where, files: new Map() });
     const files = shelves.get(where.key).files;
     if (!files.has(home.id)) files.set(home.id, { home, ends: [] });
-    files.get(home.id).ends.push({ node: N.nodes.get(id), kinds, label: endLabel(N.chain(id), home) });
+    files.get(home.id).ends.push({ node: N.nodes.get(id), kinds: link.kinds, change: linkChange(link), label: endLabel(N.chain(id), home) });
   }
   return [...shelves.values()].sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label)).map((shelf) => ({
     ...shelf,
@@ -90,16 +98,19 @@ function fileEls(file, fold, actions) {
   const { home, ends } = file;
   const isOpen = fold.open.has(home.id);
   const toggle = () => fold.toggle(home.id);
-  const row = el('div', { class: 'link-file' },
+  const current = ends.filter((end) => end.change !== 'removed').length;
+  const change = current ? (ends.every((end) => end.change === 'added') ? 'added' : null) : 'removed';
+  const row = el('div', { class: `link-file${change ? ` link-${change}` : ''}` },
     el('button', { class: 'link-chev', title: isOpen ? 'Collapse' : 'Expand', onclick: toggle }, isOpen ? '▾' : '▸'),
     el('button', { class: 'link-file-name', title: `Show ${home.name} on the map`, onclick: () => actions.show(home.id) }, breakable(home.name)),
-    el('span', { class: 'link-count' }, ends.length));
+    el('span', { class: 'link-count' }, current || ends.length));
   return isOpen ? [row, ...ends.map((end) => endEl(end, actions))] : [row];
 }
 function endEl(end, actions) {
-  return el('div', { class: 'link-end-row' },
-    el('span', { class: 'link-bullet', 'aria-hidden': 'true' }, '•'),
-    el('button', { class: 'link-end', title: [...end.kinds].join(', '), onclick: () => followLink(end.node, actions) }, breakable(end.label)));
+  const note = end.change ? ` (${end.change === 'removed' ? 'no longer linked' : 'new link'})` : '';
+  return el('div', { class: `link-end-row${end.change ? ` link-${end.change}` : ''}` },
+    el('span', { class: 'link-bullet', 'aria-hidden': 'true' }, end.change === 'removed' ? '−' : end.change === 'added' ? '+' : '•'),
+    el('button', { class: 'link-end', title: [...end.kinds].join(', ') + note, onclick: () => followLink(end.node, actions) }, breakable(end.label)));
 }
 function breakable(text) {
   return text.split(/(?<=[/._])|(?<=[a-z0-9])(?=[A-Z])/).flatMap((part, i) => (i ? [el('wbr'), part] : [part]));
