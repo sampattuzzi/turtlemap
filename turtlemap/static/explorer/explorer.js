@@ -131,6 +131,7 @@ export class Explorer {
   }
   clearSelection() {
     this.trail.selected = null;
+    if (this.scene && this.scene.pin) this.scene.pin(null);
     setCommentPick(null);
     document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected'));
     this.panel();
@@ -158,8 +159,10 @@ export class Explorer {
       show: (id) => this.showOnMap(id),
       toggle: (id) => this.toggleNet(id),
       followArrow: (anchor, ends) => this.followArrow(anchor, ends),
+      selectedId: () => this.trail.selectedId(),
       select: (id) => {
         this.trail.selected = id;
+        if (this.scene && this.scene.pin) this.scene.pin(id);
         const unit = focusUnitOf(id);
         const c = this.trail.current;
         if (unit && unit !== c.related) {

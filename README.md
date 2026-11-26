@@ -39,11 +39,11 @@ and **uses**.
 
 - **Thicker arrows** stand for more dependencies. One-off links are faded.
 - **Arrows only join neighbours**, boxes inside the same parent. Inside an open
-  box, faint feeder lines carry each dependency to the box's edge. Turn on
-  **Ungroup lines** in the cog menu to draw each line straight to the box
-  inside that it really links instead.
-- **Hover** over an item to light its whole path. Hover over an arrow to see
-  what it is made of.
+  box, faint feeder lines carry each dependency to the box's edge.
+- **Hover** over an item to see its own links: a direct line runs from it to
+  each box it links, however deep, and the rest of the map fades. Select a
+  closed box or a field to keep its lines while you move around; click the
+  background to let go. Hover over an arrow to see what it is made of.
 - **Click an arrow**, or a feeder line inside an open box, to open the boxes
   at both its ends and zoom out until both fit on screen.
 - **Shortcuts** (A → C when A already reaches C through B) are drawn very
@@ -164,13 +164,6 @@ It also picks the layout:
 
 On the map, Balanced and Classic look the same.
 
-**Ungroup lines** draws each map line from the box where the dependency starts
-to the box where it ends, through the edges of any open modules in between,
-instead of gathering every line at the module's header. Every layout then lines
-up those inner boxes with what they link, so you can see, say, which module
-uses each helper in a helpers file. On a big map with everything open it can
-take a few times longer to draw.
-
 ## Privacy
 
 - Turtlemap reads your code but never imports or runs it.
@@ -259,7 +252,7 @@ every changed file.
 The map's lines glow with the same colours, with the badge in front of their
 label: a dependency the change added, one it removed (drawn faded), or one whose
 kind changed. A line that stands for several dependencies turns yellow when
-only some of them changed. Hover over it, or turn on **Ungroup lines**, to see
+only some of them changed. Hover over it, or over a box at either end, to see
 which ones. Lines are compared for the files that changed.
 
 ### Ticking off what you have reviewed

@@ -1,5 +1,5 @@
 export const SETTINGS_KEY = 'turtlemap-settings';
-export const settings = Object.assign({ pinFont: 'mono', size: 12.5, theme: 'dark', plain: false, types: false, tests: true, constants: true, layout: 'balanced', ungrouped: false }, (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch (e) { return {}; } })());
+export const settings = Object.assign({ pinFont: 'mono', size: 12.5, theme: 'dark', plain: false, types: false, tests: true, constants: true, layout: 'balanced' }, (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch (e) { return {}; } })());
 export function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {} }
 export function applySettings() {
   const root = document.documentElement;

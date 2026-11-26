@@ -1,9 +1,8 @@
 import { Scene, loopBackPath, overlaps, pathBox, placeCard, routedPath, setCulled } from '../canvas/scene.js';
 import { KIND_ORDER, net } from '../core/data.js';
 import { el, svg } from '../core/dom.js';
-import { DIFF_SIGN, NET_COLUMNS, NET_ROUTES, NET_SLACK, combinedDiff, diffBadge, layoutNet, moduleFileName, moduleNodeOf, netBoxEl, netLabel, offsetWithin, outsideOf, rankSpan } from './boxes.js';
-import { settings } from '../core/settings.js';
-const JUNCTION_GAP = 18;
+import { DIFF_SIGN, NET_COLUMNS, NET_ROUTES, NET_SLACK, combinedDiff, diffBadge, layoutNet, moduleFileName, moduleNodeOf, netBoxEl, netLabel, offsetWithin, rankSpan } from './boxes.js';
+const FOCUS_DROP = 24;
 export function buildNetScene(expanded, ctx, filter = null) {
   const N = net();
   const scene = new Scene(ctx);
@@ -14,22 +13,22 @@ export function buildNetScene(expanded, ctx, filter = null) {
   rootEl.append(inner);
   const rootV = scene.add(rootEl);
   NET_ROUTES.clear(); NET_SLACK.clear(); NET_COLUMNS.clear();
-  const direct = settings.ungrouped;
-  const shown = visibleLinks(N, effective, direct);
+  const shown = visibleLinks(N, effective);
   const shortcuts = shortcutKeys([...shown.values()]);
   for (const l of shown.values()) l.shortcut = shortcuts.has(`${l.from}|${l.to}`);
   layoutNet(N.root, rootEl, [...shown.values()]);
-  if (direct) layoutNet(N.root, rootEl, [...shown.values()], N, outsideOf(rootEl));
   scene.measure();
   scene.finish(40);
   const { rects, sizes } = measureBoxes(rootEl, rootV);
   const drawnOpen = new Set([...effective].filter((id) => id === 'root' || rects.has(id)));
   const groups = arrowGroups(N, shown, rects, shortcuts);
-  const drawing = new NetDrawing(scene, N, { rootEl, rootV, rects, effective, direct });
+  const drawing = new NetDrawing(scene, N, { rootEl, rootV, rects, effective });
   drawing.drawArrows(groups);
   drawing.traceRoutes();
   spreadLabels(drawing.drawn);
   drawing.listen();
+  scene.pin = (id) => drawing.pin(id);
+  scene.pin(ctx.selectedId ? ctx.selectedId() : null);
   scene.cull = (view) => drawing.cull(view);
   scene.sizes = sizes;
   scene.netRects = rects;
@@ -37,8 +36,10 @@ export function buildNetScene(expanded, ctx, filter = null) {
   return scene;
 }
 class NetDrawing {
-  constructor(scene, N, { rootEl, rootV, rects, effective, direct }) {
-    Object.assign(this, { scene, N, rootEl, rootV, rects, effective, direct });
+  constructor(scene, N, { rootEl, rootV, rects, effective }) {
+    Object.assign(this, { scene, N, rootEl, rootV, rects, effective });
+    this.pinned = null;
+    this.focusEls = [];
     this.drawn = [];
     this.offsets = new Map();
     this.feeders = new Map();
@@ -61,35 +62,14 @@ class NetDrawing {
     const o = this.innerOffset(route.inner);
     return route.via.map((d) => ({ x: o.x + d.x, y: o.y + d.y + 3, w: d.w }));
   }
-  drawArrows(groups) {
-    this.junctions = this.direct ? this.junctionsOf(groups) : new Map();
-    for (const g of groups.values()) this.drawArrow(g, groups);
-  }
-  junctionsOf(groups) {
-    const targets = new Map();
-    for (const g of groups.values()) {
-      const holder = this.N.nodes.get(g.b).parent, rb = this.rects.get(g.b);
-      if (!holder || !this.rects.has(holder.id)) continue;
-      const key = `${g.a}|${holder.id}`;
-      if (!targets.has(key)) targets.set(key, []);
-      targets.get(key).push(rb.y + rb.anchorY);
-    }
-    const junctions = new Map();
-    for (const [key, ys] of targets) {
-      if (ys.length < 2) continue;
-      const holder = this.rects.get(key.slice(key.indexOf('|') + 1));
-      junctions.set(key, { x: holder.x - JUNCTION_GAP, w: 0, y: ys.reduce((a, b) => a + b, 0) / ys.length });
-    }
-    return junctions;
-  }
+  drawArrows(groups) { for (const g of groups.values()) this.drawArrow(g, groups); }
   drawArrow(g, groups) {
     g.kind = KIND_ORDER.find((k) => g.kinds.has(k));
     const ra = this.rects.get(g.a), rb = this.rects.get(g.b);
     const shift = groups.has(`${g.b}|${g.a}`) ? (g.a < g.b ? -4 : 4) : 0;
     const ends = { a: { x: ra.x + ra.w, y: ra.y + ra.anchorY + shift }, b: { x: rb.x - 2, y: rb.y + rb.anchorY + shift } };
-    const [sa, sb] = siblingEnds(this.N, g.a, g.b);
-    const forward = this.direct ? this.rects.get(sb).x >= this.rects.get(sa).x + this.rects.get(sa).w - 4 : rb.x >= ra.x + ra.w - 4;
-    const spans = this.direct && forward ? this.directSpans(g, sa, sb, ends) : this.absVia(NET_ROUTES.get(`${sa}|${sb}`));
+    const forward = rb.x >= ra.x + ra.w - 4;
+    const spans = this.absVia(NET_ROUTES.get(`${g.a}|${g.b}`));
     const { d, labelAt } = forward ? forwardArrow(g, ends, shift, spans) : loopBackArrow(g, ra, rb, ends, spans);
     const changed = g.diff ? ` diff-${g.diff}` : '';
     const path = svg('path', { d, class: `rel k-${g.kind} weighted${g.count === 1 ? ' light' : ''}${g.shortcut ? ' shortcut' : ''}${changed}`, 'marker-end': g.kind === 'inherits' || g.kind === 'realizes' ? 'url(#m-tri)' : g.kind === 'bound' ? 'url(#m-tri-bound)' : `url(#m-arrow-${g.kind})` });
@@ -107,34 +87,7 @@ class NetDrawing {
     this.overlay.append(path, text, hit);
     this.drawn.push({ g, path, text, hit, forward, ends, labelBox: labelBoxOf(text, label.length + (g.diff ? 2 : 0)) });
   }
-  directSpans(g, sa, sb, ends) {
-    const spans = [];
-    const reach = () => { const last = spans[spans.length - 1]; return last ? { x: last.x + last.w, y: last.y } : ends.a; };
-    const anchor = (id) => { const r = this.rects.get(id); return { x: r.x, y: r.y + r.anchorY }; };
-    const across = (box, ranks, aim) => {
-      const cols = NET_COLUMNS.get(box);
-      if (!cols) return;
-      const o = this.innerOffset(cols.inner), from = reach();
-      const along = (x) => from.y + (aim.y - from.y) * Math.min(1, Math.max(0, (x - from.x) / Math.max(1, aim.x - from.x)));
-      for (const r of ranks) if (cols.colX[r] !== undefined) spans.push({ x: o.x + cols.colX[r], w: cols.colW[r], y: o.y + cols.gapNear(r, along(o.x + cols.colX[r] + cols.colW[r] / 2) - o.y) });
-    };
-    const rankIn = (box, kid) => NET_COLUMNS.get(box).rank.get(kid);
-    const from = this.N.chain(g.a), to = this.N.chain(g.b);
-    const ia = from.findIndex((x) => x.id === sa), ib = to.findIndex((x) => x.id === sb);
-    const crossing = anchor(sb);
-    for (let j = from.length - 2; j >= ia; j--) { const q = from[j].id, cols = NET_COLUMNS.get(q); if (cols) across(q, rankSpan(rankIn(q, from[j + 1].id) + 1, cols.last + 1), crossing); }
-    const parent = from[ia - 1].id;
-    if (NET_COLUMNS.has(parent)) across(parent, rankSpan(rankIn(parent, sa) + 1, rankIn(parent, sb)), crossing);
-    for (let j = ib; j < to.length - 1; j++) { const q = to[j].id; if (NET_COLUMNS.has(q)) across(q, rankSpan(0, rankIn(q, to[j + 1].id)), j + 1 === to.length - 1 ? ends.b : anchor(to[j + 1].id)); }
-    const junction = to.length - 2 >= ib ? this.junctions.get(`${g.a}|${to[to.length - 2].id}`) : null;
-    if (junction && junction.x > reach().x) spans.push(junction);
-    return spans;
-  }
   traceRoutes() {
-    if (this.direct) {
-      for (const d of this.drawn) { d.routes = []; d.traced = d.g.atoms.every((e) => e.from === d.g.a && e.to === d.g.b); }
-      return;
-    }
     for (const d of this.drawn) {
       d.routes = d.g.atoms.map((e) => this.routeOf(e, d));
       for (const route of d.routes) for (const f of route.segs) f.passing.push({ d, route });
@@ -180,17 +133,65 @@ class NetDrawing {
     this.overlay.prepend(feeder.el, feeder.hit);
     return feeder;
   }
-  highlight(id) {
-    const N = this.N;
-    this.scene.el.classList.toggle('has-hot', Boolean(id));
-    const inside = (x) => Boolean(id) && N.chain(x).some((n) => n.id === id);
-    for (const f of this.feederList) coolFeeder(f);
-    if (id) this.lightRoutes(inside);
-    const ends = this.drawn.map((d) => lightRelation(d, inside)).filter(Boolean);
-    if (this.scene.onHot) this.scene.onHot(id ? ends : null);
+  pin(id) {
+    this.pinned = id && this.rects.has(id) && !this.effective.has(id) ? id : null;
+    if (!this.hovered) this.highlight(null);
   }
-  lightRoutes(inside) {
-    for (const d of this.drawn) for (const route of d.routes) if (inside(route.e.from) || inside(route.e.to)) lightRoute(d, route);
+  highlight(id) {
+    const focus = id || this.pinned;
+    this.scene.el.classList.toggle('has-hot', Boolean(focus));
+    for (const f of this.feederList) coolFeeder(f);
+    for (const d of this.drawn) { d.path.classList.remove('hot'); d.text.classList.remove('hot'); }
+    const ends = this.drawFocus(focus);
+    if (this.scene.onHot) this.scene.onHot(focus ? ends : null);
+  }
+  drawFocus(id) {
+    for (const x of this.focusEls) x.remove();
+    this.focusEls = [];
+    if (!id) return [];
+    const lines = focusLines(this.N, this.effective, this.rects, id);
+    for (const line of lines) this.drawFocusLine(line);
+    return lines.map((line) => relationEnds({ g: line, ends: line.ends }, line.outgoing));
+  }
+  levelSpans(id, top, want, leaving) {
+    const chain = this.N.chain(id), at = chain.findIndex((x) => x.id === top);
+    const levels = [];
+    for (let j = at; j < chain.length - 1; j++) {
+      const cols = NET_COLUMNS.get(chain[j].id);
+      if (!cols) continue;
+      const rank = cols.rank.get(chain[j + 1].id), o = this.innerOffset(cols.inner);
+      const ranks = leaving ? rankSpan(rank + 1, cols.last + 1) : rankSpan(0, rank);
+      levels.push(ranks.filter((r) => cols.colX[r] !== undefined).map((r) => ({ x: o.x + cols.colX[r], w: cols.colW[r], y: o.y + cols.gapNear(r, want - o.y) })));
+    }
+    return (leaving ? levels.reverse() : levels).flat();
+  }
+  focusSpans(sa, sb, want) {
+    const parent = this.N.nodes.get(sa).parent, cols = parent && NET_COLUMNS.get(parent.id);
+    if (!cols) return [];
+    const ra = cols.rank.get(sa), rb = cols.rank.get(sb), o = this.innerOffset(cols.inner);
+    const ranks = rb > ra ? rankSpan(ra + 1, rb) : rankSpan(rb, ra + 1).reverse();
+    return ranks.filter((r) => cols.colX[r] !== undefined).map((r) => ({ x: o.x + cols.colX[r], w: cols.colW[r], y: o.y + cols.gapNear(r, want - o.y) }));
+  }
+  drawFocusLine(line) {
+    const ra = this.rects.get(line.a), rb = this.rects.get(line.b);
+    const a = { x: ra.x + ra.w, y: ra.y + ra.anchorY }, b = { x: rb.x - 2, y: rb.y + rb.anchorY };
+    line.ends = { a, b };
+    const [sa, sb] = siblingEnds(this.N, line.a, line.b);
+    const outer = this.rects.get(sa), inner = this.rects.get(sb);
+    const spans = this.focusSpans(sa, sb, Math.max(a.y, b.y) + FOCUS_DROP);
+    let d;
+    if (inner.x >= outer.x + outer.w - 4) {
+      const out = this.levelSpans(line.a, sa, a.y + FOCUS_DROP, true), into = this.levelSpans(line.b, sb, b.y + FOCUS_DROP, false);
+      d = routedPath(a.x, a.y, b.x, b.y, [...out, ...spans, ...into], 50);
+    } else {
+      const lane = spans.length ? spans : [{ x: Math.min(outer.x, inner.x), w: outer.x + outer.w - Math.min(outer.x, inner.x), y: Math.min(outer.y, inner.y) - 12 }];
+      d = loopBackPath(a.x, a.y, b.x, b.y, lane);
+    }
+    const marker = line.kind === 'inherits' || line.kind === 'realizes' ? 'url(#m-tri)' : line.kind === 'bound' ? 'url(#m-tri-bound)' : `url(#m-arrow-${line.kind})`;
+    const path = svg('path', { d, class: `rel focus-line weighted hot k-${line.kind}${line.diff ? ` diff-${line.diff}` : ''}`, 'marker-end': marker });
+    path.style.setProperty('--w', `${(1.4 + 1.4 * Math.log2(line.atoms.length)).toFixed(2)}px`);
+    this.overlay.append(path);
+    this.focusEls.push(path);
   }
   listen() {
     const host = this.scene.el;
@@ -274,13 +275,31 @@ function visibleEnd(N, effective, id) {
   for (let i = 1; i < c.length; i++) if (!effective.has(c[i].id)) return c[i].id;
   return id;
 }
-function visibleLinks(N, effective, direct) {
+function focusLines(N, effective, rects, id) {
+  const inside = (x) => N.chain(x).some((n) => n.id === id);
+  const encloses = (outer, inner) => N.chain(inner).some((n) => n.id === outer);
+  const lines = new Map();
+  for (const e of N.edges) {
+    const outgoing = inside(e.from);
+    if (outgoing === inside(e.to)) continue;
+    const a = visibleEnd(N, effective, e.from), b = visibleEnd(N, effective, e.to);
+    if (!rects.has(a) || !rects.has(b) || encloses(a, b) || encloses(b, a)) continue;
+    const key = `${a}|${b}`;
+    if (!lines.has(key)) lines.set(key, { a, b, outgoing, atoms: [], kinds: new Set() });
+    const line = lines.get(key);
+    line.atoms.push(e);
+    e.kinds.forEach((k) => line.kinds.add(k));
+  }
+  for (const line of lines.values()) { line.kind = KIND_ORDER.find((k) => line.kinds.has(k)); line.diff = combinedDiff(line.atoms.map((e) => e.diff)); }
+  return [...lines.values()];
+}
+function visibleLinks(N, effective) {
   const shown = new Map();
   for (const e of N.edges) {
     const from = visibleEnd(N, effective, e.from), to = visibleEnd(N, effective, e.to);
     const [sa, sb] = siblingEnds(N, from, to);
     if (sa === sb) continue;
-    const [a, b] = direct ? [from, to] : [sa, sb];
+    const [a, b] = [sa, sb];
     const key = `${a}|${b}`;
     if (!shown.has(key)) shown.set(key, { from: a, to: b, atoms: [] });
     shown.get(key).atoms.push(e);
@@ -450,11 +469,4 @@ function relationEnds(d, outgoing) {
     color: `var(--rel-${d.g.kind}, var(--rel-uses))`,
     title: `${outgoing ? `${kinds} →` : `← ${kinds} from`} ${elsewhere ? `${home.path} › ${netLabel(other)}` : label}`,
   };
-}
-function lightRelation(d, inside) {
-  const fromHere = inside(d.g.a) || d.g.atoms.some((e) => inside(e.from));
-  const toHere = inside(d.g.b) || d.g.atoms.some((e) => inside(e.to));
-  const hot = fromHere || toHere;
-  d.path.classList.toggle('hot', hot); d.text.classList.toggle('hot', hot);
-  return hot && !(fromHere && toHere) ? relationEnds(d, fromHere) : null;
 }

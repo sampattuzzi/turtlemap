@@ -108,10 +108,10 @@ export const NET_SLACK = new Map();
 export const NET_COLUMNS = new Map();
 const MAP_PAD = 14;
 const MAP_TOP = 10;
-export function layoutNet(n, boxEl, edges, N = net(), outside = null) {
+export function layoutNet(n, boxEl, edges, N = net()) {
   const inner = boxEl.querySelector(':scope > .ninner');
   if (!inner) return;
-  const box = new MapBoxLayout(n, inner, N, outside);
+  const box = new MapBoxLayout(n, inner, N);
   box.layoutChildren(edges);
   const { pairs, skips, weights } = box.linkKids(edges);
   box.rank = rankColumns(box.kids, weights, (k) => ['field', 'member', 'constant', 'typevar'].includes(k.node.kind));
@@ -123,11 +123,6 @@ export function layoutNet(n, boxEl, edges, N = net(), outside = null) {
   box.apply();
   box.record(skips);
 }
-export function outsideOf(rootEl) {
-  const anchors = new Map();
-  rootEl.querySelectorAll('.nb').forEach((b) => anchors.set(b.dataset.id, offsetWithin(b, rootEl).y + boxAnchor(b)));
-  return { anchors, top: (inner) => offsetWithin(inner, rootEl).y };
-}
 export function offsetWithin(node, root) {
   let x = 0, y = 0, cur = node;
   while (cur && cur !== root) { x += cur.offsetLeft; y += cur.offsetTop; cur = cur.offsetParent; }
@@ -138,17 +133,15 @@ export function boxAnchor(box) {
   return head ? head.offsetHeight / 2 : box.offsetHeight / 2;
 }
 class MapBoxLayout {
-  constructor(n, inner, N, outside) {
-    Object.assign(this, { n, inner, N, outside });
+  constructor(n, inner, N) {
+    Object.assign(this, { n, inner, N });
     this.kids = [...inner.children].map((elx) => ({ node: N.nodes.get(elx.dataset.id), el: elx, x: 0, y: 0 }));
     this.byId = new Map(this.kids.map((k) => [k.node.id, k]));
     this.items = [...this.kids];
     this.nbrs = new Map();
     this.ports = new Map();
-    this.pulls = new Map();
     this.ends = new Map();
     this.inside = new Map();
-    this.extent = outside ? inner.offsetHeight : 0;
     this.routes = [];
   }
   port(it, other) {
@@ -160,7 +153,6 @@ class MapBoxLayout {
     if (!this.inside.has(k)) this.inside.set(k, new Map([...k.el.querySelectorAll('.nb')].map((box) => [box.dataset.id, offsetWithin(box, k.el).y + boxAnchor(box)])));
     return this.inside.get(k).get(id) ?? mapAnchor(k);
   }
-  isOutside(id) { return !this.N.chain(id).includes(this.n); }
   under(id) {
     const c = this.N.chain(id), depth = this.n.depth;
     return c[depth] === this.n && c[depth + 1] ? this.byId.get(c[depth + 1].id) : null;
@@ -173,7 +165,7 @@ class MapBoxLayout {
       if (a) touching.get(a).push(e);
       if (b && b !== a) touching.get(b).push(e);
     }
-    for (const k of this.kids) layoutNet(k.node, k.el, touching.get(k), this.N, this.outside);
+    for (const k of this.kids) layoutNet(k.node, k.el, touching.get(k), this.N);
     for (const k of this.kids) { k.w = k.el.offsetWidth; k.h = k.el.offsetHeight; }
   }
   linkKids(edges) {
@@ -181,8 +173,6 @@ class MapBoxLayout {
     for (const e of edges) {
       const a = this.under(e.from), b = this.under(e.to);
       const count = e.atoms ? e.atoms.length : 1;
-      if (a && !b && this.isOutside(e.to)) this.pull(a, e.from, e.to);
-      if (b && !a && this.isOutside(e.from)) this.pull(b, e.to, e.from);
       if (!a || !b || a === b) continue;
       if (!weights.has(a)) weights.set(a, new Map());
       weights.get(a).set(b, (weights.get(a).get(b) || 0) + count);
@@ -197,12 +187,6 @@ class MapBoxLayout {
     const from = this.ends.get(a);
     if (!from.has(b)) from.set(b, []);
     return from.get(b);
-  }
-  pull(k, end, far) {
-    if (!this.outside || !this.outside.anchors.has(far)) return;
-    const y = this.outside.anchors.get(far) - this.outside.top(this.inner) - this.portIn(k, end);
-    if (!this.pulls.has(k)) this.pulls.set(k, []);
-    this.pulls.get(k).push({ y: Math.min(Math.max(y, MAP_TOP), Math.max(MAP_TOP, this.extent - MAP_PAD - k.h)) });
   }
   portsBetween(a, b) {
     const ends = this.endsOf(a, b), total = ends.reduce((sum, e) => sum + e.count, 0);
@@ -272,18 +256,18 @@ class MapBoxLayout {
   }
   wantedY(it) {
     const nb = [...(this.nbrs.get(it) || [])].filter((o) => this.rk(o) !== this.rk(it) || it.dummy);
-    const wanted = [...nb.map((o) => o.y + this.port(o, it) - this.port(it, o)), ...(this.pulls.get(it) || []).map((p) => p.y)];
+    const wanted = nb.map((o) => o.y + this.port(o, it) - this.port(it, o));
     return wanted.length ? wanted.reduce((acc, y) => acc + y, 0) / wanted.length : it.y;
   }
   tighten() {
-    const connected = (it) => (this.nbrs.get(it) || new Set()).size > 0 || this.pulls.has(it);
+    const connected = (it) => (this.nbrs.get(it) || new Set()).size > 0;
     for (const col of this.cols) {
       if (!col) continue;
       col.sort((a, b) => (connected(b) - connected(a)) || a.y - b.y);
       let prev = null;
       for (const it of col) {
         const lo = prev === null ? MAP_TOP : prev + (it.dummy ? 8 : this.gapY);
-        it.y = Math.min(Math.max(it.y, lo), this.pulls.has(it) ? Infinity : lo + 36);
+        it.y = Math.min(Math.max(it.y, lo), lo + 36);
         prev = it.y + it.h;
       }
     }
