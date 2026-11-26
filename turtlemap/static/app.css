@@ -411,6 +411,8 @@ button { cursor: pointer; }
 .feeder.ribbon-feeder { fill: var(--fg-dim); stroke: none; }
 .feeder.ribbon-feeder.hot { fill: var(--feed, var(--fg)); opacity: 0.9; }
 .rel.focus-line { pointer-events: none; }
+.rel.solved { stroke-dasharray: none; fill: none; }
+.scene:not(.has-hot) .rel.solved.light { opacity: 0.55; }
 .ribbons { opacity: 0.72; }
 .focus-ribbons { opacity: 0.9; }
 .rel.ribbon { stroke-dasharray: none; stroke-linecap: butt; }

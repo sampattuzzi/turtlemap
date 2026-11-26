@@ -1,6 +1,8 @@
 import { Scene, loopBackPath, overlaps, pathBox, placeCard, routedPath, setCulled } from '../canvas/scene.js';
 import { KIND_ORDER, net } from '../core/data.js';
 import { el, svg } from '../core/dom.js';
+import { linkCurve, solveMap } from './solver.js';
+import { settings } from '../core/settings.js';
 import { DIFF_SIGN, NET_COLUMNS, NET_ROUTES, NET_SLACK, combinedDiff, diffBadge, layoutNet, moduleFileName, moduleNodeOf, netBoxEl, netLabel, offsetWithin, rankSpan, ribbonWidth } from './boxes.js';
 const EDGE_GAP = 10;
 const FEEDER_STACK = 8;
@@ -18,6 +20,7 @@ export function buildNetScene(expanded, ctx, filter = null) {
   const shortcuts = shortcutKeys([...shown.values()]);
   for (const l of shown.values()) l.shortcut = shortcuts.has(`${l.from}|${l.to}`);
   layoutNet(N.root, rootEl, [...shown.values()]);
+  if (settings.layout === 'solver') return solvedScene(scene, N, { rootEl, rootV, effective, ctx });
   scene.measure();
   scene.finish(40);
   const { rects, sizes } = measureBoxes(rootEl, rootV);
@@ -35,6 +38,53 @@ export function buildNetScene(expanded, ctx, filter = null) {
   scene.netRects = rects;
   scene.effective = drawnOpen;
   return scene;
+}
+function solvedScene(scene, N, { rootEl, rootV, effective, ctx }) {
+  const solved = solveMap(rootEl, [...directLinks(N, effective).values()]);
+  scene.measure();
+  scene.finish(40);
+  const { rects, sizes } = measureBoxes(rootEl, rootV);
+  scene.svg.append(arrowMarkers());
+  const overlay = svg('svg', { class: 'wires overlay', width: scene.width, height: scene.height });
+  scene.el.append(overlay);
+  const drawn = [];
+  for (const link of solved.links) {
+    const ra = rects.get(link.a.id), rb = rects.get(link.b.id);
+    if (!ra || !rb) continue;
+    const kind = KIND_ORDER.find((k) => link.kinds.has(k)) || 'uses';
+    const path = svg('path', { d: linkCurve(ra, rb, solved.bends.get(link.key)).d, class: `rel solved k-${kind} weighted${link.count === 1 ? ' light' : ''}`, 'marker-end': kind === 'inherits' || kind === 'realizes' ? 'url(#m-tri)' : `url(#m-arrow-${kind})` });
+    path.style.setProperty('--w', `${(1.2 + 1.2 * Math.log2(link.count)).toFixed(2)}px`);
+    overlay.append(path);
+    drawn.push({ link, path });
+  }
+  let hovered = null;
+  const light = (id) => {
+    scene.el.classList.toggle('has-hot', Boolean(id));
+    for (const { link, path } of drawn) path.classList.toggle('hot', Boolean(id) && [link.a.id, link.b.id].some((end) => N.chain(end).some((n) => n.id === id)));
+  };
+  scene.el.addEventListener('mouseover', (e) => {
+    const b = e.target.closest('.nb');
+    const id = b && (!b.classList.contains('open') || e.target.closest('.nhead')) ? b.dataset.id : null;
+    if (id !== hovered) { hovered = id; light(id); }
+  });
+  scene.el.addEventListener('mouseleave', () => { hovered = null; light(null); });
+  scene.pin = () => {};
+  scene.cull = (view) => { for (const r of rects.values()) setCulled(r.el, r, !overlaps(r, view)); };
+  scene.sizes = sizes;
+  scene.netRects = rects;
+  scene.effective = new Set([...effective].filter((id) => id === 'root' || rects.has(id)));
+  return scene;
+}
+function directLinks(N, effective) {
+  const shown = new Map();
+  for (const e of N.edges) {
+    const from = visibleEnd(N, effective, e.from), to = visibleEnd(N, effective, e.to);
+    if (from === to) continue;
+    const key = `${from}|${to}`;
+    if (!shown.has(key)) shown.set(key, { from, to, atoms: [] });
+    shown.get(key).atoms.push(e);
+  }
+  return shown;
 }
 class NetDrawing {
   constructor(scene, N, { rootEl, rootV, rects, effective }) {
