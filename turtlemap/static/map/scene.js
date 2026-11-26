@@ -1,7 +1,7 @@
 import { Scene, loopBackPath, overlaps, pathBox, placeCard, routedPath, setCulled } from '../canvas/scene.js';
 import { KIND_ORDER, net } from '../core/data.js';
 import { el, svg } from '../core/dom.js';
-import { NET_COLUMNS, NET_ROUTES, NET_SLACK, layoutNet, moduleFileName, moduleNodeOf, netBoxEl, netLabel, offsetWithin, outsideOf, rankSpan } from './boxes.js';
+import { DIFF_SIGN, NET_COLUMNS, NET_ROUTES, NET_SLACK, combinedDiff, diffBadge, layoutNet, moduleFileName, moduleNodeOf, netBoxEl, netLabel, offsetWithin, outsideOf, rankSpan } from './boxes.js';
 import { settings } from '../core/settings.js';
 export function buildNetScene(expanded, ctx, filter = null) {
   const N = net();
@@ -70,19 +70,21 @@ class NetDrawing {
     const forward = this.direct ? this.rects.get(sb).x >= this.rects.get(sa).x + this.rects.get(sa).w - 4 : rb.x >= ra.x + ra.w - 4;
     const spans = this.direct && forward ? this.directSpans(g, sa, sb, ends) : this.absVia(NET_ROUTES.get(`${sa}|${sb}`));
     const { d, labelAt } = forward ? forwardArrow(g, ends, shift, spans) : loopBackArrow(g, ra, rb, ends, spans);
-    const path = svg('path', { d, class: `rel k-${g.kind} weighted${g.count === 1 ? ' light' : ''}${g.shortcut ? ' shortcut' : ''}`, 'marker-end': g.kind === 'inherits' || g.kind === 'realizes' ? 'url(#m-tri)' : g.kind === 'bound' ? 'url(#m-tri-bound)' : `url(#m-arrow-${g.kind})` });
+    const changed = g.diff ? ` diff-${g.diff}` : '';
+    const path = svg('path', { d, class: `rel k-${g.kind} weighted${g.count === 1 ? ' light' : ''}${g.shortcut ? ' shortcut' : ''}${changed}`, 'marker-end': g.kind === 'inherits' || g.kind === 'realizes' ? 'url(#m-tri)' : g.kind === 'bound' ? 'url(#m-tri-bound)' : `url(#m-arrow-${g.kind})` });
     path.style.setProperty('--w', `${(1.4 + 1.4 * Math.log2(g.count)).toFixed(2)}px`);
     if (g.kind === 'has') path.setAttribute('marker-start', 'url(#m-dia)');
     const end = g.kinds.size === 1 && g.kind === 'has' ? holdingEnd(this.N, g.atoms) : null;
     if (end) path.setAttribute('marker-end', `url(#m-hold-${end})`);
     const label = arrowLabel(this.N, g);
-    const text = svg('text', { x: labelAt.x, y: labelAt.y - 5, class: `rel-label k-${g.kind}`, 'text-anchor': 'middle' });
-    text.textContent = label;
+    const text = svg('text', { x: labelAt.x, y: labelAt.y - 5, class: `rel-label k-${g.kind}${changed}`, 'text-anchor': 'middle' });
+    if (g.diff) { const sign = svg('tspan', { class: 'rel-sign' }); sign.textContent = `${DIFF_SIGN[g.diff]} `; text.append(sign); }
+    text.append(label);
     if (g.count === 1) text.classList.add('light');
     if (g.shortcut) text.classList.add('shortcut');
     const hit = svg('path', { d, class: 'rel-hit', 'data-drawn': this.drawn.length });
     this.overlay.append(path, text, hit);
-    this.drawn.push({ g, path, text, hit, forward, ends, labelBox: { x: +text.getAttribute('x') - label.length * 3.3, y: +text.getAttribute('y') - 10, w: label.length * 6.6, h: 13 } });
+    this.drawn.push({ g, path, text, hit, forward, ends, labelBox: labelBoxOf(text, label.length + (g.diff ? 2 : 0)) });
   }
   directSpans(g, sa, sb, ends) {
     const along = (x) => ends.a.y + (ends.b.y - ends.a.y) * Math.min(1, Math.max(0, (x - ends.a.x) / Math.max(1, ends.b.x - ends.a.x)));
@@ -111,6 +113,10 @@ class NetDrawing {
       d.routes = d.g.atoms.map((e) => this.routeOf(e, d));
       for (const route of d.routes) for (const f of route.segs) f.passing.push({ d, route });
       d.traced = d.routes.every((route) => route.whole);
+    }
+    for (const f of this.feederList) {
+      const state = combinedDiff(f.passing.map(({ route }) => route.e.diff));
+      if (state) f.el.classList.add(`diff-${state}`);
     }
   }
   routeOf(e, d) {
@@ -231,7 +237,7 @@ class NetDrawing {
     }
   }
 }
-function effectiveOpen(N, expanded) {
+export function effectiveOpen(N, expanded) {
   const effective = new Set(['root']);
   const open = (x) => expanded.has(x.id) !== N.autoOpen.has(x.id);
   for (const id of new Set([...expanded, ...N.autoOpen])) { const c = N.chain(id); if (c.length && c[c.length - 1].children.length && c.slice(1).every(open)) effective.add(id); }
@@ -273,6 +279,7 @@ function arrowGroups(N, shown, rects, shortcuts) {
     if (N.chain(b).some((x) => x.id === a) || N.chain(a).some((x) => x.id === b)) continue;
     const g = { a, b, kinds: new Set(), labels: new Set(), count: atoms.length, atoms, shortcut: shortcuts.has(`${a}|${b}`), through: shortcuts.get(`${a}|${b}`) || null };
     for (const e of atoms) { e.kinds.forEach((x) => g.kinds.add(x)); e.labels.forEach((x) => g.labels.add(x)); }
+    g.diff = combinedDiff(atoms.map((e) => e.diff));
     groups.set(`${a}|${b}`, g);
   }
   return groups;
@@ -326,6 +333,9 @@ function cubicAt(t, a, b, c, d) { return (1 - t) ** 3 * a + 3 * (1 - t) ** 2 * t
 function arrowLabel(N, g) {
   const kinds = [...g.kinds].sort((p, q) => KIND_ORDER.indexOf(p) - KIND_ORDER.indexOf(q));
   return g.kinds.size === 1 && g.kind === 'has' && N.nodes.get(g.a).kind === 'field' ? [...g.labels].join(', ') : `${kinds.join(' · ')}${g.count > 1 ? ` (${g.count})` : ''}`;
+}
+function labelBoxOf(text, chars) {
+  return { x: +text.getAttribute('x') - chars * 3.3, y: +text.getAttribute('y') - 10, w: chars * 6.6, h: 13 };
 }
 function arrowBox(d) {
   const a = pathBox(d.path), t = d.labelBox;
@@ -396,7 +406,7 @@ function edgeCardSection(g, limit, divided) {
   return el('div', { class: `edge-card-section${divided ? ' divided' : ''}` },
     el('div', { class: 'edge-card-head' }, el('b', {}, `${netLabel(g.a)} → ${netLabel(g.b)}`), el('span', { class: 'udim' }, g.count === 1 ? '1 dependency' : `${g.count} dependencies`)),
     g.through ? el('div', { class: 'edge-card-through' }, `Shortcut: also reached through ${g.through.slice(1, -1).map(netLabel).join(' → ')}`) : null,
-    el('div', { class: 'edge-card-rows' }, rows.map((e) => [el('span', {}, atomLabel(e.from, g.a)), el('span', { class: 'udim' }, '→'), el('span', {}, atomLabel(e.to, g.b)), el('span', { class: 'edge-kind', style: `color:var(--rel-${kindsOf(e)[0]})` }, kindsOf(e).join(' · '))])),
+    el('div', { class: 'edge-card-rows' }, rows.map((e) => [el('span', {}, atomLabel(e.from, g.a)), el('span', { class: 'udim' }, '→'), el('span', {}, atomLabel(e.to, g.b)), el('span', { class: 'edge-kind', style: `color:var(--rel-${kindsOf(e)[0]})` }, diffBadge(e.diff), kindsOf(e).join(' · '))])),
     g.count > rows.length ? el('div', { class: 'udim' }, `and ${g.count - rows.length} more`) : null);
 }
 function relationEnds(d, outgoing) {

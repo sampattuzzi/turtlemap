@@ -134,7 +134,8 @@ them.
 
 - Press `/` to find any file, class or function.
 - Click a folder, file, class or function in the left panel to go to it.
-  The ▸ arrow beside a folder opens or closes it in the panel.
+  The ▸ arrow beside a folder opens or closes it, in the panel and on the map
+  together: both trees always show exactly what the map has open.
 - When you hover over something, lines that lead off screen get a marker on
   the edge of the view. Click a marker to glide there.
 - The **Code** tab hides, shows or resizes the code panel.
@@ -249,13 +250,20 @@ The colours appear on the map, the file tree, blueprints and the code. A call
 turns yellow when the function it calls changed. The panel under the map lists
 every changed file.
 
+The map's lines glow with the same colours, with the badge in front of their
+label: a dependency the change added, one it removed (drawn faded), or one whose
+kind changed. A line that stands for several dependencies turns yellow when
+only some of them changed. Hover over it, or turn on **Ungroup lines**, to see
+which ones. Lines are compared for the files that changed.
+
 ### Ticking off what you have reviewed
 
 While comparing, the left panel has a **Changes** tab that lists only the
 changed files, like a pull request.
 
 - Each file opens into the parts that changed: functions, methods, class
-  bodies and module-level code.
+  bodies and module-level code. Opening a file or class here opens it on the
+  map too, and the other way round.
 - Tick a part, file or folder to mark it seen. The ✓ **Seen** box does the
   same for what you are looking at.
 - If a part changes again later, only that part is unticked.

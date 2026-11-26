@@ -442,3 +442,97 @@ def test_compares_typescript_with_the_path_aliases_of_each_revision(
     head = Project(tmp_path / "head", ["web/src/lib/format.ts", "web/src/view.ts"])
     ids = head.overview()["edges"]["ids"]
     assert "fn:web/src/lib/format.ts:format" in ids
+
+
+LINES_BEFORE = {
+    "shop/lines.py": """
+        class Basket:
+            pass
+
+
+        def helper() -> int:
+            return 1
+
+
+        def retired() -> int:
+            return 2
+
+
+        def build(kind: Basket) -> int:
+            return helper() + retired()
+    """,
+    "shop/moved.py": """
+        from shop.lines import helper
+
+
+        def wrapper() -> int:
+            return helper()
+    """,
+}
+
+LINES_AFTER = {
+    "shop/lines.py": """
+        class Basket:
+            pass
+
+
+        def helper() -> int:
+            return 1
+
+
+        def fresh() -> int:
+            return 3
+
+
+        def build(kind: Basket) -> int:
+            Basket()
+            return helper() + fresh()
+    """,
+    "shop/renamed.py": LINES_BEFORE["shop/moved.py"],
+}
+
+
+def make_line_diff(tmp_path: Path) -> ProjectDiff:
+    return make_diff(tmp_path, before=LINES_BEFORE, after=LINES_AFTER)
+
+
+def line_statuses(diff: ProjectDiff) -> dict[tuple[str, str], str]:
+    return {
+        (source, target): status
+        for source, target, status in diff.summary()["edges"]["status"]
+    }
+
+
+def test_marks_added_and_removed_dependency_lines(tmp_path: Path) -> None:
+    found = line_statuses(make_line_diff(tmp_path))
+
+    assert found[("fn:shop/lines.py:build", "fn:shop/lines.py:fresh")] == "added"
+    assert found[("fn:shop/lines.py:build", "fn:shop/lines.py:retired")] == "removed"
+
+
+def test_marks_a_line_whose_kind_changed_as_modified(tmp_path: Path) -> None:
+    found = line_statuses(make_line_diff(tmp_path))
+
+    assert found[("fn:shop/lines.py:build", "cls:shop/lines.py:Basket")] == "modified"
+
+
+def test_leaves_unchanged_dependency_lines_out(tmp_path: Path) -> None:
+    found = line_statuses(make_line_diff(tmp_path))
+
+    assert ("fn:shop/lines.py:build", "fn:shop/lines.py:helper") not in found
+
+
+def test_follows_a_renamed_file_instead_of_replacing_its_lines(tmp_path: Path) -> None:
+    found = line_statuses(make_line_diff(tmp_path))
+
+    assert not any("shop/renamed.py" in source for source, _ in found)
+    assert not any("shop/moved.py" in source for source, _ in found)
+
+
+def test_sends_removed_lines_so_they_can_be_drawn(tmp_path: Path) -> None:
+    removed = make_line_diff(tmp_path).summary()["edges"]["removed"]
+
+    assert [
+        [removed["ids"][row[0]], removed["ids"][row[1]], row[2]]
+        for row in removed["rows"]
+    ] == [["fn:shop/lines.py:build", "fn:shop/lines.py:retired", "calls"]]

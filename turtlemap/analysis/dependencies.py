@@ -203,18 +203,22 @@ def edge_table(edges: Iterable[list[Any]]) -> dict[str, Any]:
     ids: dict[str, int] = {}
     rows: list[list[Any]] = []
     for source, target, kinds, labels in edges:
-        shown = set(kinds)
-        if shown & {"calls", "creates"}:
-            shown.discard("uses")
         row: list[Any] = [
             ids.setdefault(source, len(ids)),
             ids.setdefault(target, len(ids)),
-            ",".join(sorted(shown)),
+            ",".join(sorted(shown_kinds(kinds))),
         ]
         if labels:
             row.append(",".join(labels))
         rows.append(row)
     return {"ids": list(ids), "rows": rows}
+
+
+def shown_kinds(kinds: Iterable[str]) -> frozenset[str]:
+    shown = set(kinds)
+    if shown & {"calls", "creates"}:
+        shown.discard("uses")
+    return frozenset(shown)
 
 
 class CodeDependencies:

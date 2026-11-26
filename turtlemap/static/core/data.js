@@ -97,9 +97,22 @@ function settleDiffs(n) {
   return n.diff;
 }
 function netLinks(nodes) {
+  const changes = lineChanges();
   const list = [];
-  for (const path of [...EDGES.keys()].sort()) for (const e of EDGES.get(path)) if (nodes.has(e.from) && nodes.has(e.to)) list.push(e);
+  for (const path of [...EDGES.keys()].sort()) for (const e of EDGES.get(path)) if (nodes.has(e.from) && nodes.has(e.to)) { e.diff = changes ? changes.statusOf(e) : null; list.push(e); }
+  if (changes) for (const e of changes.removed) if (nodes.has(e.from) && nodes.has(e.to)) list.push(e);
   return list;
+}
+let LINE_CHANGES = null;
+function lineChanges() {
+  if (!DIFF || !DIFF.edges) return null;
+  if (LINE_CHANGES && LINE_CHANGES.diff === DIFF) return LINE_CHANGES;
+  const byFrom = new Map();
+  for (const [from, to, change] of DIFF.edges.status) { if (!byFrom.has(from)) byFrom.set(from, new Map()); byFrom.get(from).set(to, change); }
+  const table = DIFF.edges.removed;
+  const removed = table.rows.map((row) => Object.assign(link(table.ids[row[0]], table.ids[row[1]], row[2], row[3]), { diff: 'removed' }));
+  LINE_CHANGES = { diff: DIFF, removed, statusOf: (e) => (byFrom.has(e.from) && byFrom.get(e.from).get(e.to)) || null };
+  return LINE_CHANGES;
 }
 function chainLookup(nodes) {
   const chains = new Map();

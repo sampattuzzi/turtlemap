@@ -6,6 +6,11 @@ import { ARRANGED_LAYOUTS, arrangeLayers } from '../core/layout.js';
 import { settings } from '../core/settings.js';
 export const DIFF_SIGN = { added: '+', removed: '−', modified: '~' };
 export const DIFF_WORD = { added: 'added', removed: 'removed', modified: 'changed' };
+export function combinedDiff(states) {
+  const changed = states.filter(Boolean);
+  if (!changed.length) return null;
+  return changed.length === states.length && changed.every((x) => x === changed[0]) ? changed[0] : 'modified';
+}
 export function diffBadge(state) { return state ? el('span', { class: `diff-badge diff-${state}`, title: DIFF_WORD[state] }, DIFF_SIGN[state]) : null; }
 export const refOf = (sym) => ({ path: sym.file, sym: sym.qual });
 function stereotypeOf(sym) {

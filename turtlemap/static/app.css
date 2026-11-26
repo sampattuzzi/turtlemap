@@ -467,6 +467,13 @@ button { cursor: pointer; }
 .node.diff-removed > .box { opacity: 0.88; }
 .pin.pin-removed .pname { color: var(--diff-del); text-decoration: line-through; }
 .wire.wire-removed { stroke: var(--diff-del) !important; stroke-dasharray: 7 5; }
+.rel.diff-added, .rel.diff-removed, .rel.diff-modified { filter: drop-shadow(0 0 2.5px var(--diff)) drop-shadow(0 0 1px var(--diff)); }
+.scene:not(.has-hot) .rel.light.diff-added, .scene:not(.has-hot) .rel.light.diff-removed, .scene:not(.has-hot) .rel.light.diff-modified { opacity: 0.85; }
+.scene:not(.has-hot) .rel.diff-removed, .scene:not(.has-hot) .rel.light.diff-removed { opacity: 0.6; }
+.rel-label.light.diff-added:not(.hot):not(.crowded), .rel-label.light.diff-removed:not(.hot):not(.crowded), .rel-label.light.diff-modified:not(.hot):not(.crowded) { display: inline; }
+.rel-sign { fill: var(--diff); font-weight: 700; }
+.feeder.diff-added:not(.hot), .feeder.diff-removed:not(.hot), .feeder.diff-modified:not(.hot) { stroke: var(--diff); opacity: 0.7; }
+.edge-kind .diff-badge { margin-right: 4px; }
 .tree-item.diff-added { color: var(--diff-add); }
 .tree-item.diff-removed { color: var(--diff-del); }
 .tree-item.diff-modified { color: var(--diff-mod); }

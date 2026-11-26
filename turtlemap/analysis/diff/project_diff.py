@@ -1,6 +1,7 @@
 from typing import Any
 
 from turtlemap.analysis.diff.changes import ChangeStatus
+from turtlemap.analysis.diff.edges import compare_edges
 from turtlemap.analysis.diff.merge import mark_graph, merge_code, merge_graphs
 from turtlemap.analysis.diff.outline import OutlineMerge, mark_all
 from turtlemap.analysis.diff.source import function_text
@@ -34,6 +35,21 @@ class ProjectDiff:
         for change in changes:
             compared.compare_file(change)
             self.units[change.path] = review_units(base, head, change)
+        self.edges = compare_edges(
+            (
+                edge
+                for change in changes
+                if change.status != ADDED
+                for edge in base.edges_of(change.old_path or change.path)
+            ),
+            (
+                edge
+                for change in changes
+                if change.status != REMOVED
+                for edge in head.edges_of(change.path)
+            ),
+            {change.old_path: change.path for change in changes if change.old_path},
+        )
 
     def fingerprints(self, unit_ids: list[str]) -> list[str]:
         wanted = set(unit_ids)
@@ -72,6 +88,7 @@ class ProjectDiff:
             "counts": counts,
             "status": self.status,
             "removed": self.removed,
+            "edges": self.edges,
             "units": {
                 path: [unit.to_json() for unit in units]
                 for path, units in sorted(self.units.items())

@@ -17,7 +17,7 @@ import { startingTrail } from './trail.js';
 import { netLabel, plural, refOf } from '../map/boxes.js';
 import { focusUnitOf, netDefaultExpanded, relatedTo, resetNet, revealHidden } from '../map/focus.js';
 import { netPanel } from '../map/panel.js';
-import { buildNetScene } from '../map/scene.js';
+import { buildNetScene, effectiveOpen } from '../map/scene.js';
 export class Explorer {
   constructor(root, session) {
     this.session = session;
@@ -184,7 +184,21 @@ export class Explorer {
     else codePanel(ui.right, lookup(trail.current), null, ctx);
     this.comments.decorate();
   }
-  chrome() { paintFrame(this.ui, this.trail.current, this.goTo); }
+  chrome() { paintFrame(this.ui, this.trail.current, this.goTo, this.folds()); }
+  folds() {
+    const N = net(), map = this.trail.lastMap();
+    const open = effectiveOpen(N, map.expanded);
+    const isOpen = (id) => { const n = N.nodes.get(id); return n && n.children.length ? open.has(id) : map.expanded.has(id); };
+    return { isOpen, toggle: (id) => this.foldFromTree(map, isOpen, id) };
+  }
+  foldFromTree(map, isOpen, id) {
+    const N = net();
+    const flip = (x) => { if (map.expanded.has(x)) map.expanded.delete(x); else map.expanded.add(x); };
+    if (isOpen(id)) flip(id);
+    else (N.nodes.has(id) ? N.chain(id).slice(1).map((n) => n.id) : [id]).filter((x) => !isOpen(x)).forEach(flip);
+    if (this.trail.current === map) this.keepInPlace(id, () => this.render(true));
+    else this.chrome();
+  }
   rememberPlace() { this.place.remember(this.trail, this.vp); }
   render(keepView) {
     const c = this.trail.current;
@@ -250,11 +264,11 @@ function updateButtons(buttons, trail) {
   buttons.filter.hidden = view === 'fn';
   labelFilterButton(buttons.filter);
 }
-function paintFrame(ui, c, onPick) {
+function paintFrame(ui, c, onPick, folds) {
   const isNet = c.view === 'net';
   const focusPath = isNet ? (net().nodes.get(c.focus) && net().chain(c.focus).find((n) => n.kind === 'module') || {}).path || null : c.path;
   const focusFolder = isNet && !focusPath && c.focus && c.focus.startsWith('pkg:') ? c.focus.slice(4) : null;
-  renderSide(ui.left, focusPath, isNet ? null : c.sym, onPick, focusFolder);
+  renderSide(ui.left, { currentPath: focusPath, currentSym: isNet ? null : c.sym, currentFolder: focusFolder, onPick, folds });
   crumbsFor(ui.crumbs, focusPath, isNet ? null : c.sym, onPick, crumbExtra(c, focusPath));
 }
 function crumbExtra(c, focusPath) {

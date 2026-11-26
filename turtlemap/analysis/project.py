@@ -98,6 +98,16 @@ class Project:
         with self._lock:
             return [self._piece(path, collector) for path in paths]
 
+    def edges_of(self, path: str) -> list[list[Any]]:
+        if not self.workspace.index.contains(path):
+            return []
+        with self._lock:
+            piece = self._known.get(path)
+            if piece is None:
+                piece = self.pieces([path])[0]
+                self._known[path] = piece
+        return piece.edges
+
     def assemble(self, pieces: Sequence[Piece], seconds: float) -> dict[str, Any]:
         modules = [piece.module for piece in pieces if piece.module is not None]
         used = {name for piece in pieces for name in piece.external}
