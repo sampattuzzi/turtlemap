@@ -315,6 +315,15 @@ In Claude Code, run `turtlemap-agent watch --once` as a background command. It
 exits when there are new comments, which wakes the agent. Start it again after
 handling them.
 
+[skills/turtlemap-review](skills/turtlemap-review/SKILL.md) is a Claude Code
+skill that prepares a pull request for review here: a readability pass on the
+diff, then a risk-first tour posted as comments. Link it into your skills to
+use it in any project:
+
+```bash
+ln -s /path/to/this/repo/skills/turtlemap-review ~/.claude/skills/turtlemap-review
+```
+
 `turtlemap-mcp` offers the same tools over MCP:
 
 ```bash
