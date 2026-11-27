@@ -5,8 +5,10 @@ const PORT_ROOM = 24;
 const BACK_ROOM = 18;
 const BOX_GAP = 12;
 const DUMMY_GAP = 4;
+const RIBBON_GAP = 2;
 const COLUMN_GAP = 64;
 const SWEEPS = 4;
+const PER_COLUMN = 2;
 const IN = { border: 'in' };
 const OUT = { border: 'out' };
 export function ribbonGraph(root, edges) {
@@ -21,13 +23,13 @@ export function ribbonGraph(root, edges) {
   walk(root, 0);
   return { root, leaves, folders, edges };
 }
-export function layOutRibbons(G, route = 'sides') {
+export function layOutRibbons(G) {
   if (!G.leaves.length) return { ribbons: [], backs: [], width: 0, height: 0 };
-  return new Hierarchy(G, route === 'sides').result();
+  return new Hierarchy(G).result();
 }
 class Hierarchy {
-  constructor(G, sides) {
-    Object.assign(this, { G, sides });
+  constructor(G) {
+    this.G = G;
     this.levels = new Map([G.root, ...G.folders].map((f) => [f, { local: [], outs: [], ins: [] }]));
     this.wires = G.edges.filter((e) => e.s !== e.t).map((e) => this.wireOf(e));
     for (const f of [G.root, ...G.folders]) this.rank(f);
@@ -51,14 +53,15 @@ class Hierarchy {
     return wire;
   }
   thread(wire) {
-    if (!this.sides) return;
     for (const f of wire.outward) this.levels.get(f).outs.push(wire);
     for (const f of wire.inward) this.levels.get(f).ins.push(wire);
   }
   rank(f) {
     const level = this.levels.get(f), units = f.kids;
-    const out = new Map(units.map((u) => [u, []]));
-    for (const wire of level.local) out.get(wire.a).push(wire.b);
+    const place = new Map(units.map((u, i) => [u, i]));
+    const targets = new Map(units.map((u) => [u, new Set()]));
+    for (const wire of level.local) targets.get(wire.a).add(wire.b);
+    const out = new Map([...targets].map(([u, vs]) => [u, [...vs].sort((p, q) => place.get(p) - place.get(q))]));
     const state = new Map(), back = new Set();
     const visit = (u) => {
       state.set(u, 1);
@@ -79,12 +82,27 @@ class Hierarchy {
       const next = forward.filter(([p]) => p === u).map(([, v]) => rank.get(v));
       if (!preds.has(u) && next.length) rank.set(u, Math.min(...next) - 1);
     }
-    const used = [...new Set(rank.values())].sort((p, q) => p - q);
-    for (const u of units) rank.set(u, used.indexOf(rank.get(u)) + 1);
+    const leading = new Set(forward.map(([u]) => u));
+    const used = [...new Set(units.filter((u) => leading.has(u)).map((u) => rank.get(u)))].sort((p, q) => p - q);
+    for (const u of units) if (leading.has(u)) rank.set(u, used.indexOf(rank.get(u)) + 1);
+    const lowest = new Map(units.map((u) => [u, 1 + Math.max(0, ...forward.filter(([, v]) => v === u).map(([p]) => rank.get(p)))]));
     level.rank = rank;
-    level.columns = used.length;
+    level.columns = this.spread(units.filter((u) => leading.has(u)), units.filter((u) => !leading.has(u)), lowest, rank, used.length);
     for (const wire of level.local) wire.back = rank.get(wire.a) >= rank.get(wire.b);
     level.backs = level.local.filter((wire) => wire.back);
+  }
+  spread(fixed, free, lowest, rank, columns) {
+    const filled = Array.from({ length: columns + 1 }, () => 0);
+    for (const u of fixed) filled[rank.get(u)] += 1;
+    const tallest = Math.max(Math.ceil(Math.sqrt((fixed.length + free.length) * PER_COLUMN)), ...filled);
+    let k = columns;
+    for (const u of free) {
+      let c = filled.findIndex((count, i) => i >= lowest.get(u) && count < tallest);
+      if (c < 0) { k += 1; filled.push(0); c = k; }
+      rank.set(u, c);
+      filled[c] += 1;
+    }
+    return k;
   }
   arrange(f) {
     const level = this.levels.get(f), { rank } = level, k = level.columns;
@@ -95,8 +113,8 @@ class Hierarchy {
     const chains = new Map();
     for (const wire of forward) {
       const [a, b] = ends(wire);
-      if (!chains.has(b)) chains.set(b, new Map());
-      const chain = chains.get(b), path = [a];
+      if (!chains.has(wire.e.t)) chains.set(wire.e.t, new Map());
+      const chain = chains.get(wire.e.t), path = [a];
       for (let c = rankOf(a) + 1; c < rankOf(b); c++) {
         if (!chain.has(c)) chain.set(c, { dummy: true, rank: c, wires: [], w: 0, h: 0, x: 0, y: 0 });
         const d = chain.get(c);
@@ -113,16 +131,55 @@ class Hierarchy {
     const pairs = new Map();
     const link = (p, q, wire) => { if (p.border || q.border) return; pushTo(pairs, p, { n: q, wire, forward: true }); pushTo(pairs, q, { n: p, wire, forward: false }); };
     for (const wire of forward) { const path = wire.path.get(f); for (let i = 0; i + 1 < path.length; i++) link(path[i], path[i + 1], wire); }
-    this.order(cols, pairs);
+    const skeleton = this.skeleton(f, forward, outs, k);
+    this.order(skeleton.cols, skeleton.pairs);
+    const leafAt = new Map(this.G.leaves.map((leaf, i) => [leaf, i]));
+    const slot = new Map(skeleton.cols.flatMap((col) => col.map((n, i) => [n, i])));
+    const keyOf = (n) => [slot.get(n.dummy ? skeleton.of.get(n) : n), n.dummy ? leafAt.get(n.wires[0].e.t) : 0];
+    for (const col of cols) col.sort((p, q) => { const [a, b] = [keyOf(p), keyOf(q)]; return a[0] - b[0] || a[1] - b[1]; });
     this.place(f, cols, pairs);
     this.stack(f, cols, forward);
     this.size(f, level, cols);
+  }
+  skeleton(f, forward, outs, k) {
+    const place = new Map(f.kids.map((u, i) => [u, i]));
+    const keyOf = (wire) => (outs.has(wire) ? OUT : this.unitIn(f, wire.e.t));
+    const lanes = new Map(), of = new Map();
+    for (const wire of forward) {
+      const key = keyOf(wire);
+      if (!lanes.has(key)) lanes.set(key, new Map());
+      const lane = lanes.get(key);
+      for (const d of wire.path.get(f)) {
+        if (!d.dummy || of.has(d)) continue;
+        if (!lane.has(d.rank)) lane.set(d.rank, { dummy: true, rank: d.rank, key: key === OUT ? f.kids.length : place.get(key) });
+        of.set(d, lane.get(d.rank));
+      }
+    }
+    const cols = Array.from({ length: k + 1 }, () => []);
+    for (const u of f.kids) cols[this.levels.get(f).rank.get(u)].push(u);
+    for (const lane of lanes.values()) for (const d of lane.values()) cols[d.rank].push(d);
+    for (const col of cols) col.sort((p, q) => (p.dummy ? p.key + 1e6 : place.get(p)) - (q.dummy ? q.key + 1e6 : place.get(q)));
+    const seen = new Map(), pairs = new Map();
+    const node = (n) => (n.dummy ? of.get(n) : n);
+    for (const wire of forward) {
+      const path = wire.path.get(f).map(node);
+      for (let i = 0; i + 1 < path.length; i++) {
+        const [p, q] = [path[i], path[i + 1]];
+        if (p.border || q.border) continue;
+        if (!seen.has(p)) seen.set(p, new Set());
+        if (seen.get(p).has(q)) continue;
+        seen.get(p).add(q);
+        pushTo(pairs, p, { n: q, forward: true });
+        pushTo(pairs, q, { n: p, forward: false });
+      }
+    }
+    return { cols, pairs, of };
   }
   unitIn(f, n) { let x = n; while (x.up !== f) x = x.up; return x; }
   order(cols, pairs) {
     const index = new Map();
     const reindex = (col) => col.forEach((n, i) => index.set(n, i));
-    for (const col of cols) { col.sort((p, q) => Number(Boolean(p.dummy)) - Number(Boolean(q.dummy))); reindex(col); }
+    for (const col of cols) reindex(col);
     const sweep = (col, forward) => {
       const key = new Map(col.map((n) => {
         const near = (pairs.get(n) || []).filter((l) => l.forward !== forward).map((l) => index.get(l.n)).filter((i) => i !== undefined);
@@ -137,13 +194,14 @@ class Hierarchy {
     }
   }
   place(f, cols, pairs) {
-    const pinOut = (n, wire) => (n.kids && this.sides ? n.outPort.get(wire) : n.h / 2);
-    const pinIn = (n, wire) => (n.kids && this.sides ? n.inPort.get(wire) : n.h / 2);
+    const pinOut = (n, wire) => (n.kids ? n.outPort.get(wire) : n.h / 2);
+    const pinIn = (n, wire) => (n.kids ? n.inPort.get(wire) : n.h / 2);
     const pack = (col, want) => {
-      let prev = -Infinity;
-      for (const n of col) { n.y = Math.max(want.get(n) ?? n.y, prev); prev = n.y + n.h + (n.dummy ? DUMMY_GAP : BOX_GAP); }
+      let off = 0;
+      const items = col.map((n) => { const it = { n, off, target: (want.get(n) ?? n.y) - off, weight: want.has(n) ? 1 : 0.01 }; off += n.h + (n.dummy ? DUMMY_GAP : BOX_GAP); return it; });
+      for (const [block, z] of nearestInOrder(items)) for (const it of block) it.n.y = z + it.off;
     };
-    for (const col of cols) pack(col, new Map(col.map((n, i) => [n, i === 0 ? 0 : -Infinity])));
+    for (const col of cols) { let y = 0; for (const n of col) { n.y = y; y += n.h + (n.dummy ? DUMMY_GAP : BOX_GAP); } }
     const pass = (c, both) => {
       const want = new Map();
       for (const n of cols[c]) {
@@ -157,10 +215,12 @@ class Hierarchy {
       for (let c = cols.length - 1; c >= 1; c--) pass(c, true);
     }
     for (let c = 1; c < cols.length; c++) pass(c, false);
+    const wired = cols.flat().filter((n) => pairs.has(n));
+    const highest = wired.length ? Math.min(...wired.map((n) => n.y)) : 0;
+    for (const col of cols) if (col.some((n) => !pairs.has(n))) pack(col, new Map(col.map((n) => [n, pairs.has(n) ? n.y : highest])));
     const top = Math.min(...cols.flat().map((n) => n.y));
     for (const n of cols.flat()) n.y -= top;
   }
-  depthOf(n, within) { let y = n.h / 2; for (let x = n; x !== within; x = x.up) y += x.ry; return y; }
   stack(f, cols, forward) {
     const level = this.levels.get(f);
     level.colX = [];
@@ -173,14 +233,16 @@ class Hierarchy {
       x += level.colW[c] + COLUMN_GAP;
     }
     level.right = x - COLUMN_GAP + FOLDER_SIDE + (level.outs.length ? PORT_ROOM : 0);
-    const pinAt = (n, wire, side) => (n.dummy ? (n.offset ? n.offset.get(wire) : n.h / 2) : n.kids ? (side === 'out' ? (this.sides ? n.outPort.get(wire) : this.depthOf(wire.e.s, n)) : (this.sides ? n.inPort.get(wire) : this.depthOf(wire.e.t, n))) : (side === 'out' ? n.outAt : n.inAt)?.get(wire)?.y ?? n.h / 2);
+    const pinAt = (n, wire, side) => {
+      if (n.dummy) return n.offset ? n.offset.get(wire) : n.h / 2;
+      if (n.kids) return side === 'out' ? n.outPort.get(wire) : n.inPort.get(wire);
+      return (side === 'out' ? n.outAt : n.inAt)?.get(wire)?.y ?? n.h / 2;
+    };
     const yAt = (n, wire, side) => n.y + pinAt(n, wire, side);
-    if (this.sides) {
-      for (const u of f.kids.filter((n) => !n.kids)) {
-        const leaving = forward.filter((wire) => wire.path.get(f)[0] === u), arriving = forward.filter((wire) => { const path = wire.path.get(f); return path[path.length - 1] === u; });
-        u.outAt = stackOn(u, leaving, (wire) => { const n = wire.path.get(f)[1]; return n.border ? u.y : n.y + pinAt(n, wire, 'in'); });
-        u.inAt = stackOn(u, arriving, (wire) => { const path = wire.path.get(f), n = path[path.length - 2]; return n.border ? u.y : n.y + pinAt(n, wire, 'out'); });
-      }
+    for (const u of f.kids.filter((n) => !n.kids)) {
+      const leaving = forward.filter((wire) => wire.path.get(f)[0] === u), arriving = forward.filter((wire) => { const path = wire.path.get(f); return path[path.length - 1] === u; });
+      u.outAt = stackOn(u, leaving, (wire) => { const n = wire.path.get(f)[1]; return n.border ? u.y : n.y + pinAt(n, wire, 'in'); }, RIBBON_GAP);
+      u.inAt = stackOn(u, arriving, (wire) => { const path = wire.path.get(f), n = path[path.length - 2]; return n.border ? u.y : n.y + pinAt(n, wire, 'out'); }, 0);
     }
     for (let c = 1; c < cols.length; c++) {
       for (const d of cols[c].filter((n) => n.dummy)) {
@@ -201,7 +263,7 @@ class Hierarchy {
     for (const col of cols) for (const n of col) if (n.dummy) { n.rx = n.x; n.ry = top + n.y; }
     f.w = Math.max(level.right, f.minW || 0);
     f.h = top + bottom + (f === this.G.root ? 0 : FOLDER_PAD);
-    if (!this.sides || f === this.G.root) return;
+    if (f === this.G.root) return;
     f.inPort = new Map();
     f.outPort = new Map();
     for (const wire of level.ins) { const path = wire.path.get(f); f.inPort.set(wire, top + level.yAt(path[1], wire, 'in')); }
@@ -213,9 +275,7 @@ class Hierarchy {
     for (const wire of level.forward) for (const n of wire.path.get(f)) if (n.dummy) { n.ax = f.x + n.rx; n.ay = f.y + n.ry; }
   }
   result() {
-    const ribbons = this.wires.filter((wire) => !wire.back).map((wire) => this.ribbon(wire));
-    this.ends(ribbons);
-    const drawn = ribbons.map((r) => this.draw(r));
+    const drawn = this.wires.filter((wire) => !wire.back).map((wire) => this.draw(this.ribbon(wire)));
     const backs = this.wires.filter((wire) => wire.back).map((wire) => this.loop(wire));
     const { root } = this.G;
     return { ribbons: drawn, backs, x0: 0, y0: 0, width: root.w, height: root.h };
@@ -229,29 +289,11 @@ class Hierarchy {
         points.push([n.ax - 4, y], [n.ax + n.w + 4, y]);
       }
     };
-    if (this.sides) {
-      for (const f of wire.outward) { through(f); points.push([f.x + f.w, f.y + f.outPort.get(wire)]); }
-      through(wire.lca);
-      for (const f of wire.inward) { points.push([f.x, f.y + f.inPort.get(wire)]); through(f); }
-    } else through(wire.lca);
-    return { wire, points };
-  }
-  ends(ribbons) {
-    const fit = (leaf, list, side) => {
-      list.sort((p, q) => p.key - q.key);
-      const total = list.reduce((sum, r) => sum + r.wire.w, 0), k = Math.min(1, (leaf.h - 2) / total);
-      let y = leaf.y + leaf.h / 2 - (total * k) / 2;
-      for (const { r } of list) { r[side] = { y: y + (r.wire.w * k) / 2, w: r.wire.w * k }; y += r.wire.w * k; }
-    };
-    const outs = new Map(), ins = new Map();
-    for (const r of ribbons) {
-      const { s, t } = r.wire.e, start = s.outAt?.get(r.wire), end = t.inAt?.get(r.wire);
-      if (start && end) { r.start = { y: s.y + start.y, w: start.w }; r.end = { y: t.y + end.y, w: end.w }; continue; }
-      pushTo(outs, s, { r, wire: r.wire, key: r.points.length ? r.points[0][1] : t.y + t.h / 2 });
-      pushTo(ins, t, { r, wire: r.wire, key: r.points.length ? r.points[r.points.length - 1][1] : s.y + s.h / 2 });
-    }
-    for (const [leaf, list] of outs) fit(leaf, list, 'start');
-    for (const [leaf, list] of ins) fit(leaf, list, 'end');
+    for (const f of wire.outward) { through(f); points.push([f.x + f.w, f.y + f.outPort.get(wire)]); }
+    through(wire.lca);
+    for (const f of wire.inward) { points.push([f.x, f.y + f.inPort.get(wire)]); through(f); }
+    const { s, t } = wire.e, start = s.outAt.get(wire), end = t.inAt.get(wire);
+    return { wire, points, start: { y: s.y + start.y, w: start.w }, end: { y: t.y + end.y, w: end.w } };
   }
   draw({ wire, points, start, end }) {
     const { s, t } = wire.e;
@@ -266,12 +308,28 @@ class Hierarchy {
     return { d: catmull(pts), edge: wire.e };
   }
 }
-function stackOn(leaf, wires, keyOf) {
+function stackOn(leaf, wires, keyOf, gap) {
   const at = new Map(), sorted = [...wires].sort((p, q) => keyOf(p) - keyOf(q));
-  const total = sorted.reduce((sum, wire) => sum + wire.w, 0), k = Math.min(1, (leaf.h - 2) / total);
+  const between = sorted.length > 1 ? gap * (sorted.length - 1) : 0, total = sorted.reduce((sum, wire) => sum + wire.w, 0) + between;
+  const k = Math.min(1, (leaf.h - 2) / total);
   let y = leaf.h / 2 - (total * k) / 2;
-  for (const wire of sorted) { at.set(wire, { y: y + (wire.w * k) / 2, w: wire.w * k }); y += wire.w * k; }
+  for (const wire of sorted) { at.set(wire, { y: y + (wire.w * k) / 2, w: wire.w * k }); y += (wire.w + gap) * k; }
   return at;
+}
+function nearestInOrder(items) {
+  const blocks = [];
+  for (const it of items) {
+    blocks.push({ items: [it], sum: it.target * it.weight, weight: it.weight });
+    while (blocks.length > 1) {
+      const last = blocks[blocks.length - 1], prev = blocks[blocks.length - 2];
+      if (prev.sum / prev.weight < last.sum / last.weight) break;
+      blocks.pop();
+      prev.items.push(...last.items);
+      prev.sum += last.sum;
+      prev.weight += last.weight;
+    }
+  }
+  return blocks.map((b) => [b.items, b.sum / b.weight]);
 }
 function ribbonWidth(w) { return 0.9 + 1.1 * Math.log2(1 + w); }
 function median(values) {

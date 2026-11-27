@@ -39,8 +39,13 @@ methods; ribbons then attach to whatever is showing. Large projects start with
 their side folders (such as `tests/`) and deepest folders folded. Folding and
 opening in the **Files** and **Changes** trees does the same to the map.
 
+- **Each folder is laid out on its own.** Its modules and subfolders sit in
+  columns by how they depend on each other, so opening or folding a box only
+  makes it bigger or smaller; everything around it keeps its column and its
+  order. Boxes that depend on nothing else in the folder spread over several
+  columns instead of one tall one.
 - **Ribbons flow left to right**, from the module that depends to the one it
-  depends on. Modules sit in columns by how deep they are in the chain.
+  depends on, and leave or enter a folder through its right or left side.
 - **A ribbon's width** shows how many dependencies it stands for, counted
   between the classes and functions inside each module: inherits, has a field
   of, creates, calls, reads, writes and uses. **⚲ Filter** picks which kinds
@@ -48,9 +53,8 @@ opening in the **Files** and **Changes** trees does the same to the map.
 - **Every ribbon into one module merges into one trunk**, coloured for that
   module. Hues follow the folder tree, so modules in the same folder get
   neighbouring colours.
-- **Long ribbons run in lanes.** A ribbon that skips a column runs in a lane
-  inside the smallest folder that holds both of its ends, and the folder grows
-  to fit it.
+- **Long ribbons run in lanes** between the boxes they skip. Ribbons that
+  are not part of the same trunk keep a gap between them.
 - **A real cycle** is drawn as a thin grey line looping back.
 - **Hover** over a module or folder to light up its ribbons; the rest fade.
   **Click** a module to keep them lit and to read its code in the panel
@@ -160,12 +164,8 @@ The cog menu changes the label font (Lexend, Atkinson Hyperlegible, Comic
 Neue or monospace), the text size, the background, and whether names are
 spaced out.
 
-Blueprints and the package diagram are laid out the same way: a rough first
-pass puts each node in a column by the order things happen, then an optimiser
-(simulated annealing) nudges, swaps and moves nodes between columns to make
-wires shorter and straighter, with fewer crossings, in a smaller picture. It
-runs for a fixed number of steps, so the same code always gets the same
-layout.
+Both views are laid out without randomness, so the same code always looks
+the same.
 
 ## Privacy
 
@@ -419,8 +419,7 @@ that (the map, blueprints and queries) works only on the model.
 | `web/` | The local server |
 | `static/` | The browser app, as plain JavaScript modules |
 | `static/core/graph.js` | The browser's one graph of the project: packages down to fields, with function bodies attached as they load, and edges lifted to whatever is on screen |
-| `static/core/anneal.js` | The optimiser both layouts share |
-| `static/map/` | The package diagram; `ribbons.js` lays it out |
+| `static/map/` | The package diagram; `hierarchy.js` lays it out folder by folder |
 | `static/blueprint/` | The function blueprints; `layout.js` lays them out |
 | `updates/` | Updates Turtlemap itself from `main` |
 | `app.py` | The `turtlemap` command |

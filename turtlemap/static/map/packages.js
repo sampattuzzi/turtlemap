@@ -13,7 +13,7 @@ export function buildPackageScene(entry, ctx, filter = null) {
   const scene = new PackageScene(N, ctx, tree);
   scene.measureLeaves();
   const G = ribbonGraph(tree.root, edges);
-  const result = layOutRibbons(G, new URLSearchParams(location.search).get('route') || 'sides');
+  const result = layOutRibbons(G);
   scene.draw(G, result);
   return scene;
 }
