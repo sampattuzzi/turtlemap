@@ -2,9 +2,8 @@ async function layoutModules() {
   const data = await import('./core/data.js');
   const { ensureFunction } = await import('./core/project.js');
   const { buildFunctionScene } = await import('./blueprint/nodes.js');
-  const { buildNetScene } = await import('./map/scene.js');
   const { refOf } = await import('./map/boxes.js');
-  return { data, ensureFunction, buildFunctionScene, buildNetScene, refOf };
+  return { data, ensureFunction, buildFunctionScene, refOf };
 }
 
 function anchorsOf(d) {
@@ -39,7 +38,7 @@ function crossingsOf(wires) {
   return count;
 }
 
-function summarise(label, scenes, withCrossings) {
+function summarise(label, scenes) {
   const wires = scenes.flatMap((s) => s.wires);
   const straight = wires.filter((w) => travelOf(w) < 0.5).length;
   const travel = wires.reduce((sum, w) => sum + travelOf(w), 0);
@@ -49,13 +48,14 @@ function summarise(label, scenes, withCrossings) {
     wires: wires.length,
     straight: `${((100 * straight) / Math.max(1, wires.length)).toFixed(1)}%`,
     travelPerWire: +(travel / Math.max(1, wires.length)).toFixed(1),
-    crossings: withCrossings ? scenes.reduce((sum, s) => sum + crossingsOf(s.wires), 0) : null,
+    crossings: scenes.reduce((sum, s) => sum + crossingsOf(s.wires), 0),
     height: Math.round(scenes.reduce((sum, s) => sum + s.height, 0)),
+    msPerScene: +(scenes.reduce((sum, s) => sum + s.ms, 0) / Math.max(1, scenes.length)).toFixed(1),
   };
 }
 
-function measureScene(scene) {
-  const result = { wires: wiresIn(scene.el), height: scene.height };
+function measureScene(scene, ms) {
+  const result = { wires: wiresIn(scene.el), height: scene.height, ms };
   scene.el.remove();
   return result;
 }
@@ -68,21 +68,17 @@ async function measureBlueprints(modules, ctx, limit) {
   const blueprints = [];
   for (const fn of sample) {
     try { await ensureFunction(refOf(fn)); } catch (error) { continue; }
-    blueprints.push(measureScene(buildFunctionScene(fn, ctx)));
+    const start = performance.now();
+    const scene = buildFunctionScene(fn, ctx);
+    blueprints.push(measureScene(scene, performance.now() - start));
   }
-  return summarise('blueprints', blueprints, true);
-}
-
-function measureMap(modules, ctx, depth) {
-  const { data, buildNetScene } = modules;
-  const expanded = new Set([...data.net().nodes.values()].filter((n) => n.depth > 0 && n.depth < depth && ['package', 'module', 'class'].includes(n.kind)).map((n) => n.id));
-  return summarise(`map, ${depth} levels`, [measureScene(buildNetScene(expanded, ctx))], false);
+  return summarise('blueprints', blueprints);
 }
 
 (async (limit = 150) => {
   const modules = await layoutModules();
   const ctx = { openButton: () => null, go() {}, select() {}, toggle() {}, activate() {} };
-  const rows = [await measureBlueprints(modules, ctx, limit), ...[2, 3].map((depth) => measureMap(modules, ctx, depth))];
+  const rows = [await measureBlueprints(modules, ctx, limit)];
   console.table(rows);
   return rows;
 })();

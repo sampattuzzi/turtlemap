@@ -1,75 +1,191 @@
-import { ARRANGED_LAYOUTS, arrangeLayers } from '../core/layout.js';
-import { settings } from '../core/settings.js';
-const BLUEPRINT_GAP_X = 56;
-const BLUEPRINT_GAP_Y = 18;
+import { anneal } from '../core/anneal.js';
+import { inversions } from '../core/crossings.js';
+const GAP_X = 56;
+const GAP_Y = 18;
+const DUMMY_GAP = 10;
+const STEPS_PER_ITEM = 50;
+const TIME_LIMIT = 600;
+const BEND = 40;
+const CROSSING = 50;
+const DETOUR = 30;
+const SIZE = 0.4;
+const DUMMY_PINS = { d: { dx: 0, dy: 4 } };
+const LAYOUTS = new Map();
+const LAYOUTS_KEPT = 60;
 export function layered(g, byId) {
-  const rank = blueprintRanks(g);
-  const { preds, succs, dummies, routes } = dummyRoutes(g, rank);
-  const V = (n) => (n.dummy ? n : byId.get(n));
-  const cols = [];
-  for (const n of [...g.nodes, ...dummies]) { const r = n.dummy ? n.rank : rank.get(n); if (!cols[r]) cols[r] = []; cols[r].push(n); }
-  const { colX, colW } = stackColumns(cols, byId, V);
-  const entryV = byId.get(g.nodes.find((n) => n.kind === 'entry'));
-  const lane = g.exec.length && entryV.pins.then ? entryV.pins.then.dy + 26 : -Infinity;
-  const sweep = new ColumnSweep({ V, preds, succs, lane, hasExec: g.exec.length > 0 });
-  for (let it = 0; it < 5; it++) { sweep.forward(cols); sweep.backward(cols); }
-  sweep.forward(cols);
-  if (ARRANGED_LAYOUTS.has(settings.layout)) arrangeBlueprintColumns(settings.layout, Array.from(cols, (col) => col || []), succs, { V, isExec: isExecNode, lane, gapY: BLUEPRINT_GAP_Y });
-  for (const d of dummies) { d.x = colX[d.rank]; d.w = colW[d.rank]; }
-  return { routes, dummies };
+  const layout = new BlueprintLayout(g, byId);
+  const key = layoutKey(g);
+  if (LAYOUTS.has(key)) layout.restore(LAYOUTS.get(key)); else layout.optimise();
+  LAYOUTS.delete(key);
+  LAYOUTS.set(key, layout.places());
+  while (LAYOUTS.size > LAYOUTS_KEPT) LAYOUTS.delete(LAYOUTS.keys().next().value);
+  return layout.result();
 }
-class ColumnSweep {
-  constructor({ V, preds, succs, lane, hasExec }) {
-    Object.assign(this, { V, preds, succs, lane, hasExec });
-    this.middleOf = settings.layout === 'classic' ? meanOf : medianOf;
+class BlueprintLayout {
+  constructor(g, byId) {
+    Object.assign(this, { g, byId });
+    this.V = (n) => (n.dummy ? n : byId.get(n));
+    this.rank = blueprintRanks(g);
+    this.into = new Map();
+    this.outOf = new Map();
+    for (const e of [...g.edges, ...g.exec]) { pushTo(this.into, e.to, e.from); pushTo(this.outOf, e.from, e.to); }
+    const entry = g.nodes.find((n) => n.kind === 'entry');
+    const then = entry && byId.get(entry).pins.then;
+    this.hasExec = g.exec.length > 0;
+    this.lane = this.hasExec && then ? then.dy + 26 : -Infinity;
+    this.wish = new Map(g.nodes.map((n) => [n, 0]));
+    this.bundles = [...groupBy(blueprintLinks(g), (e) => `${e.from.id}|${e.fp}`)].map(([key, list]) => ({ key, list, src: list[0].from, pin: list[0].fp, exec: list[0].exec }));
+    this.build();
+    this.place();
+    this.commit();
   }
-  forward(cols) {
-    for (const col of cols) {
-      if (!col) continue;
-      const t = new Map();
-      for (const n of col) { const tp = this.targetFrom(n, this.linksInto(n), true); if (tp !== null) t.set(n, tp); }
-      this.place(col, t);
-    }
-  }
-  backward(cols) {
-    for (let ci = cols.length - 1; ci >= 0; ci--) {
-      const col = cols[ci];
-      if (!col) continue;
-      const t = new Map();
-      for (const n of col) {
-        const ts = isExecNode(n) && !n.dummy ? null : this.targetFrom(n, this.succs.get(n) || [], false);
-        const tp = this.targetFrom(n, this.linksInto(n), true);
-        const val = ts !== null && tp !== null ? (ts + tp) / 2 : ts ?? tp;
-        if (val !== null) t.set(n, val);
+  keyOf(n) { return n.dummy ? n.key : n; }
+  rankOf(n) { return n.dummy ? n.rank : this.rank.get(n); }
+  wishOf(n) { return this.wish.get(this.keyOf(n)); }
+  pinY(n, pin) { const p = this.V(n).pins[pin]; return p ? p.dy : null; }
+  build() {
+    const used = [...new Set(this.rank.values())].sort((a, b) => a - b);
+    const compact = new Map(used.map((r, i) => [r, i]));
+    for (const [n, r] of this.rank) this.rank.set(n, compact.get(r));
+    const { preds, succs, dummies, routes } = dummyRoutes(this.bundles, this.rank);
+    Object.assign(this, { preds, succs, dummies, routes });
+    for (const d of dummies) if (!this.wish.has(d.key)) this.wish.set(d.key, this.wishOf(d.from) + (this.pinY(d.from, d.fromPin) ?? 0) - 4);
+    this.cols = [];
+    for (const n of [...this.g.nodes, ...dummies]) { const r = this.rankOf(n); if (!this.cols[r]) this.cols[r] = []; this.cols[r].push(n); }
+    this.colX = []; this.colW = [];
+    let x = 0;
+    this.cols.forEach((col, r) => {
+      const real = col.filter((n) => !n.dummy);
+      this.colW[r] = real.length ? Math.max(...real.map((n) => this.V(n).w)) : 24;
+      this.colX[r] = x;
+      for (const n of real) this.V(n).x = x;
+      x += this.colW[r] + GAP_X;
+    });
+    this.width = x;
+    this.items = [...this.g.nodes.filter((n) => n.kind !== 'entry'), ...dummies];
+    this.stacks = this.cols.map((col) => (col || []).map((n) => ({ n, v: this.V(n), key: this.keyOf(n), exec: isExecNode(n), fixed: n.kind === 'entry', gap: n.dummy ? DUMMY_GAP : GAP_Y, floor: isExecNode(n) ? (this.hasExec ? 0 : -Infinity) : this.lane })));
+    this.gaps = this.cols.map(() => []);
+    for (const [a, list] of succs) {
+      if (a.overhead) continue;
+      for (const s of list) {
+        const pa = this.pinY(a, s.ak), pb = this.pinY(s.n, s.bk);
+        if (pa !== null && pb !== null) this.gaps[this.rankOf(a)].push({ va: this.V(a), vb: this.V(s.n), pa, pb, w: s.exec ? 2 : 1, a: 0, b: 0 });
       }
-      this.place(col, t);
     }
   }
-  linksInto(n) {
-    if (n.kind === 'closure' && (this.succs.get(n) || []).length) return [];
-    const links = this.preds.get(n) || [];
-    if (!isExecNode(n)) return links;
-    const exec = links.filter((l) => l.exec);
-    return exec.length ? exec : links;
-  }
-  targetFrom(n, list, fromPreds) {
-    const V = this.V;
-    const v = V(n);
-    const vals = list.map((p) => { const o = V(p.n); const op = o.pins[fromPreds ? p.ak : p.bk], vp = v.pins[fromPreds ? p.bk : p.ak]; return op && vp ? o.y + op.dy - vp.dy : null; }).filter((t0) => t0 !== null);
-    return vals.length ? this.middleOf(vals) : null;
-  }
-  place(col, targets) {
-    const V = this.V;
-    const key = (n) => (targets.get(n) ?? V(n).y) + (isExecNode(n) ? -1e6 : 0);
-    col.sort((a, b) => key(a) - key(b));
-    let prev = -Infinity;
-    for (const n of col) {
-      const v = V(n);
-      const t0 = isExecNode(n) && this.hasExec ? Math.max(0, targets.get(n) ?? 0) : targets.get(n) ?? v.y;
-      v.y = Math.max(t0, prev, isExecNode(n) ? -Infinity : this.lane);
-      prev = v.y + v.h + (n.dummy ? 10 : BLUEPRINT_GAP_Y);
+  place() {
+    for (const stack of this.stacks) {
+      for (const item of stack) item.wish = this.wish.get(item.key);
+      stack.sort((p, q) => Number(q.exec) - Number(p.exec) || p.wish - q.wish);
+      let prev = -Infinity;
+      for (const item of stack) {
+        item.v.y = item.fixed ? 0 : Math.max(item.wish, prev, item.floor);
+        prev = item.v.y + item.v.h + item.gap;
+      }
     }
   }
+  commit() { for (const stack of this.stacks) for (const item of stack) this.wish.set(item.key, item.v.y); }
+  score() {
+    this.place();
+    let travel = 0, bends = 0, crossings = 0, top = Infinity, bottom = -Infinity;
+    for (const gap of this.gaps) {
+      for (const link of gap) {
+        link.a = link.va.y + link.pa;
+        link.b = link.vb.y + link.pb;
+        const t = Math.abs(link.a - link.b);
+        travel += link.w * t;
+        if (t >= 0.5) bends += link.w;
+      }
+      crossings += inversions(gap);
+    }
+    for (const stack of this.stacks) if (stack.length) { const last = stack[stack.length - 1].v; top = Math.min(top, stack[0].v.y); bottom = Math.max(bottom, last.y + last.h); }
+    return travel + BEND * bends + CROSSING * crossings + DETOUR * this.dummies.length + SIZE * (bottom - top + this.width);
+  }
+  optimise() {
+    const setWishes = (changes) => {
+      const before = changes.map(([k]) => [k, this.wish.get(k)]);
+      for (const [k, y] of changes) this.wish.set(k, y);
+      return () => { for (const [k, y] of before) this.wish.set(k, y); };
+    };
+    const sigma = (cooling) => 4 + 60 * cooling;
+    const linksOf = (n) => [...(this.preds.get(n) || []).map((p) => ({ other: p.n, mine: p.bk, theirs: p.ak })), ...(this.succs.get(n) || []).map((s) => ({ other: s.n, mine: s.ak, theirs: s.bk }))];
+    anneal({
+      score: () => this.score(),
+      accepted: () => this.commit(),
+      steps: STEPS_PER_ITEM * this.items.length,
+      limit: TIME_LIMIT,
+      moves: [
+        { weight: 0.25, apply: (random, cooling) => {
+          if (!this.items.length) return null;
+          const n = random.pick(this.items);
+          return setWishes([[this.keyOf(n), this.wishOf(n) + random.gauss() * sigma(cooling)]]);
+        } },
+        { weight: 0.25, apply: (random) => {
+          if (!this.items.length) return null;
+          const n = random.pick(this.items), links = linksOf(n).filter((l) => !l.other.overhead);
+          if (!links.length) return null;
+          const l = random.pick(links), theirs = this.pinY(l.other, l.theirs), mine = this.pinY(n, l.mine);
+          if (theirs === null || mine === null) return null;
+          return setWishes([[this.keyOf(n), this.wishOf(l.other) + theirs - mine]]);
+        } },
+        { weight: 0.1, apply: (random) => {
+          if (!this.items.length) return null;
+          const n = random.pick(this.items), peers = this.cols[this.rankOf(n)].filter((m) => m !== n && m.kind !== 'entry' && isExecNode(m) === isExecNode(n));
+          if (!peers.length) return null;
+          const m = random.pick(peers);
+          return setWishes([[this.keyOf(n), this.wishOf(m)], [this.keyOf(m), this.wishOf(n)]]);
+        } },
+        { weight: 0.1, apply: (random, cooling) => {
+          if (!this.items.length) return null;
+          const n = random.pick(this.items), from = this.wishOf(n), dy = random.gauss() * sigma(cooling);
+          return setWishes(this.cols[this.rankOf(n)].filter((m) => m.kind !== 'entry' && this.wishOf(m) >= from).map((m) => [this.keyOf(m), this.wishOf(m) + dy]));
+        } },
+        { weight: 0.1, apply: (random) => {
+          if (!this.dummies.length) return null;
+          const d = random.pick(this.dummies), pin = this.pinY(d.from, d.fromPin);
+          if (pin === null) return null;
+          return setWishes(this.dummies.filter((o) => o.bundle === d.bundle).map((o) => [o.key, this.wishOf(d.from) + pin - 4]));
+        } },
+        { weight: 0.05, apply: (random) => {
+          const movable = this.g.nodes.filter((n) => n.kind !== 'entry' && !n.overhead);
+          if (!movable.length) return null;
+          const n = random.pick(movable);
+          const lo = Math.max(1, ...(this.into.get(n) || []).map((p) => this.rank.get(p) + 1));
+          const hi = Math.min(this.cols.length - 1, ...(this.outOf.get(n) || []).map((s) => this.rank.get(s) - 1));
+          const options = [];
+          for (let r = lo - 0.5; r <= hi + 0.5; r += 0.5) if (r !== this.rank.get(n) && r > 0) options.push(r);
+          if (!options.length) return null;
+          const before = new Map(this.rank);
+          this.rank.set(n, random.pick(options));
+          this.build();
+          return () => { for (const [k, r] of before) this.rank.set(k, r); this.build(); };
+        } },
+      ],
+    });
+    this.place();
+  }
+  places() {
+    const out = new Map();
+    for (const n of this.g.nodes) out.set(n.id, { rank: this.rank.get(n), y: this.wishOf(n) });
+    for (const d of this.dummies) out.set(d.key, { y: this.wishOf(d) });
+    return out;
+  }
+  restore(known) {
+    for (const n of this.g.nodes) { const p = known.get(n.id); if (p) { this.rank.set(n, p.rank); this.wish.set(n, p.y); } }
+    for (const [key, p] of known) if (p.rank === undefined) this.wish.set(key, p.y);
+    this.build();
+    this.place();
+  }
+  result() {
+    for (const d of this.dummies) { d.x = this.colX[d.rank]; d.w = this.colW[d.rank]; }
+    return { routes: this.routes, dummies: this.dummies };
+  }
+}
+function layoutKey(g) {
+  const nodes = g.nodes.map((n) => `${n.id}:${n.kind}`).join(' ');
+  const edges = g.edges.map((e) => `${e.from.id}.${e.fp}>${e.to.id}.${e.tp}`).join(' ');
+  const exec = g.exec.map((e) => `${e.from.id}.${e.fp}>${e.to.id}`).join(' ');
+  return `${nodes}#${edges}#${exec}`;
 }
 function blueprintRanks(g) {
   const realPreds = new Map(), realSuccs = new Map();
@@ -90,13 +206,7 @@ function blueprintRanks(g) {
   pushPastSources(g.nodes, realSuccs, rank);
   const maxR = Math.max(...rank.values());
   for (const n of g.nodes) if (n.kind === 'return' && !(realSuccs.get(n) || []).length) rank.set(n, maxR);
-  pullTowardUsers(g.nodes, realSuccs, rank);
   return rank;
-}
-function pullTowardUsers(nodes, succs, rank) {
-  const pullable = nodes.filter((n) => !isExecNode(n) && n.kind !== 'entry' && n.kind !== 'return' && (succs.get(n) || []).length);
-  pullable.sort((a, b) => rank.get(b) - rank.get(a));
-  for (const n of pullable) rank.set(n, Math.max(rank.get(n), Math.min(...succs.get(n).map((s) => rank.get(s))) - 1));
 }
 function pushPastSources(sources, succs, rank) {
   const pending = [...sources];
@@ -117,31 +227,30 @@ function forwardRank(n, preds, rankOf) {
 function backwardRank(succs, rank) {
   return succs.length ? Math.max(1, Math.min(...succs.map((s) => rank.get(s) ?? 2)) - 1) : 1;
 }
-function dummyRoutes(g, rank) {
+function dummyRoutes(bundles, rank) {
   const preds = new Map(), succs = new Map();
   const link = (a, b, ak, bk, exec) => { pushTo(preds, b, { n: a, ak, bk, exec }); pushTo(succs, a, { n: b, ak, bk, exec }); };
-  const bundles = new Map();
-  for (const e of blueprintLinks(g)) pushTo(bundles, `${e.from.id}|${e.fp}`, e);
   const dummies = [];
   const routes = new Map();
-  for (const list of bundles.values()) {
-    const src = list[0].from, r0 = rank.get(src), exec = list[0].exec;
+  for (const { key, list, src, pin, exec } of bundles) {
     if (src.overhead) {
-      for (const e of list) { routes.set(`${e.from.id}|${e.fp}|${e.to.id}|${e.tp}`, []); link(src, e.to, e.fp, e.tp, exec); }
+      for (const e of list) { routes.set(`${key}|${e.to.id}|${e.tp}`, []); link(src, e.to, pin, e.tp, exec); }
       continue;
     }
-    const far = Math.max(r0, ...list.map((e) => rank.get(e.to)));
+    const r0 = rank.get(src);
+    let far = r0;
+    for (const e of list) far = Math.max(far, rank.get(e.to));
     const chain = [];
     for (let r = r0 + 1; r < far; r++) {
-      const d = { dummy: true, exec, rank: r, w: 0, h: 8, x: 0, y: 0, pins: { d: { dx: 0, dy: 4 } } };
-      link(chain.length ? chain[chain.length - 1] : src, d, chain.length ? 'd' : list[0].fp, 'd', exec);
+      const d = { dummy: true, exec, rank: r, w: 0, h: 8, x: 0, y: 0, pins: DUMMY_PINS, key: `${key}#${r}`, bundle: key, from: src, fromPin: pin };
+      link(chain.length ? chain[chain.length - 1] : src, d, chain.length ? 'd' : pin, 'd', exec);
       chain.push(d); dummies.push(d);
     }
     for (const e of list) {
       const t = rank.get(e.to);
       const via = t > r0 + 1 ? chain.slice(0, t - r0 - 1) : [];
-      routes.set(`${e.from.id}|${e.fp}|${e.to.id}|${e.tp}`, via);
-      link(via.length ? via[via.length - 1] : src, e.to, via.length ? 'd' : e.fp, e.tp, exec);
+      routes.set(`${key}|${e.to.id}|${e.tp}`, via);
+      link(via.length ? via[via.length - 1] : src, e.to, via.length ? 'd' : pin, e.tp, exec);
     }
   }
   return { preds, succs, dummies, routes };
@@ -152,36 +261,10 @@ function blueprintLinks(g) {
     ...g.exec.map((e) => ({ from: e.from, fp: e.fp, to: e.to, tp: 'exec-in', exec: true })),
   ];
 }
-function stackColumns(cols, byId, V) {
-  const colX = [], colW = [];
-  let x = 0;
-  cols.forEach((col, r) => {
-    if (!col) return;
-    const real = col.filter((n) => !n.dummy);
-    const w = real.length ? Math.max(...real.map((n) => byId.get(n).w)) : 24;
-    colX[r] = x; colW[r] = w;
-    for (const n of real) byId.get(n).x = x;
-    x += w + BLUEPRINT_GAP_X;
-  });
-  for (const col of cols) { if (!col) continue; let y = 0; for (const n of col) { const v = V(n); v.y = y; y += v.h + BLUEPRINT_GAP_Y; } }
-  return { colX, colW };
-}
 function isExecNode(n) { return n.dummy ? n.exec : Boolean(n.execIn || n.execOut || (n.execOuts && n.execOuts.length)); }
-function pushTo(map, key, value) { if (!map.has(key)) map.set(key, []); map.get(key).push(value); }
-function meanOf(vals) { return vals.reduce((a, b) => a + b, 0) / vals.length; }
-function medianOf(vals) { return vals.sort((a, b) => a - b)[Math.floor((vals.length - 1) / 2)]; }
-function arrangeBlueprintColumns(layout, columns, succs, { V, isExec, lane, gapY }) {
-  const pinOf = (n, key) => { const p = V(n).pins[key]; return p ? p.dy : null; };
-  const links = [];
-  for (const [a, list] of succs) for (const s of list) { const pa = pinOf(a, s.ak), pb = pinOf(s.n, s.bk); if (pa !== null && pb !== null) links.push({ a, b: s.n, pa, pb, weight: s.exec ? 2 : 1, exec: s.exec }); }
-  const placed = arrangeLayers(layout, columns, links, {
-    height: (n) => V(n).h,
-    gap: (n) => (n.dummy ? 10 : gapY),
-    floor: (n) => (isExec(n) ? 0 : Math.max(0, lane)),
-    pinned: (n) => n.kind === 'entry',
-    isDummy: (n) => Boolean(n.dummy),
-    candidates: (n, list, forwards) => { if (n.kind === 'closure' && forwards && (succs.get(n) || []).length) return []; if (!isExec(n)) return list; const exec = list.filter((l) => l.exec); return forwards ? (exec.length ? exec : list) : n.dummy ? list : exec; },
-    previous: new Map(columns.flat().map((n) => [n, V(n).y])),
-  });
-  if (placed) for (const [n, y] of placed) V(n).y = y;
+function groupBy(list, keyOf) {
+  const groups = new Map();
+  for (const item of list) pushTo(groups, keyOf(item), item);
+  return groups;
 }
+function pushTo(map, key, value) { if (!map.has(key)) map.set(key, []); map.get(key).push(value); }

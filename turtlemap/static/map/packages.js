@@ -2,7 +2,7 @@ import { boundsOf, overlaps, pathBox, placeCard, setCulled } from '../canvas/sce
 import { DIFF, KIND_ORDER, net } from '../core/data.js';
 import { el, svg } from '../core/dom.js';
 import { combinedDiff, diffBadge, moduleFileName, moduleNodeOf, netLabel, plural } from './boxes.js';
-import { FOLDER_HEAD, layOutRibbons, ribbonGraph } from './ribbons.js';
+import { FOLDER_HEAD, layOutRibbons, placesOf, ribbonGraph } from './ribbons.js';
 export const LIBRARIES = 'libraries';
 const SCENE_PAD = 40;
 const LAYOUTS = new Map();
@@ -14,7 +14,7 @@ export function buildPackageScene(entry, ctx, filter = null) {
   scene.measureLeaves();
   const G = ribbonGraph(tree.root, shownEdges(N, tree));
   const key = layoutKey(G);
-  const result = layOutRibbons(G, { budget: Math.min(1200, 150 + 6 * G.leaves.length), previous: LAYOUTS.get(key) });
+  const result = layOutRibbons(G, LAYOUTS.get(key));
   rememberLayout(key, G);
   scene.draw(G, result);
   return scene;
@@ -271,7 +271,7 @@ function layoutKey(G) {
 }
 function rememberLayout(key, G) {
   LAYOUTS.delete(key);
-  LAYOUTS.set(key, new Map(G.leaves.map((v) => [v.id, v.y])));
+  LAYOUTS.set(key, placesOf(G));
   while (LAYOUTS.size > LAYOUTS_KEPT) LAYOUTS.delete(LAYOUTS.keys().next().value);
 }
 function packageHues(G, wanted) {

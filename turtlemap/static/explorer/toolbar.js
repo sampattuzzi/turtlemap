@@ -2,7 +2,6 @@ import { shapeSVG } from '../blueprint/nodes.js';
 import { DIFF, OVERVIEW } from '../core/data.js';
 import { LINE_KINDS } from '../core/filters.js';
 import { api, el } from '../core/dom.js';
-import { LAYOUT_CHOICES } from '../core/layout.js';
 import { SETTINGS_KEY, applySettings, saveSettings, settings } from '../core/settings.js';
 import { openPalette } from './palette.js';
 import { diffBadge } from '../map/boxes.js';
@@ -51,13 +50,6 @@ function settingsButton(onChange) {
       el('label', { for: 'set-theme' }, 'Background', sel('set-theme', settings.theme, [['dark', 'Dark'], ['light', 'Soft paper'], ['system', 'Match device']], (v) => { settings.theme = v; done(); })),
       el('label', { for: 'set-plain' }, 'Spaced-out names', chk('set-plain', settings.plain, (v) => { settings.plain = v; done(); })),
       el('label', { for: 'set-types' }, 'Type names on pins', chk('set-types', settings.types, (v) => { settings.types = v; done(); }))));
-    pop.append(el('div', { class: 'popover-title popover-section' }, 'Layout'));
-    for (const option of LAYOUT_CHOICES) {
-      const radio = el('input', { type: 'radio', name: 'set-layout', id: `set-layout-${option.key}`, value: option.key, onchange: () => { settings.layout = option.key; saveSettings(); onChange(); } });
-      radio.checked = settings.layout === option.key;
-      pop.append(el('label', { class: 'layout-option', for: radio.id }, radio, el('span', {}, el('b', {}, option.label), el('small', {}, option.hint))));
-    }
-    pop.append(el('small', { class: 'popover-foot' }, 'Applies to function blueprints.'));
   });
   btn.title = 'Settings';
   btn.setAttribute('aria-label', 'Settings');

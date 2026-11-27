@@ -466,14 +466,6 @@ button { cursor: pointer; }
 .btn .cog svg { width: 16px; height: 16px; fill: currentColor; }
 .popover.layout-menu { width: min(330px, calc(100vw - 32px)); gap: 2px; }
 .popover .popover-title { font-size: 0.72em; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-dim); margin-bottom: 4px; }
-.popover label.layout-option { justify-content: flex-start; align-items: flex-start; gap: 10px; padding: 6px 8px; margin: 0 -8px; border-radius: 6px; cursor: pointer; }
-.popover label.layout-option:hover { background: var(--chrome-2); }
-.layout-option input { margin: 3px 0 0; accent-color: var(--accent); }
-.layout-option span { display: grid; gap: 2px; }
-.layout-option b { font-weight: 600; }
-.layout-option small, .popover .popover-foot { color: var(--fg-dim); line-height: 1.35; }
-.popover .popover-foot { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
-.popover .popover-section { margin-top: 12px; }
 .popover .popover-rows { display: grid; gap: 8px; margin-bottom: 2px; }
 .nb.faded { opacity: 0.45; }
 .nb.faded .nb.faded { opacity: 1; }

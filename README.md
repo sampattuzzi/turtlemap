@@ -155,15 +155,12 @@ The cog menu changes the label font (Lexend, Atkinson Hyperlegible, Comic
 Neue or monospace), the text size, the background, and whether names are
 spaced out.
 
-It also picks the layout:
-
-| Layout | What you get |
-|---|---|
-| Balanced (default) | Each node sits near the middle of its wires |
-| Classic | The original layout; more wires bend |
-| Compact | The shortest blueprints, with fewer straight wires |
-| Straighter | Long straight runs, packed tightly |
-| Straightest | The most straight wires, in taller blueprints |
+Blueprints and the package diagram are laid out the same way: a rough first
+pass puts each node in a column by the order things happen, then an optimiser
+(simulated annealing) nudges, swaps and moves nodes between columns to make
+wires shorter and straighter, with fewer crossings, in a smaller picture. It
+runs for a fixed number of steps, so the same code always gets the same
+layout.
 
 ## Privacy
 
@@ -417,8 +414,9 @@ that (the map, blueprints and queries) works only on the model.
 | `web/` | The local server |
 | `static/` | The browser app, as plain JavaScript modules |
 | `static/core/graph.js` | The browser's one graph of the project: packages down to fields, with function bodies attached as they load, and edges lifted to whatever is on screen |
+| `static/core/anneal.js` | The optimiser both layouts share |
 | `static/map/` | The package diagram; `ribbons.js` lays it out |
-| `static/blueprint/` | The function blueprints |
+| `static/blueprint/` | The function blueprints; `layout.js` lays them out |
 | `updates/` | Updates Turtlemap itself from `main` |
 | `app.py` | The `turtlemap` command |
 | `agent.py`, `mcp.py` | The `turtlemap-agent` and `turtlemap-mcp` commands |
