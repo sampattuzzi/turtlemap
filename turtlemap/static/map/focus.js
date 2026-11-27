@@ -1,4 +1,5 @@
 import { DIFF, clearNetCache, isTestPath, net } from '../core/data.js';
+import { LIBRARIES, moduleCount } from './packages.js';
 import { showAnyway } from '../core/filters.js';
 import { saveSettings, settings } from '../core/settings.js';
 export function resetNet() { clearNetCache(); FOCUS_CACHE.clear(); }
@@ -38,36 +39,27 @@ export function relatedTo(unitId) {
   FOCUS_CACHE.set(unitId, filter);
   return filter;
 }
-export function netDefaultExpanded(path) { const n = net().nodes.get(`mod:${path}`); return new Set(n ? net().chain(n.id).slice(1).map((x) => x.id) : []); }
 const SIDE_PACKAGES = /^(tests?|testing|docs?|examples?|scripts?|benchmarks?|tools?|\.?venv|build|dist)$/i;
-function moduleCount(n) { return n.kind === 'module' ? 1 : n.children.reduce((sum, k) => sum + (k.kind === 'package' || k.kind === 'module' ? moduleCount(k) : 0), 0); }
-export function startExpanded() {
-  const changed = DIFF ? changedExpansion(Object.keys(DIFF.files)) : null;
-  if (changed && changed.size) return changed;
-  const ex = new Set();
-  let n = net().root;
-  for (let i = 0; i < 8; i++) {
-    const pick = dominantChild(n);
-    if (!pick || !pick.children.length || (pick.kind === 'module' && ex.size)) break;
-    ex.add(pick.id);
-    n = pick;
-    if (codeChildren(pick).length > 1) break;
+const MODULES_AT_FIRST = 60;
+const MODULES_AT_LEAST = 15;
+export function startFolded() {
+  const N = net();
+  const changed = DIFF ? new Set(Object.keys(DIFF.files).map((path) => `mod:${path}`)) : new Set();
+  const packages = [...N.nodes.values()].filter((n) => n.kind === 'package');
+  const holdsChange = (p) => [...changed].some((id) => N.contains(p.id, id));
+  const order = packages.sort((a, b) => Number(holdsChange(a)) - Number(holdsChange(b)) || Number(SIDE_PACKAGES.test(b.name)) - Number(SIDE_PACKAGES.test(a.name)) || b.depth - a.depth || moduleCount(b) - moduleCount(a));
+  const folded = new Set([LIBRARIES]);
+  let shown = [...N.nodes.values()].filter((n) => n.kind === 'module').length + 1;
+  for (const p of order) {
+    if (shown <= MODULES_AT_FIRST) break;
+    const inside = shownInside(p, folded);
+    if (N.chain(p.id).some((a) => folded.has(a.id)) || shown - inside + 1 < MODULES_AT_LEAST) continue;
+    shown -= inside - 1;
+    for (const q of packages) if (N.contains(p.id, q.id)) folded.delete(q.id);
+    folded.add(p.id);
   }
-  return ex;
+  return folded;
 }
-function changedExpansion(changed) {
-  const ex = new Set();
-  for (const path of changed) {
-    const chain = net().chain(`mod:${path}`);
-    for (const n of chain.slice(1, changed.length <= 12 ? undefined : -1)) if (n.children.length) ex.add(n.id);
-  }
-  return ex;
-}
-function codeChildren(n) {
-  return n.children.filter((k) => k.kind === 'package' || k.kind === 'module');
-}
-function dominantChild(n) {
-  const main = codeChildren(n).filter((k) => !SIDE_PACKAGES.test(k.name)).sort((a, b) => moduleCount(b) - moduleCount(a));
-  if (main.length === 1) return main[0];
-  return main.length > 1 && moduleCount(main[0]) > 0.6 * main.reduce((s, k) => s + moduleCount(k), 0) ? main[0] : null;
+function shownInside(p, folded) {
+  return p.children.reduce((sum, k) => sum + (k.kind === 'module' ? 1 : k.kind === 'package' ? (folded.has(k.id) ? 1 : shownInside(k, folded)) : 0), 0);
 }

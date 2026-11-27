@@ -22,7 +22,7 @@ function foldedRows(effective, refresh) {
     if (!ol) { outline.rows.push({ text: '    reading…', dim: true }); ensureOutline(m.path).then(() => refreshSoon(refresh), () => {}); continue; }
     for (const it of ol) outline.add(it, m.path, null);
   }
-  if (open.length > PANEL_MODULES) outline.rows.push({ text: `    … and ${open.length - PANEL_MODULES} more open modules. Fold some boxes on the map to read their code here.`, dim: true });
+  if (open.length > PANEL_MODULES) outline.rows.push({ text: `    … and ${open.length - PANEL_MODULES} more open modules.`, dim: true });
   return outline.rows;
 }
 const ITEM_FOLDS = new Map([
@@ -90,8 +90,8 @@ function explainComparison(ex, ctx) {
   ex.append(list);
 }
 function explainFoldedCode(ex) {
-  ex.append(el('div', { class: 'kind' }, 'Code'), el('h2', {}, 'Folded to match the map'));
-  ex.append(el('p', {}, 'This is the real code of every open module, folded to the level you have expanded. Click a class line to expand or fold it here and in the map. Click a def line to open its dataflow view.'));
+  ex.append(el('div', { class: 'kind' }, 'Code'), el('h2', {}, 'Pick a module'));
+  ex.append(el('p', {}, 'Click a module on the map to read its code here, folded to its classes and functions. Click a class line to unfold it. Click a def line to open its dataflow view.'));
   if (OVERVIEW) ex.append(el('p', { style: 'color:var(--fg-dim);font-size:0.9em' }, `${OVERVIEW.root} · ${plural(OVERVIEW.modules.length, 'module')}${OVERVIEW.failures && OVERVIEW.failures.length ? ` · ${OVERVIEW.failures.length} could not be read` : ''}`));
 }
 function foldedRowEl(r, selId, ctx, effective, paint) {

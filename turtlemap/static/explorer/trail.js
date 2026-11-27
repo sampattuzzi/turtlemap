@@ -1,5 +1,6 @@
 import { DIFF, lookup, net } from '../core/data.js';
-import { startExpanded } from '../map/focus.js';
+import { startFolded } from '../map/focus.js';
+import { LIBRARIES } from '../map/packages.js';
 class Trail {
   constructor(start) {
     this.start = start;
@@ -31,9 +32,9 @@ class Trail {
   }
 }
 export function startingTrail(saved) {
-  const expanded = startExpanded();
-  const focus = firstChangeFocus(expanded);
-  const trail = new Trail({ view: 'net', expanded, focus: focus ? focus.id : null, open: new Set() });
+  const folded = startFolded();
+  const focus = firstChangeFocus(folded);
+  const trail = new Trail({ view: 'net', folded, focus: focus ? focus.id : null, open: new Set() });
   const restored = saved && restoredEntry(saved.entry);
   if (restored) {
     trail.entries.push(restored);
@@ -41,12 +42,12 @@ export function startingTrail(saved) {
   }
   return { trail, restored };
 }
-function firstChangeFocus(expanded) {
+function firstChangeFocus(folded) {
   const firstChange = DIFF && Object.keys(DIFF.files).sort()[0];
   if (!firstChange) return null;
-  const id = `mod:${firstChange}`;
-  const shown = (n) => (n.id === id ? net().chain(n.id).slice(1, -1).every((a) => expanded.has(a.id)) : expanded.has(n.id));
-  return [...net().chain(id)].reverse().find(shown);
+  const chain = net().chain(`mod:${firstChange}`).slice(1);
+  const hidden = chain.findIndex((n) => folded.has(n.id));
+  return hidden < 0 ? chain[chain.length - 1] : chain[hidden];
 }
 function restoredEntry(entry) {
   if (!entry || typeof entry !== 'object') return null;
@@ -61,7 +62,7 @@ function restoredFunction(entry, open) {
   return sym && sym.kind === 'function' ? { view: 'fn', path: entry.path, sym: entry.sym, open } : null;
 }
 function restoredMap(entry, open) {
-  if (!Array.isArray(entry.expanded)) return null;
+  if (!Array.isArray(entry.folded)) return null;
   const known = (id) => typeof id === 'string' && net().allIds.has(id);
-  return { view: 'net', expanded: new Set(entry.expanded.filter(known)), focus: known(entry.focus) ? entry.focus : null, related: known(entry.related) ? entry.related : null, open };
+  return { view: 'net', folded: new Set(entry.folded.filter((id) => id === LIBRARIES || known(id))), focus: known(entry.focus) ? entry.focus : null, related: known(entry.related) ? entry.related : null, open };
 }

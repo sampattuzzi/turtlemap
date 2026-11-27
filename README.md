@@ -30,31 +30,34 @@ or a recent one, on the start screen. To try it on itself, run
 
 ### The map
 
-Your code as nested boxes: packages, modules, classes, functions, fields and
-constants. Click a box to open it.
+A package diagram: folders as nested frames, modules as boxes, and the
+dependencies between modules as ribbons. Click a folder's heading to fold it
+into one box, and click a folded folder to open it again. Large projects start
+with their side folders (such as `tests/`) and deepest folders folded.
 
-Arrows show how things depend on each other. Each arrow is one of seven kinds:
-**inherits**, **has a field of**, **creates**, **calls**, **reads**, **writes**
-and **uses**.
+- **Ribbons flow left to right**, from the module that depends to the one it
+  depends on. Modules sit in columns by how deep they are in the chain.
+- **A ribbon's width** shows how many dependencies it stands for, counted
+  between the classes and functions inside each module: inherits, has a field
+  of, creates, calls, reads, writes and uses. **⚲ Filter** picks which kinds
+  count.
+- **Every ribbon into one module merges into one trunk**, coloured for that
+  module. Hues follow the folder tree, so modules in the same folder get
+  neighbouring colours.
+- **Long ribbons run underneath.** A ribbon that skips a column drops below
+  the boxes into a lane and rises into its destination.
+- **A real cycle** is drawn as a thin grey line looping back.
+- **Hover** over a module or folder to light up its ribbons; the rest fade.
+  **Click** a module to keep them lit and to read its code in the panel
+  below. Click the background to let go.
+- **Hover over a ribbon** to see the dependencies it is made of. Click it to
+  zoom to both ends.
+- **Open a module from the left panel** to show only the modules it uses or
+  is used by. **✕ Show all** brings the rest back.
+- **Libraries** share one box. Click it to open it into one box per library.
 
-- **Thicker arrows** stand for more dependencies. One-off links are faded.
-- **Arrows only join neighbours**, boxes inside the same parent. Inside an open
-  box, faint feeder lines carry each dependency to the box's edge.
-- **Hover** over an item to see its own links: a direct line runs from it to
-  each box it links, however deep, and the rest of the map fades. Select a
-  closed box or a field to keep its lines while you move around; click the
-  background to let go. Hover over an arrow to see what it is made of.
-- **Click an arrow**, or a feeder line inside an open box, to open the boxes
-  at both its ends and zoom out until both fit on screen.
-- **Shortcuts** (A → C when A already reaches C through B) are drawn very
-  faintly, and their card names the way round.
-- **Arrows flow left to right.** Only a real cycle loops back, in its own lane.
-- **Select a module** to hide every module that is not linked to it.
-  **✕ Show all** brings them back.
-- **Libraries** are one box each, and the standard library gets one box.
-
-The code panel under the map shows the real source, folded to match what you
-have opened.
+The code panel under the map shows the code of the module you clicked, folded
+to its classes and functions.
 
 ### Filters
 
@@ -140,8 +143,8 @@ them.
 
 - Press `/` to find any file, class or function.
 - Click a folder, file, class or function in the left panel to go to it.
-  The ▸ arrow beside a folder opens or closes it, in the panel and on the map
-  together: both trees always show exactly what the map has open.
+  The ▸ arrow beside a folder opens or folds it, in the panel and on the map
+  together: both trees always show the same folders open.
 - When you hover over something, lines that lead off screen get a marker on
   the edge of the view. Click a marker to glide there.
 - The **Code** tab hides, shows or resizes the code panel.
@@ -161,8 +164,6 @@ It also picks the layout:
 | Compact | The shortest blueprints, with fewer straight wires |
 | Straighter | Long straight runs, packed tightly |
 | Straightest | The most straight wires, in taller blueprints |
-
-On the map, Balanced and Classic look the same.
 
 ## Privacy
 
@@ -249,11 +250,11 @@ The colours appear on the map, the file tree, blueprints and the code. A call
 turns yellow when the function it calls changed. The panel under the map lists
 every changed file.
 
-The map's lines glow with the same colours, with the badge in front of their
-label: a dependency the change added, one it removed (drawn faded), or one whose
-kind changed. A line that stands for several dependencies turns yellow when
-only some of them changed. Hover over it, or over a box at either end, to see
-which ones. Lines are compared for the files that changed.
+The map's ribbons take the same colours, and every unchanged ribbon turns
+grey: a dependency the change added, one it removed, or one whose kind
+changed. A ribbon that stands for several dependencies turns yellow when only
+some of them changed. Hover over it to see which ones. Lines are compared for
+the files that changed.
 
 ### Ticking off what you have reviewed
 
@@ -261,8 +262,8 @@ While comparing, the left panel has a **Changes** tab that lists only the
 changed files, like a pull request.
 
 - Each file opens into the parts that changed: functions, methods, class
-  bodies and module-level code. Opening a file or class here opens it on the
-  map too, and the other way round.
+  bodies and module-level code. Opening a file or class here shows it on the
+  map too.
 - Tick a part, file or folder to mark it seen. The ✓ **Seen** box does the
   same for what you are looking at.
 - If a part changes again later, only that part is unticked.
@@ -415,6 +416,9 @@ that (the map, blueprints and queries) works only on the model.
 | `review/` | Stores comments and works out where they point |
 | `web/` | The local server |
 | `static/` | The browser app, as plain JavaScript modules |
+| `static/core/graph.js` | The browser's one graph of the project: packages down to fields, with function bodies attached as they load, and edges lifted to whatever is on screen |
+| `static/map/` | The package diagram; `ribbons.js` lays it out |
+| `static/blueprint/` | The function blueprints |
 | `updates/` | Updates Turtlemap itself from `main` |
 | `app.py` | The `turtlemap` command |
 | `agent.py`, `mcp.py` | The `turtlemap-agent` and `turtlemap-mcp` commands |

@@ -1,8 +1,8 @@
 import { KIND } from './nodes.js';
-import { DIFF, lookup, net } from '../core/data.js';
+import { DIFF, lookup, net, symbolId } from '../core/data.js';
 import { baseName, el, speak } from '../core/dom.js';
 import { codePainter } from '../core/highlight.js';
-import { DIFF_SIGN, DIFF_WORD } from '../map/boxes.js';
+import { DIFF_SIGN, DIFF_WORD, refOf } from '../map/boxes.js';
 import { linkSections } from '../map/links.js';
 const DESCRIPTIONS = new Map([
   ['entry', (n, ins, outs) => `The function starts here. It takes ${outs.join(', ') || 'nothing'}.`],
@@ -56,12 +56,8 @@ function explainNode(ex, sym, node, ctx) {
 }
 function explainSymbol(ex, sym, ctx) {
   ex.append(el('div', { class: 'kind' }, symbolKindLabel(sym)), el('h2', {}, sym.qual));
-  const node = net().nodes.get(symbolNodeId(sym));
+  const node = net().nodes.get(symbolId(refOf(sym)));
   if (node) linkSections(ex, node, { go: (ref) => ctx.activate(ref, null, null), show: ctx.show });
-}
-function symbolNodeId(sym) {
-  if (sym.kind !== 'function') return `cls:${sym.file}:${sym.qual}`;
-  return `${sym.owner ? 'm' : 'fn'}:${sym.file}:${sym.qual}`;
 }
 function symbolKindLabel(sym) {
   if (sym.kind === 'function') return sym.owner ? `method of ${sym.owner}` : 'function';

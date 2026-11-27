@@ -57,7 +57,7 @@ function settingsButton(onChange) {
       radio.checked = settings.layout === option.key;
       pop.append(el('label', { class: 'layout-option', for: radio.id }, radio, el('span', {}, el('b', {}, option.label), el('small', {}, option.hint))));
     }
-    pop.append(el('small', { class: 'popover-foot' }, 'Applies to function blueprints and the map. On the map, Balanced and Classic are the same.'));
+    pop.append(el('small', { class: 'popover-foot' }, 'Applies to function blueprints.'));
   });
   btn.title = 'Settings';
   btn.setAttribute('aria-label', 'Settings');

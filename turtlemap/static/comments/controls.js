@@ -93,11 +93,9 @@ export class CommentControls {
     const { trail, scene } = this.explorer;
     revealHidden(anchored);
     const ids = anchored.filter((i) => net().nodes.has(i));
-    const onScreen = trail.current.view === 'net' && ids.length && ids.every((i) => scene.netRects && scene.netRects.has(i));
+    const onScreen = trail.current.view === 'net' && ids.length && ids.every((i) => scene.netRects && net().chain(i).some((n) => scene.netRects.has(n.id)));
     if (onScreen || !ids.length) { this.redecorate(); return; }
-    const expanded = new Set(trail.lastMap().expanded);
-    for (const i of ids) net().chain(i).slice(1, -1).forEach((x) => expanded.add(x.id));
-    this.explorer.open({ view: 'net', expanded, focus: ids[0], related: null, open: new Set() });
+    this.explorer.open(this.explorer.mapShowing(ids, ids[0], null));
   }
   showInBlueprint(anchor) {
     const { trail } = this.explorer;
@@ -107,9 +105,7 @@ export class CommentControls {
   }
   showFile(path) {
     revealHidden([`mod:${path}`]);
-    const expanded = new Set(this.explorer.trail.lastMap().expanded);
-    net().chain(`mod:${path}`).slice(1).forEach((x) => expanded.add(x.id));
-    this.explorer.open({ view: 'net', expanded, focus: `mod:${path}`, related: null, open: new Set() });
+    this.explorer.open(this.explorer.mapShowing([`mod:${path}`], `mod:${path}`, null));
   }
   redecorate() {
     this.explorer.chrome();

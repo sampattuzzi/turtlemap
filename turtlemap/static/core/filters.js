@@ -83,7 +83,7 @@ export function kindCounts(nodes, edges) {
 }
 export function filterNet(root, nodes, edges) {
   const f = currentFilter();
-  if (presetKey(f) === 'all') return { edges, autoOpen: new Set() };
+  if (presetKey(f) === 'all') return edges;
   const boxes = new Set(f.boxes), lines = new Set(f.lines);
   const chosen = new Set([...nodes.values()].filter((n) => SHOWN_ANYWAY.has(n.id) || isChosen(n, boxes)).map((n) => n.id));
   const shownEdges = edges.flatMap((e) => {
@@ -94,8 +94,7 @@ export function filterNet(root, nodes, edges) {
   const shown = withAncestors(nodes, [...chosen, ...shownEdges.flatMap((e) => [e.from, e.to])]);
   for (const n of nodes.values()) n.faded = !CONTAINERS.has(n.kind) && !chosen.has(n.id) && (f.fade || shown.has(n.id));
   if (!f.fade) prune(root, nodes, shown);
-  const autoOpen = new Set([...nodes.values()].filter((n) => n.kind === 'class' && n.children.length && n.children.every((k) => MEMBERS.has(k.kind))).map((n) => n.id));
-  return { edges: shownEdges, autoOpen };
+  return shownEdges;
 }
 function isChosen(n, boxes) {
   const kind = boxKindOf(n);

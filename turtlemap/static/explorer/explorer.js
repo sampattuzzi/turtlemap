@@ -15,9 +15,9 @@ import { filterButton, filterChip, labelFilterButton, lineFilter } from './filte
 import { shell } from './toolbar.js';
 import { startingTrail } from './trail.js';
 import { netLabel, plural, refOf } from '../map/boxes.js';
-import { focusUnitOf, netDefaultExpanded, relatedTo, resetNet, revealHidden } from '../map/focus.js';
+import { focusUnitOf, relatedTo, resetNet, revealHidden } from '../map/focus.js';
+import { LIBRARIES, buildPackageScene } from '../map/packages.js';
 import { netPanel } from '../map/panel.js';
-import { buildNetScene, effectiveOpen } from '../map/scene.js';
 export class Explorer {
   constructor(root, session) {
     this.session = session;
@@ -62,22 +62,24 @@ export class Explorer {
     const sym = ref.sym ? lookup(ref) : null;
     if (sym && sym.kind === 'function') { this.open({ view: 'fn', path: ref.path, sym: ref.sym, open: new Set() }); return; }
     if (ref.sym) { this.showOnMap(`cls:${ref.path}:${ref.sym}`); return; }
-    const target = `mod:${ref.path}`;
-    revealHidden([target]);
-    this.open({ view: 'net', expanded: netDefaultExpanded(ref.path), focus: target, related: focusUnitOf(target), open: new Set() }, target);
+    this.showOnMap(`mod:${ref.path}`);
   }
   showOnMap(id) {
     setCommentPick(null);
     revealHidden([id]);
-    const expanded = new Set(this.trail.lastMap().expanded);
-    net().chain(id).slice(1).forEach((x) => expanded.add(x.id));
-    this.open({ view: 'net', expanded, focus: id, related: focusUnitOf(id), open: new Set() }, id);
+    this.open(this.mapShowing([id], id, focusUnitOf(id)), id);
   }
   goToFolder(folder) {
     const target = `pkg:${folder}`;
     revealHidden([target]);
-    const expanded = new Set(net().chain(target).slice(1).map((x) => x.id));
-    this.open({ view: 'net', expanded, focus: target, related: focusUnitOf(target), open: new Set() }, target);
+    const entry = this.mapShowing([target], target, focusUnitOf(target));
+    entry.folded.delete(target);
+    this.open(entry, target);
+  }
+  mapShowing(ids, focus, related) {
+    const folded = new Set(this.trail.lastMap().folded);
+    for (const id of ids) for (const n of net().chain(id).slice(1, -1)) folded.delete(n.id);
+    return { view: 'net', folded, focus, related, open: new Set() };
   }
   filterChanged() {
     resetNet();
@@ -95,12 +97,16 @@ export class Explorer {
     this.render(true);
   }
   toggleNet(id) {
-    const target = net().nodes.get(id);
-    if (target && target.children.length) {
-      const ex = this.trail.current.expanded;
-      if (ex.has(id)) ex.delete(id); else ex.add(id);
+    const target = id === LIBRARIES ? { kind: 'package' } : net().nodes.get(id);
+    if (!target) return;
+    const c = this.trail.current;
+    if (target.kind === 'package') {
+      if (!c.folded.delete(id)) c.folded.add(id);
+      this.keepInPlace(id, () => this.render(true));
+    } else if (target.kind === 'class') {
+      if (!c.open.delete(id)) c.open.add(id);
+      this.panel();
     }
-    this.keepInPlace(id, () => this.render(true));
   }
   keepInPlace(id, change) {
     const vp = this.vp;
@@ -110,14 +116,7 @@ export class Explorer {
     const after = this.scene && this.scene.netRects && this.scene.netRects.get(id);
     if (before && after) { vp.x = x0 - after.x * vp.s; vp.y = y0 - after.y * vp.s; vp.apply(); }
   }
-  followArrow(anchor, ends) {
-    const N = net();
-    const expanded = this.trail.current.expanded;
-    for (const id of ends) {
-      if (this.scene.effective.has(id) || !N.nodes.get(id).children.length) continue;
-      if (N.autoOpen.has(id)) expanded.delete(id); else expanded.add(id);
-    }
-    this.keepInPlace(anchor, () => this.render(true));
+  followArrow(ends) {
     const boxes = ends.map((id) => this.scene.netRects.get(id)).filter(Boolean);
     if (!boxes.length) return;
     this.vp.frame(this.scene, boundsOf(boxes));
@@ -158,18 +157,11 @@ export class Explorer {
       go: this.goTo,
       show: (id) => this.showOnMap(id),
       toggle: (id) => this.toggleNet(id),
-      followArrow: (anchor, ends) => this.followArrow(anchor, ends),
+      followArrow: (ends) => this.followArrow(ends),
       selectedId: () => this.trail.selectedId(),
       select: (id) => {
         this.trail.selected = id;
         if (this.scene && this.scene.pin) this.scene.pin(id);
-        const unit = focusUnitOf(id);
-        const c = this.trail.current;
-        if (unit && unit !== c.related) {
-          c.related = unit;
-          c.refocused = true;
-          queueMicrotask(() => { if (this.trail.current.refocused) this.keepInPlace(id, () => this.render(true)); });
-        }
         this.panel();
         showOnPhone(this.ui.right);
       },
@@ -178,7 +170,7 @@ export class Explorer {
   panel() {
     const { ui, trail } = this;
     if (trail.current.view !== 'fn') {
-      netPanel(ui.right, trail.selectedId(), this.netCtx, this.scene && this.scene.effective);
+      netPanel(ui.right, trail.selectedId(), this.netCtx, codeShown(trail.current, trail.selectedId()));
       this.comments.decorate();
       return;
     }
@@ -189,16 +181,13 @@ export class Explorer {
   }
   chrome() { paintFrame(this.ui, this.trail.current, this.goTo, this.folds()); }
   folds() {
-    const N = net(), map = this.trail.lastMap();
-    const open = effectiveOpen(N, map.expanded);
-    const isOpen = (id) => { const n = N.nodes.get(id); return n && n.children.length ? open.has(id) : map.expanded.has(id); };
+    const map = this.trail.lastMap();
+    const isOpen = (id) => !net().chain(id).slice(1).some((n) => map.folded.has(n.id));
     return { isOpen, toggle: (id) => this.foldFromTree(map, isOpen, id) };
   }
   foldFromTree(map, isOpen, id) {
-    const N = net();
-    const flip = (x) => { if (map.expanded.has(x)) map.expanded.delete(x); else map.expanded.add(x); };
-    if (isOpen(id)) flip(id);
-    else (N.nodes.has(id) ? N.chain(id).slice(1).map((n) => n.id) : [id]).filter((x) => !isOpen(x)).forEach(flip);
+    if (isOpen(id)) map.folded.add(id);
+    else for (const n of net().chain(id).slice(1)) map.folded.delete(n.id);
     if (this.trail.current === map) this.keepInPlace(id, () => this.render(true));
     else this.chrome();
   }
@@ -223,9 +212,8 @@ export class Explorer {
     const vp = this.vp;
     const isNet = c.view === 'net';
     const keep = { x: vp.x, y: vp.y, s: vp.s };
-    c.refocused = false;
     const filter = isNet ? relatedTo(c.related) : null;
-    this.scene = isNet ? buildNetScene(c.expanded, this.netCtx, filter) : buildFunctionScene(lookup(c), this.blueprints.context('root'));
+    this.scene = isNet ? buildPackageScene(c, this.netCtx, filter) : buildFunctionScene(lookup(c), this.blueprints.context('root'));
     placeMapChips(this.ui.vpHost, isNet ? filterChip(() => this.filterChanged()) : null, filter, () => this.showEverything());
     vp.setScene(this.scene, keepView ? 'none' : 'start');
     if (keepView) { Object.assign(vp, keep); vp.apply(); }
@@ -240,6 +228,15 @@ export class Explorer {
     const sizes = this.scene.sizes || this.scene.nodes.map((n) => ({ el: n.el, w: n.w, h: n.h }));
     if (this.relayouts < 3) watchSizes(sizes, () => { if (this.trail.current === c) this.render('relayout'); });
   }
+}
+function codeShown(c, selectedId) {
+  const shown = new Set(c.open || []);
+  if (!selectedId) return shown;
+  const chain = net().chain(selectedId);
+  const module = chain.find((n) => n.kind === 'module');
+  if (module) shown.add(module.id);
+  for (const n of chain) if (n.kind === 'class') shown.add(n.id);
+  return shown;
 }
 function refreshedPick(selected) {
   if (!selected || !selected.n || !selected.sym) return selected;
@@ -276,7 +273,7 @@ function paintFrame(ui, c, onPick, folds) {
 }
 function crumbExtra(c, focusPath) {
   const isNet = c.view === 'net';
-  const note = isNet ? `· ${c.expanded.size} open` : c.open.size ? `· ${c.open.size} unfolded` : null;
+  const note = isNet ? (c.folded.size ? `· ${c.folded.size} folded` : null) : c.open.size ? `· ${c.open.size} unfolded` : null;
   const units = isNet ? (focusPath ? fileUnits(focusPath) : []) : symbolUnits(c);
   const seen = units.length ? el('label', { class: 'seen-toggle', title: 'Tick once you have reviewed these changes' }, seenBox(units, isNet ? baseName(focusPath) : c.sym), isNet ? 'File seen' : 'Seen') : null;
   return note || seen ? el('span', { class: 'crumb-extra' }, note, seen) : null;

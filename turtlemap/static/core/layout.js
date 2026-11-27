@@ -5,7 +5,6 @@ export const LAYOUT_CHOICES = [
   { key: 'compact', label: 'Compact', hint: 'The least wire travel and the shortest blueprints, but fewer wires run straight.' },
   { key: 'straighter', label: 'Straighter', hint: 'Locks chains of wires into straight runs, then packs them as tightly as it can.' },
   { key: 'straightest', label: 'Straightest', hint: 'The most straight wires. Blueprints grow taller and the other wires travel further.' },
-  { key: 'solver', label: 'Solver (map, experimental)', hint: 'Polishes the map for about a second against seven rules: short lines, few crossings, lines clear of boxes and folder headings, no overlaps, small folders. Blueprints use Balanced.' },
 ];
 export const ARRANGED_LAYOUTS = new Set(['compact', 'straighter', 'straightest']);
 const LAYOUT_UNITS = 2;

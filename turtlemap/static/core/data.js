@@ -1,4 +1,5 @@
 import { LINE_KINDS, filterNet, filterProject, kindCounts } from './filters.js';
+import { Graph } from './graph.js';
 import { settings } from './settings.js';
 export let OVERVIEW = null;
 export let DIFF = null;
@@ -6,6 +7,12 @@ export let FILES = {};
 export const FUNCTIONS = new Map();
 export const fnKey = (ref) => `${ref.path}::${ref.sym}`;
 export function lookup(ref) { if (!ref) return null; const f = FILES[ref.path]; return f ? f.index[ref.sym] || null : null; }
+export function symbolId(ref) {
+  const sym = lookup(ref);
+  if (!sym) return null;
+  if (sym.kind !== 'function') return `cls:${ref.path}:${ref.sym}`;
+  return `${sym.owner ? 'm' : 'fn'}:${ref.path}:${ref.sym}`;
+}
 export const KIND_ORDER = LINE_KINDS.map((l) => l.key);
 let NET_CACHE = null;
 let EDGES = new Map();
@@ -39,28 +46,25 @@ const TEST_PATH = /(^|\/)(tests?|testing|__tests__)\/|(^|\/)test_[^/]*\.py$|_tes
 export function isTestPath(path) { return TEST_PATH.test(path) || TEST_PATH.test(`${path}/`); }
 export function net() {
   if (NET_CACHE) return NET_CACHE;
-  const { nodes, root, add } = netTree();
-  for (const path of Object.keys(FILES).sort()) if (settings.tests || !isTestPath(path)) addProjectFile(add, root, path);
-  addLibraries(add, root);
-  if (DIFF) settleDiffs(root);
-  const allEdges = netLinks(nodes);
-  if (!settings.tests) dropTestOnlyLibraries(root, nodes, allEdges);
-  const counts = kindCounts(nodes, allEdges);
-  const allIds = new Set(nodes.keys());
-  const { edges, autoOpen } = filterNet(root, nodes, allEdges);
-  NET_CACHE = { nodes, root, edges, chain: chainLookup(nodes), counts, allIds, autoOpen };
+  const graph = new Graph(OVERVIEW ? OVERVIEW.name : 'project');
+  const add = graph.add.bind(graph);
+  for (const path of Object.keys(FILES).sort()) if (settings.tests || !isTestPath(path)) addProjectFile(add, graph.root, path);
+  addLibraries(add, graph.root);
+  if (DIFF) settleDiffs(graph.root);
+  const allEdges = netLinks(graph.nodes);
+  if (!settings.tests) dropTestOnlyLibraries(graph.root, graph.nodes, allEdges);
+  graph.counts = kindCounts(graph.nodes, allEdges);
+  graph.allIds = new Set(graph.nodes.keys());
+  graph.edges = filterNet(graph.root, graph.nodes, allEdges);
+  for (const [key, data] of FUNCTIONS) attachBody(graph, key, data);
+  NET_CACHE = graph;
   return NET_CACHE;
 }
-function netTree() {
-  const nodes = new Map();
-  const root = { id: 'root', kind: 'root', name: OVERVIEW ? OVERVIEW.name : 'project', depth: 0, children: [], parent: null };
-  nodes.set('root', root);
-  const add = (id, kind, name, parent, extra = {}) => {
-    if (nodes.has(id)) return nodes.get(id);
-    const n = { id, kind, name, parent, depth: parent.depth + 1, children: [], ...extra };
-    parent.children.push(n); nodes.set(id, n); return n;
-  };
-  return { nodes, root, add };
+export function attachLoadedBody(key, data) { if (NET_CACHE) attachBody(NET_CACHE, key, data); }
+function attachBody(graph, key, data) {
+  const at = key.indexOf('::');
+  const id = symbolId({ path: key.slice(0, at), sym: key.slice(at + 2) });
+  if (id) graph.attachBody(id, data, symbolId);
 }
 function addProjectFile(add, root, path) {
   const parts = path.split('/');
@@ -113,10 +117,6 @@ function lineChanges() {
   const removed = table.rows.map((row) => Object.assign(link(table.ids[row[0]], table.ids[row[1]], row[2], row[3]), { diff: 'removed' }));
   LINE_CHANGES = { diff: DIFF, removed, statusOf: (e) => (byFrom.has(e.from) && byFrom.get(e.from).get(e.to)) || null };
   return LINE_CHANGES;
-}
-function chainLookup(nodes) {
-  const chains = new Map();
-  return (id) => { if (chains.has(id)) return chains.get(id); const out = []; for (let n = nodes.get(id); n; n = n.parent) out.unshift(n); chains.set(id, out); return out; };
 }
 function dropTestOnlyLibraries(root, nodes, edges) {
   const wanted = new Set(edges.flatMap((e) => [e.from, e.to]));

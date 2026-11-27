@@ -5,28 +5,16 @@ export function plain(name) {
   if (name === '__init__' || name === 'constructor') return 'set up';
   return name.replace(/\bself\./g, '').replace(/(^|[.\s])_+/g, '$1').replace(/_+/g, ' ').replace(/\./g, ' › ');
 }
-export function routedPath(ax, ay, bx, by, via, minDx = 36) {
+function routedPath(ax, ay, bx, by, via, minDx = 36) {
   let d = `M${ax},${ay}`, cx = ax, cy = ay;
   const curveTo = (x, y) => { const dx = Math.max(Math.min(minDx, Math.abs(x - cx) * 0.5 + 12), Math.abs(x - cx) * 0.5); d += ` C${cx + dx},${cy} ${x - dx},${y} ${x},${y}`; cx = x; cy = y; };
   for (const p of via) { curveTo(p.x, p.y); d += ` L${p.x + p.w},${p.y}`; cx = p.x + p.w; }
   curveTo(bx, by);
   return d;
 }
-export function dropPath(ax, ay, bx, by) {
+function dropPath(ax, ay, bx, by) {
   const down = Math.max(18, Math.min(60, (by - ay) * 0.6)), dx = Math.max(24, (bx - ax) * 0.5);
   return `M${ax},${ay} C${ax},${ay + down} ${bx - dx},${by} ${bx},${by}`;
-}
-export function loopBackPath(ax, ay, bx, by, via, turn = LOOP_TURN) {
-  const first = via[0], right = first.x + first.w;
-  const bend = (y0, y1) => turn * Math.min(1, 0.45 + Math.abs(y1 - y0) / 160);
-  let d = `M${ax},${ay} L${right},${ay} C${right + bend(ay, first.y)},${ay} ${right + bend(ay, first.y)},${first.y} ${right},${first.y} L${first.x},${first.y}`;
-  let cx = first.x, cy = first.y;
-  for (const p of via.slice(1)) {
-    const end = p.x + p.w, dx = Math.max(12, (cx - end) * 0.5);
-    d += ` C${cx - dx},${cy} ${end + dx},${p.y} ${end},${p.y} L${p.x},${p.y}`;
-    cx = p.x; cy = p.y;
-  }
-  return `${d} C${cx - bend(cy, by)},${cy} ${bx - bend(cy, by)},${by} ${bx},${by}`;
 }
 export const overlaps = (a, v) => a.x < v.x + v.w && v.x < a.x + a.w && a.y < v.y + v.h && v.y < a.y + a.h;
 export function pathBox(path) {
@@ -186,7 +174,6 @@ function wireEnds(w, node) {
     title: `${outgoing ? 'Goes to' : 'Comes from'} ${label}`,
   };
 }
-export const LOOP_TURN = 34;
 export function messageScene(text) {
   const box = el('div', { class: 'scene-message' }, text);
   return { el: box, width: 480, height: 80, nodes: [], sizes: [] };

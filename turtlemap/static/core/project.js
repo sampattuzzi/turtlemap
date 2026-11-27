@@ -1,4 +1,4 @@
-import { DIFF, FILES, FUNCTIONS, fnKey, lookup, patchProject, setProject } from './data.js';
+import { DIFF, FILES, FUNCTIONS, attachLoadedBody, fnKey, lookup, patchProject, setProject } from './data.js';
 import { api } from './dom.js';
 import { FOCUS_CACHE } from '../map/focus.js';
 const FUNCTION_REQUESTS = new Map();
@@ -66,6 +66,7 @@ export function ensureFunction(ref) {
       .then((data) => {
         if (FUNCTION_REQUESTS.get(key) !== request) return data;
         FUNCTIONS.set(key, data);
+        attachLoadedBody(key, data);
         const sym = lookup(ref);
         if (sym) sym.codeLines = data.code;
         return data;
