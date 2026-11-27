@@ -22,6 +22,7 @@ or a recent one, on the start screen. To try it on itself, run
 | `folder` | The project to open |
 | `--diff RANGE` | Highlight what changed in a git range ([see below](#comparing-git-revisions)) |
 | `--port N` | Use a fixed port instead of a free one |
+| `--host ADDRESS` | Listen on another address; `0.0.0.0` lets your phone or another computer on the same network open it, and prints the address to use. Anyone on that network with the link can read the code |
 | `--no-open` | Print the address instead of opening your browser |
 | `--no-watch` | Don't redraw the map when source files change |
 | `--no-update` | Don't update Turtlemap itself ([see below](#staying-up-to-date)) |

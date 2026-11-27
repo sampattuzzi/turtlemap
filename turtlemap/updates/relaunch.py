@@ -14,6 +14,7 @@ class Launch:
     root: Path | None
     diff: str | None
     watch: bool
+    host: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,8 @@ def relaunch_arguments(launch: Launch) -> list[str]:
     arguments += [f"--port={launch.port}", "--no-open"]
     if not launch.watch:
         arguments.append("--no-watch")
+    if launch.host:
+        arguments.append(f"--host={launch.host}")
     return arguments
 
 

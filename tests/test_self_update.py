@@ -197,6 +197,12 @@ def test_relaunches_to_the_start_screen_when_nothing_was_open() -> None:
     assert relaunch_arguments(launch) == ["--port=8123", "--no-open"]
 
 
+def test_relaunches_listening_on_the_same_host() -> None:
+    launch = Launch(8123, None, None, watch=True, host="0.0.0.0")
+
+    assert relaunch_arguments(launch) == ["--port=8123", "--no-open", "--host=0.0.0.0"]
+
+
 def make_installed(tmp_path: Path) -> Installed:
     origin = tmp_path / "origin.git"
     upstream = tmp_path / "upstream"

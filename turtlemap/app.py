@@ -1,6 +1,7 @@
 import argparse
 import secrets
 import signal
+import socket
 import threading
 import webbrowser
 from pathlib import Path
@@ -11,6 +12,7 @@ from turtlemap.projects.host import ProjectHost
 from turtlemap.projects.recent import remember_project
 from turtlemap.updates.relaunch import Launch, inherited_tokens, relaunch
 from turtlemap.updates.updater import own_updater, UpdateNotice
+from turtlemap.web.framework import LOOPBACK
 from turtlemap.web.server import start_server
 
 
@@ -29,15 +31,20 @@ def main(argv: list[str] | None = None) -> int:
     notice, updater = (
         (UpdateNotice(), None) if args.no_update else own_updater(restart.set)
     )
-    server = start_server(host, token, args.port, updates=notice)
+    server = start_server(
+        host, token, args.port, updates=notice, interface=args.host or LOOPBACK
+    )
     port = server.server_address[1]
-    address = f"http://127.0.0.1:{port}"
+    address = f"http://{LOOPBACK}:{port}"
     url = f"{address}/?t={token}"
     registry.publish(address, host.agent_token)
     signal.signal(signal.SIGTERM, _stop)
     if tokens.user:
         print("Turtlemap updated itself and started again.", flush=True)
     print(f"Turtlemap is running at {url}", flush=True)
+    if args.host and args.host != LOOPBACK:
+        network_url = f"http://{_reachable_address(args.host)}:{port}/?t={token}"
+        print(f"On your network: {network_url}", flush=True)
     print("Press Ctrl+C to stop.", flush=True)
     if not args.no_open:
         webbrowser.open(url)
@@ -53,7 +60,9 @@ def main(argv: list[str] | None = None) -> int:
     if restart.is_set():
         server.server_close()
         session = host.session()
-        launch = Launch(port, session.root, session.diff_spec, not args.no_watch)
+        launch = Launch(
+            port, session.root, session.diff_spec, not args.no_watch, args.host
+        )
         relaunch(launch, token, host.agent_token)
     return 0
 
@@ -74,6 +83,10 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="port for the local server (default: any free port)",
+    )
+    parser.add_argument(
+        "--host",
+        help="address to listen on (default: 127.0.0.1); 0.0.0.0 lets phones and other computers on your network open it",
     )
     parser.add_argument(
         "--no-open",
@@ -107,6 +120,17 @@ def _open_folder(
 
 def _stop(signum: int, frame: object) -> None:
     raise KeyboardInterrupt
+
+
+def _reachable_address(host: str) -> str:
+    if host not in ("0.0.0.0", "::"):
+        return host
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        try:
+            probe.connect(("10.254.254.254", 1))
+        except OSError:
+            return socket.gethostname()
+        return str(probe.getsockname()[0])
 
 
 if __name__ == "__main__":
