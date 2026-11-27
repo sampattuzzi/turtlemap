@@ -5,6 +5,8 @@ const FOLDER_PAD = 10;
 const FOLDER_SIDE = 9;
 const BOX_GAP = 12;
 const COLUMN_GAP = 76;
+const LANE_GAP = 3;
+const AREA = 500;
 const STEPS_PER_BOX = 40;
 const TIME_LIMIT = 2500;
 export function layOutRibbons(G, previous) {
@@ -14,7 +16,7 @@ export function layOutRibbons(G, previous) {
   else layout.optimise();
   return layout.draw();
 }
-export function placesOf(G) { return new Map(G.leaves.map((n) => [n.id, { y: n.y, rank: n.rank }])); }
+export function placesOf(G) { return new Map([...G.leaves, ...G.folders].map((n) => [n.id, { wish: n.wish, rank: n.rank, lanes: n.laneWishes && new Map(n.laneWishes) }])); }
 export function ribbonGraph(root, edges) {
   const leaves = [], folders = [];
   const walk = (n, depth) => {
@@ -35,8 +37,12 @@ class RibbonLayout {
     this.post = [];
     const walkPost = (n) => { for (const k of n.kids) if (k.kids) walkPost(k); if (n !== G.root) this.post.push(n); };
     walkPost(G.root);
+    for (const f of this.post) f.level = 1 + Math.max(0, ...f.kids.filter((k) => k.kids).map((k) => k.level));
+    for (const n of [...G.leaves, ...G.folders]) n.wish = 0;
+    for (const n of G.leaves) n.laneWishes = new Map();
+    G.root.y = 0;
+    this.ancestors = new Map(G.leaves.map((n) => { const chain = []; for (let f = n.up; f; f = f.up) chain.push(f); return [n, chain]; }));
     this.placeColumns();
-    stackInBands(G, rank);
     this.forward = G.edges.filter((e) => !back.has(e) && rank.get(e.t) > rank.get(e.s));
     this.backward = G.edges.filter((e) => !this.forward.includes(e));
     this.byTarget = groupBy(this.forward, (e) => e.t);
@@ -44,6 +50,8 @@ class RibbonLayout {
     this.outOf = groupBy(this.forward, (e) => e.s);
     this.neighbours = new Map(G.leaves.map((l) => [l, []]));
     for (const e of G.edges) { this.neighbours.get(e.s).push(e.t); this.neighbours.get(e.t).push(e.s); }
+    this.score();
+    this.commit();
   }
   placeColumns() {
     const { G, rank } = this;
@@ -52,14 +60,23 @@ class RibbonLayout {
     for (const n of G.leaves) rank.set(n, compact.get(rank.get(n)));
     this.colW = used.map(() => 0);
     for (const n of G.leaves) this.colW[rank.get(n)] = Math.max(this.colW[rank.get(n)], n.w);
-    this.colX = [];
-    let x = 0;
-    for (const w of this.colW) { this.colX.push(x); x += w + COLUMN_GAP + 2 * FOLDER_SIDE * G.maxDepth; }
-    for (const n of G.leaves) { n.x = this.colX[rank.get(n)]; n.rank = rank.get(n); }
     for (const f of this.post) f.span = [Math.min(...f.kids.map((k) => (k.kids ? k.span[0] : rank.get(k)))), Math.max(...f.kids.map((k) => (k.kids ? k.span[1] : rank.get(k))))];
+    const ending = used.map(() => 0), starting = used.map(() => 0);
+    for (const f of G.folders) { ending[f.span[1]] = Math.max(ending[f.span[1]], this.padOf(f)); starting[f.span[0]] = Math.max(starting[f.span[0]], this.padOf(f)); }
+    this.colX = [starting[0]];
+    for (let L = 1; L < used.length; L++) this.colX.push(this.colX[L - 1] + this.colW[L - 1] + ending[L - 1] + COLUMN_GAP + starting[L]);
+    for (const n of G.leaves) { n.x = this.colX[rank.get(n)]; n.rank = rank.get(n); }
+    this.lanesByHome = null;
+    for (const f of G.folders) {
+      const p = this.padOf(f);
+      f.x = this.colX[f.span[0]] - p;
+      f.w = Math.max(this.colX[f.span[1]] + this.colW[f.span[1]] + p - f.x, f.minW || 0);
+    }
+    this.width = this.colX[used.length - 1] + this.colW[used.length - 1] + ending[used.length - 1];
   }
+  padOf(f) { return FOLDER_SIDE * f.level; }
   restore(previous) {
-    for (const n of this.G.leaves) { const p = previous.get(n.id); n.y = p.y; this.rank.set(n, p.rank); }
+    for (const n of [...this.G.leaves, ...this.G.folders]) { const p = previous.get(n.id); if (!p) continue; n.wish = p.wish; if (p.lanes) n.laneWishes = new Map(p.lanes); if (!n.kids) this.rank.set(n, p.rank); }
     this.placeColumns();
   }
   columnRange(n) {
@@ -68,46 +85,82 @@ class RibbonLayout {
     const hi = Math.min(this.colX.length - 1, ...(this.outOf.get(n) || []).map((e) => rank.get(e.t) - 1));
     return [lo, hi];
   }
-  depthPad(d) { return FOLDER_SIDE * (this.G.maxDepth - d + 1); }
-  fitFolders() {
-    const { colX, colW } = this;
-    for (const f of this.post) {
-      const top = Math.min(...f.kids.map((k) => k.y)), bottom = Math.max(...f.kids.map((k) => k.y + k.h));
-      f.y = top - FOLDER_HEAD - FOLDER_PAD;
-      f.h = bottom - top + FOLDER_HEAD + 2 * FOLDER_PAD;
-      const p = this.depthPad(f.depth);
-      f.x = colX[f.span[0]] - p;
-      f.w = Math.max(colX[f.span[1]] + colW[f.span[1]] + p - f.x, f.minW || 0);
-    }
-  }
   columnsOf() {
     const { rank, G } = this, cols = this.colX.map(() => ({ leaves: [], folders: [] }));
     for (const n of G.leaves) cols[rank.get(n)].leaves.push(n);
     for (const f of G.folders) for (let L = f.span[0]; L <= f.span[1]; L++) cols[L].folders.push(f);
     return cols;
   }
-  route() {
-    this.fitFolders();
-    const { rank } = this;
-    const cols = this.columnsOf();
-    const trunks = [];
+  spanOf(n) { return n.kids ? n.span : [this.rank.get(n), this.rank.get(n)]; }
+  trunks() {
+    const { rank } = this, trunks = [], lanes = new Map();
     for (const [t, es] of this.byTarget) {
       const rt = rank.get(t);
-      const bySource = groupBy(es, (e) => rank.get(e.s));
-      const first = Math.min(...bySource.keys());
-      const trunk = { t, runs: new Map(), joins: new Map(), stack: [], w: 0 };
-      for (let g = first; g < rt; g++) {
-        const joiners = (bySource.get(g) || []).sort((a, b) => a.s.y - b.s.y);
-        trunk.w += joiners.reduce((sum, e) => sum + ribbonWidth(e.w), 0);
+      const groups = groupBy(es, (e) => (rank.get(e.s) < rt - 1 ? this.homeOf([e.s, t]) : null));
+      for (const [home, list] of groups) {
+        const bySource = groupBy(list, (e) => rank.get(e.s));
+        const trunk = { t, home, key: home === this.G.root ? '' : home?.id, bySource, first: Math.min(...bySource.keys()), w: list.reduce((sum, e) => sum + ribbonWidth(e.w), 0) };
+        trunk.a = trunk.first + 1; trunk.b = rt - 1;
+        if (home) pushTo(lanes, home, trunk);
+        trunks.push(trunk);
+      }
+    }
+    for (const list of lanes.values()) list.sort((p, q) => rank.get(p.t) - rank.get(q.t) || q.a - p.a || p.t.wish - q.t.wish);
+    return { trunks, lanes };
+  }
+  homeOf(nodes) {
+    let common = this.ancestors.get(nodes[0]);
+    for (const n of nodes.slice(1)) { const mine = new Set(this.ancestors.get(n)); common = common.filter((f) => mine.has(f)); }
+    return common[0];
+  }
+  pack(f, lanes) {
+    const top = f === this.G.root ? 0 : FOLDER_HEAD + FOLDER_PAD, sky = new Map();
+    const skyOver = ([a, b]) => { let y = top; for (let L = a; L <= b; L++) y = Math.max(y, sky.get(L) ?? top); return y; };
+    const items = [...f.kids.map((k) => ({ k, wish: k.wish })), ...(lanes.get(f) || []).map((trunk) => ({ trunk, wish: trunk.t.laneWishes?.get(trunk.key) ?? Infinity }))];
+    items.sort((p, q) => p.wish - q.wish);
+    let bottom = top;
+    for (const { k, trunk } of items) {
+      if (trunk) {
+        trunk.relTop = Math.max(trunk.t.laneWishes?.get(trunk.key) ?? -Infinity, skyOver([trunk.a, trunk.b]));
+        for (let L = trunk.a; L <= trunk.b; L++) sky.set(L, trunk.relTop + trunk.w + LANE_GAP);
+        bottom = Math.max(bottom, trunk.relTop + trunk.w);
+        continue;
+      }
+      if (k.kids) this.pack(k, lanes);
+      const span = this.spanOf(k);
+      k.relY = Math.max(k.wish, skyOver(span));
+      for (let L = span[0]; L <= span[1]; L++) sky.set(L, k.relY + k.h + BOX_GAP);
+      bottom = Math.max(bottom, k.relY + k.h);
+    }
+    f.h = bottom + (f === this.G.root ? 0 : FOLDER_PAD);
+  }
+  settle(f, lanes) {
+    for (const k of f.kids) { k.y = f.y + k.relY; if (k.kids) this.settle(k, lanes); }
+    for (const trunk of lanes.get(f) || []) trunk.laneTop = f.y + trunk.relTop;
+  }
+  commit() {
+    for (const n of [...this.G.leaves, ...this.G.folders]) n.wish = n.relY;
+    for (const n of this.G.leaves) n.laneWishes = new Map();
+    for (const trunk of this.lanes) trunk.t.laneWishes.set(trunk.key, trunk.relTop);
+  }
+  route() {
+    if (!this.lanesByHome) Object.assign(this, (({ trunks, lanes }) => ({ allTrunks: trunks, lanesByHome: lanes }))(this.trunks()));
+    const trunks = this.allTrunks, lanes = this.lanesByHome;
+    this.lanes = [...lanes.values()].flat();
+    this.pack(this.G.root, lanes);
+    this.settle(this.G.root, lanes);
+    const cols = this.columnsOf(), { rank } = this;
+    for (const trunk of trunks) {
+      trunk.stack = []; trunk.joins = new Map();
+      for (let g = trunk.first; g < rank.get(trunk.t); g++) {
+        const joiners = (trunk.bySource.get(g) || []).sort((a, b) => a.s.y - b.s.y);
         trunk.stack.unshift(...joiners);
         for (const e of joiners) trunk.joins.set(e, g);
-        trunk.runs.set(g + 1, t.y + t.h / 2);
       }
-      trunks.push(trunk);
     }
-    this.sinkLanes(trunks, cols);
     const ribbons = [];
     for (const trunk of trunks) ribbons.push(...this.trunkRibbons(trunk));
+    this.arrive(ribbons);
     for (const [src, list] of groupBy(ribbons, (r) => r.e.s)) {
       list.sort((p, q) => p.ys[0] - q.ys[0]);
       const total = list.reduce((t, r) => t + r.w, 0), k = Math.min(1, (src.h - 2) / total);
@@ -116,40 +169,26 @@ class RibbonLayout {
     }
     return { ribbons, trunks, cols };
   }
-  sinkLanes(trunks, cols) {
-    const { rank } = this;
-    const bottomOf = cols.map((c) => Math.max(...c.leaves.map((n) => n.y + n.h), ...c.folders.map((f) => f.y + f.h), -1e9) + 16);
-    const long = trunks.map((trunk) => ({ trunk, inner: [...trunk.runs.keys()].filter((L) => L !== rank.get(trunk.t)) })).filter((x) => x.inner.length);
-    for (const x of long) { x.a = Math.min(...x.inner); x.b = Math.max(...x.inner); }
-    long.sort((p, q) => rank.get(p.trunk.t) - rank.get(q.trunk.t) || q.a - p.a || p.trunk.t.y - q.trunk.t.y);
-    const placed = [];
-    for (const x of long) {
-      let top = Math.max(...x.inner.map((L) => bottomOf[L]));
-      for (const o of placed) if (x.a <= o.b && o.a <= x.b) top = Math.max(top, o.top + o.trunk.w + 3);
-      x.top = top;
-      placed.push(x);
-      x.trunk.laneTop = top;
-      for (const L of x.inner) x.trunk.runs.set(L, top + x.trunk.w / 2);
-    }
-  }
   trunkRibbons(trunk) {
     const rt = this.rank.get(trunk.t), widths = new Map(trunk.stack.map((e) => [e, ribbonWidth(e.w)]));
     const after = new Map();
     let below = 0;
     for (let i = trunk.stack.length - 1; i >= 0; i--) { after.set(trunk.stack[i], below); below += widths.get(trunk.stack[i]); }
-    const arriving = new Map();
-    let total = 0;
-    for (const m of trunk.stack) total += widths.get(m);
-    let off = -total / 2;
-    for (const m of trunk.stack) { arriving.set(m, off + widths.get(m) / 2); off += widths.get(m); }
-    const k = Math.min(1, (trunk.t.h - 2) / total), yt = trunk.t.y + trunk.t.h / 2;
     return trunk.stack.map((e) => {
       const g0 = trunk.joins.get(e), ys = [];
       const lane = trunk.laneTop + trunk.w - after.get(e) - widths.get(e) / 2;
       for (let g = g0; g < rt - 1; g++) ys.push(lane);
-      ys.push(yt + arriving.get(e) * k);
-      return { e, g0, ys, w: widths.get(e), w0: widths.get(e), w1: widths.get(e) * k, tree: trunk.t };
+      return { e, g0, ys, w: widths.get(e), w0: widths.get(e), tree: trunk.t };
     });
+  }
+  arrive(ribbons) {
+    for (const [t, list] of groupBy(ribbons, (r) => r.e.t)) {
+      const approach = (r) => (r.ys.length ? r.ys[r.ys.length - 1] : r.e.s.y + r.e.s.h / 2);
+      list.sort((p, q) => approach(p) - approach(q));
+      const total = list.reduce((sum, r) => sum + r.w, 0), k = Math.min(1, (t.h - 2) / total);
+      let y = t.y + t.h / 2 - (total * k) / 2;
+      for (const r of list) { r.ys.push(y + (r.w * k) / 2); r.w1 = r.w * k; y += r.w * k; }
+    }
   }
   pointsOf(r) {
     const { colX, colW } = this;
@@ -164,7 +203,7 @@ class RibbonLayout {
   score() {
     const routed = this.route(), { G } = this;
     this.routed = routed;
-    let ink = 0, crossings = 0, headers = 0, overlap = 0, area = 0;
+    let ink = 0, crossings = 0, headers = 0, area = 0;
     const flat = this.colX.map(() => []), sloped = this.colX.map(() => []);
     for (const r of routed.ribbons) {
       ink += r.w * (r.e.t.x - r.e.s.x - r.e.s.w);
@@ -188,46 +227,51 @@ class RibbonLayout {
       }
       crossings += inversions(sloped[g]);
     });
-    for (const f of [G.root, ...G.folders]) overlap += siblingOverlap(f.kids);
     for (const f of G.folders) area += f.w * f.h;
-    return ink / 100 + crossings * 3 + headers / 4 + overlap / 2 + area / 4000;
+    return ink / 100 + crossings * 3 + headers / 4 + area / AREA + (this.width * G.root.h) / AREA;
   }
   optimise() {
     const { G, rank } = this, leaves = G.leaves;
-    const move = (n, dy, undo) => { if (!n.kids) { undo.push([n, n.y]); n.y += dy; } else for (const k of n.kids) move(k, dy, undo); };
-    const undoing = (undo) => () => { for (const [n, y] of undo.reverse()) n.y = y; };
+    const shift = (changes) => {
+      const before = changes.map(([n]) => [n, n.wish]);
+      for (const [n, dy] of changes) n.wish += dy;
+      return () => { for (const [n, wish] of before) n.wish = wish; };
+    };
     const sigma = (cooling) => 3 + 40 * cooling;
     this.score();
     this.settled = this.routed;
     anneal({
       score: () => this.score(),
-      accepted: () => { this.settled = this.routed; },
+      accepted: () => { this.commit(); this.settled = this.routed; },
       steps: STEPS_PER_BOX * leaves.length,
       limit: TIME_LIMIT,
       moves: [
         { weight: 0.2, apply: (random) => {
           const long = this.settled.trunks.filter((trunk) => trunk.laneTop !== undefined);
           if (!long.length) return null;
-          const trunk = random.pick(long), t = trunk.t, dy = trunk.laneTop + trunk.w / 2 - (t.y + t.h / 2), undo = [];
-          move(t, dy, undo);
-          if (dy > 0) for (const n of leaves) if (n !== t && n.up === t.up && rank.get(n) === rank.get(t) && n.y > t.y) move(n, dy, undo);
-          return undoing(undo);
+          const trunk = random.pick(long), t = trunk.t;
+          return shift([[t, trunk.laneTop + trunk.w / 2 - (t.y + t.h / 2)]]);
         } },
-        { weight: 0.2, apply: (random, cooling) => { const undo = []; move(random.pick(leaves), random.gauss() * sigma(cooling), undo); return undoing(undo); } },
+        { weight: 0.2, apply: (random, cooling) => shift([[random.pick(leaves), random.gauss() * sigma(cooling)]]) },
+        { weight: 0.15, apply: (random, cooling) => {
+          if (!this.lanes.length) return null;
+          const trunk = random.pick(this.lanes), t = trunk.t;
+          const dy = random.next() < 0.5 ? t.y + t.h / 2 - trunk.laneTop - trunk.w / 2 : random.gauss() * sigma(cooling);
+          const before = t.laneWishes.get(trunk.key);
+          t.laneWishes.set(trunk.key, (before ?? trunk.relTop) + dy);
+          return () => { if (before === undefined) t.laneWishes.delete(trunk.key); else t.laneWishes.set(trunk.key, before); };
+        } },
         { weight: 0.2, apply: (random, cooling) => {
-          const n = random.pick(leaves), o = this.neighbours.get(n), undo = [];
+          const n = random.pick(leaves), o = this.neighbours.get(n);
           if (!o.length) return null;
-          move(n, o.reduce((t, m) => t + m.y, 0) / o.length - n.y + random.gauss() * sigma(cooling) * 0.3, undo);
-          return undoing(undo);
+          return shift([[n, o.reduce((t, m) => t + m.y + m.h / 2, 0) / o.length - n.y - n.h / 2 + random.gauss() * sigma(cooling) * 0.3]]);
         } },
-        { weight: 0.15, apply: (random, cooling) => { if (!G.folders.length) return null; const undo = []; move(random.pick(G.folders), random.gauss() * sigma(cooling), undo); return undoing(undo); } },
+        { weight: 0.15, apply: (random, cooling) => (G.folders.length ? shift([[random.pick(G.folders), random.gauss() * sigma(cooling)]]) : null) },
         { weight: 0.1, apply: (random) => {
-          const n = random.pick(leaves), peers = leaves.filter((k) => k !== n && rank.get(k) === rank.get(n) && k.up === n.up);
+          const n = random.pick([...leaves, ...G.folders]), peers = n.up.kids.filter((k) => k !== n && this.spanOf(k)[0] <= this.spanOf(n)[1] && this.spanOf(n)[0] <= this.spanOf(k)[1]);
           if (!peers.length) return null;
-          const o = random.pick(peers), dy = o.y - n.y, undo = [];
-          move(n, dy, undo);
-          move(o, -dy, undo);
-          return undoing(undo);
+          const o = random.pick(peers), dy = o.wish - n.wish;
+          return shift([[n, dy], [o, -dy]]);
         } },
         { weight: 0.15, apply: (random) => {
           const n = random.pick(leaves), [lo, hi] = this.columnRange(n), options = [];
@@ -240,6 +284,7 @@ class RibbonLayout {
         } },
       ],
     });
+    this.score();
   }
   draw() {
     const g = this.route(), { rank, colX, colW, G } = this;
@@ -285,38 +330,12 @@ function rankLeaves(leaves, edges) {
   for (const n of leaves) rank.set(n, rank.get(n) - lo);
   return { rank, back };
 }
-function stackInBands(G, rank) {
-  const pack = (f) => {
-    const sky = new Map(), y0 = f === G.root ? 0 : FOLDER_HEAD + FOLDER_PAD;
-    for (const k of f.kids) {
-      if (k.kids) pack(k);
-      const span = k.kids ? k.span : [rank.get(k), rank.get(k)];
-      let y = y0;
-      for (let L = span[0]; L <= span[1]; L++) y = Math.max(y, sky.get(L) ?? y0);
-      k.relY = y;
-      for (let L = span[0]; L <= span[1]; L++) sky.set(L, y + k.h + BOX_GAP);
-    }
-    f.h = Math.max(y0, ...sky.values()) - BOX_GAP + (f === G.root ? 0 : FOLDER_PAD);
-  };
-  pack(G.root);
-  const place = (f, y) => { for (const k of f.kids) { k.y = y + k.relY; if (k.kids) place(k, k.y); } };
-  place(G.root, 0);
-}
 function freeY(obstacles, ideal, margin) {
   const ivs = obstacles.map(([a, b]) => [a - margin, b + margin]).sort((p, q) => p[0] - q[0]);
   const merged = [];
   for (const iv of ivs) { if (merged.length && iv[0] <= merged[merged.length - 1][1]) merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], iv[1]); else merged.push([...iv]); }
   for (const [a, b] of merged) if (ideal > a && ideal < b) return ideal - a < b - ideal ? a : b;
   return ideal;
-}
-function siblingOverlap(kids) {
-  let total = 0;
-  for (let i = 0; i < kids.length; i++) for (let j = i + 1; j < kids.length; j++) {
-    const a = kids[i], b = kids[j];
-    const ox = Math.min(a.x + a.w + BOX_GAP, b.x + b.w + BOX_GAP) - Math.max(a.x, b.x), oy = Math.min(a.y + a.h + BOX_GAP, b.y + b.h + BOX_GAP) - Math.max(a.y, b.y);
-    if (ox > 0 && oy > 0) total += ox * oy;
-  }
-  return total;
 }
 const round = (v) => Math.round(v * 10) / 10;
 function smoothPath(pts) {
@@ -338,6 +357,7 @@ function catmull(pts) {
   }
   return d;
 }
+function pushTo(map, key, value) { if (!map.has(key)) map.set(key, []); map.get(key).push(value); }
 function groupBy(items, keyOf) {
   const out = new Map();
   for (const it of items) { const k = keyOf(it); if (!out.has(k)) out.set(k, []); out.get(k).push(it); }
