@@ -2,12 +2,10 @@ import { boundsOf, overlaps, pathBox, placeCard, setCulled } from '../canvas/sce
 import { DIFF, KIND_ORDER, net } from '../core/data.js';
 import { el, svg } from '../core/dom.js';
 import { combinedDiff, diffBadge, moduleFileName, moduleNodeOf, netLabel, plural } from './boxes.js';
-import { FOLDER_HEAD, layOutRibbons, placesOf, ribbonGraph } from './ribbons.js';
+import { FOLDER_HEAD, layOutRibbons, ribbonGraph } from './hierarchy.js';
 export const LIBRARIES = 'libraries';
 const OPENABLE = new Set(['module', 'class']);
 const SCENE_PAD = 40;
-const LAYOUTS = new Map();
-const LAYOUTS_KEPT = 24;
 export function buildPackageScene(entry, ctx, filter = null) {
   const N = net();
   const tree = visibleTree(N, entry.folded, entry.open || new Set(), filter);
@@ -15,9 +13,7 @@ export function buildPackageScene(entry, ctx, filter = null) {
   const scene = new PackageScene(N, ctx, tree);
   scene.measureLeaves();
   const G = ribbonGraph(tree.root, edges);
-  const key = layoutKey(G);
-  const result = layOutRibbons(G, LAYOUTS.get(key));
-  rememberLayout(key, G);
+  const result = layOutRibbons(G, new URLSearchParams(location.search).get('route') || 'sides');
   scene.draw(G, result);
   return scene;
 }
@@ -305,14 +301,6 @@ function diffClass(link) {
 }
 function heat(d, on) { for (const part of d.parts) part.classList.toggle('hot', on); }
 function shifted(box, { dx, dy }) { return { ...box, x: box.x + dx, y: box.y + dy }; }
-function layoutKey(G) {
-  return `${G.leaves.map((v) => v.id).sort().join(' ')}#${G.edges.map((e) => `${e.s.id}>${e.t.id}`).sort().join(' ')}`;
-}
-function rememberLayout(key, G) {
-  LAYOUTS.delete(key);
-  LAYOUTS.set(key, placesOf(G));
-  while (LAYOUTS.size > LAYOUTS_KEPT) LAYOUTS.delete(LAYOUTS.keys().next().value);
-}
 function packageHues(G, wanted) {
   const order = [];
   const walk = (n) => { if (!n.kids) { if (wanted.has(n.id)) order.push(n); return; } for (const k of n.kids) walk(k); };
