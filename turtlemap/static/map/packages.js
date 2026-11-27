@@ -4,15 +4,17 @@ import { el, svg } from '../core/dom.js';
 import { combinedDiff, diffBadge, moduleFileName, moduleNodeOf, netLabel, plural } from './boxes.js';
 import { FOLDER_HEAD, layOutRibbons, placesOf, ribbonGraph } from './ribbons.js';
 export const LIBRARIES = 'libraries';
+const OPENABLE = new Set(['module', 'class']);
 const SCENE_PAD = 40;
 const LAYOUTS = new Map();
 const LAYOUTS_KEPT = 24;
 export function buildPackageScene(entry, ctx, filter = null) {
   const N = net();
-  const tree = visibleTree(N, entry.folded, filter);
+  const tree = visibleTree(N, entry.folded, entry.open || new Set(), filter);
+  const edges = shownEdges(N, tree);
   const scene = new PackageScene(N, ctx, tree);
   scene.measureLeaves();
-  const G = ribbonGraph(tree.root, shownEdges(N, tree));
+  const G = ribbonGraph(tree.root, edges);
   const key = layoutKey(G);
   const result = layOutRibbons(G, LAYOUTS.get(key));
   rememberLayout(key, G);
@@ -39,7 +41,7 @@ class PackageScene {
   }
   measureLeaves() {
     for (const v of this.tree.leaves) {
-      v.el = leafEl(v.node, this.ctx);
+      v.el = leafEl(v, this.ctx);
       this.leafLayer.append(v.el);
     }
     for (const f of [...this.tree.folders].sort((p, q) => p.node.depth - q.node.depth)) {
@@ -182,37 +184,62 @@ class PackageScene {
 }
 function shownEdges(N, tree) {
   const pairs = new Map();
-  for (const link of N.lift((n) => tree.open.has(n.id))) {
-    const s = tree.byId.get(link.a.id), t = tree.byId.get(link.b.id);
+  for (const e of N.edges) {
+    const s = shownEnd(N, tree, e.from), t = shownEnd(N, tree, e.to);
     if (!s || !t || s === t) continue;
     const key = `${s.id}|${t.id}`;
     if (!pairs.has(key)) pairs.set(key, { s, t, w: 0, link: { key, a: s.node, b: t.node, atoms: [], kinds: new Set() } });
     const pair = pairs.get(key);
-    pair.link.atoms.push(...link.atoms);
-    link.kinds.forEach((k) => pair.link.kinds.add(k));
+    pair.link.atoms.push(e);
+    e.kinds.forEach((k) => pair.link.kinds.add(k));
     pair.w = pair.link.atoms.length;
   }
   return [...pairs.values()];
 }
+function shownEnd(N, tree, id) {
+  const chain = N.chain(id);
+  for (let i = 1; i < chain.length; i++) {
+    const shown = tree.byId.get(chain[i].id);
+    if (shown && !shown.kids) return shown;
+    if (!shown && !tree.open.has(chain[i].id)) return null;
+  }
+  const own = tree.byId.get(chain[chain.length - 1].id);
+  return own && own.kids ? ownCode(tree, own) : null;
+}
+function ownCode(tree, folder) {
+  if (folder.own) return folder.own;
+  if (folder.node.kind !== 'module' && folder.node.kind !== 'class') return null;
+  folder.own = { id: `${folder.id}#own`, node: folder.node, own: true };
+  folder.kids.unshift(folder.own);
+  tree.leaves.push(folder.own);
+  return folder.own;
+}
 function isLibraryPart(N, id) { const chain = N.chain(id); return Boolean(chain[1] && chain[1].kind === 'library'); }
-function visibleTree(N, folded, filter) {
+function visibleTree(N, folded, opened, filter) {
   const open = new Set(['root']), byId = new Map(), leaves = [], folders = [];
   const shown = (n) => !filter || filter.visible(n);
   const leaf = (n) => { const v = { id: n.id, node: n }; byId.set(n.id, v); leaves.push(v); return v; };
+  const folder = (n, inner) => {
+    const f = { id: n.id, node: n, kids: inner };
+    open.add(n.id);
+    byId.set(n.id, f);
+    folders.push(f);
+    return f;
+  };
   const build = (n) => {
     const kids = [];
     for (const k of n.children) {
       if (!shown(k)) continue;
-      if (k.kind === 'module') { kids.push(leaf(k)); continue; }
-      if (k.kind !== 'package' || !moduleCount(k)) continue;
+      if (OPENABLE.has(k.kind)) {
+        const inner = opened.has(k.id) ? build(k) : [];
+        kids.push(inner.length ? folder(k, inner) : leaf(k));
+        continue;
+      }
+      if (k.kind !== 'package') { if (n.kind !== 'root' && n.kind !== 'package') kids.push(leaf(k)); continue; }
+      if (!moduleCount(k)) continue;
       if (folded.has(k.id)) { kids.push(leaf(k)); continue; }
       const inner = build(k);
-      if (!inner.length) continue;
-      const f = { id: k.id, node: k, kids: inner };
-      open.add(k.id);
-      byId.set(k.id, f);
-      folders.push(f);
-      kids.push(f);
+      if (inner.length) kids.push(folder(k, inner));
     }
     return kids;
   };
@@ -234,17 +261,25 @@ function visibleTree(N, folded, filter) {
   }
   return { root, open, byId, leaves, folders };
 }
-function leafEl(n, ctx) {
-  const folded = n.kind === 'package' || n.kind === 'libraries';
+function leafEl(v, ctx) {
+  const n = v.node;
+  if (v.own) {
+    const box = el('div', { class: `nb leaf pd-leaf pd-own k-${n.kind}`, 'data-id': v.id, style: `--stripe: var(${boxText(n).stripe})`, title: `Code in ${n.name} outside its ${n.kind === 'class' ? 'methods' : 'classes and functions'}` }, el('span', { class: 'pd-name' }, n.kind === 'class' ? 'class body' : 'module code'));
+    box.addEventListener('click', (e) => { e.stopPropagation(); ctx.select(n.id); });
+    return box;
+  }
+  const folded = n.kind === 'package' || n.kind === 'libraries', openable = OPENABLE.has(n.kind) && n.children.length > 0;
   const { name, count, stripe } = boxText(n);
-  const title = folded ? `${name} · ${count} · click to open` : n.kind === 'library' ? `${n.name} · library` : n.path;
+  const title = folded ? `${name} · ${count} · click to open` : n.kind === 'library' ? `${n.name} · library` : n.path || name;
+  const chevron = openable ? el('button', { class: 'chev', title: `Show what is inside ${name}` }, '▸') : folded ? el('span', { class: 'chev' }, '▸') : null;
   const box = el('div', { class: `nb leaf pd-leaf k-${n.kind}${n.faded ? ' faded' : ''}${n.diff ? ` diff-${n.diff}` : ''}`, 'data-id': n.id, style: `--stripe: var(${stripe})`, title },
-    folded ? el('span', { class: 'chev' }, '▸') : null,
+    chevron,
     diffBadge(n.diff),
     n.kind === 'library' ? el('span', { class: 'stereo' }, '«library»') : null,
     el('span', { class: 'pd-name' }, name),
     folded ? el('span', { class: 'udim' }, count) : null);
   box.addEventListener('click', (e) => { e.stopPropagation(); ctx.select(n.id); if (folded) ctx.toggle(n.id); });
+  if (openable) chevron.addEventListener('click', (e) => { e.stopPropagation(); ctx.select(n.id); ctx.toggle(n.id); });
   return box;
 }
 function folderEl(n, ctx) {
@@ -258,7 +293,11 @@ function boxText(n) {
   if (n.kind === 'package') return { name: `${n.name}/`, count: plural(moduleCount(n), 'module'), stripe: '--h-pkg' };
   if (n.kind === 'libraries') return { name: 'libraries', count: `${n.children.length}`, stripe: '--h-lib' };
   if (n.kind === 'library') return { name: n.name, stripe: '--h-lib' };
-  return { name: moduleFileName(n), stripe: '--h-mod' };
+  if (n.kind === 'module') return { name: moduleFileName(n), stripe: '--h-mod' };
+  if (n.kind === 'class') return { name: n.name, stripe: n.sym && n.sym.kind === 'enum' ? '--h-enum' : '--h-make' };
+  if (n.kind === 'function') return { name: `${n.name}()`, stripe: '--h-call' };
+  if (n.kind === 'method') return { name: `${n.name}()`, stripe: '--h-method' };
+  return { name: n.name, stripe: '--h-var' };
 }
 function diffClass(link) {
   const state = DIFF ? combinedDiff(link.atoms.map((e) => e.diff)) : null;

@@ -635,6 +635,9 @@ body:has(.update-note) .live-note { bottom: 72px; }
 .pd-leaf .pd-name { font-weight: 600; }
 .pd-leaf.k-package { background: color-mix(in srgb, var(--h-pkg) 14%, var(--node-body)); }
 .pd-leaf .chev { width: auto; color: var(--fg-dim); }
+.pd-leaf button.chev { background: none; border: 0; padding: 0 2px; margin: 0; font: inherit; cursor: pointer; }
+.pd-leaf button.chev:hover { color: var(--fg); }
+.pd-own .pd-name { font-style: italic; font-weight: 400; color: var(--fg-dim); }
 .nb.pinned { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 70%, transparent); }
 .pd-group { opacity: 0.62; }
 .pd-ribbon { fill: var(--hue-fill); stroke: var(--hue-fill); stroke-width: 1.4px; stroke-linejoin: round; }

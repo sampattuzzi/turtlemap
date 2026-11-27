@@ -77,9 +77,9 @@ export class Explorer {
     this.open(entry, target);
   }
   mapShowing(ids, focus, related) {
-    const folded = new Set(this.trail.lastMap().folded);
-    for (const id of ids) for (const n of net().chain(id).slice(1, -1)) folded.delete(n.id);
-    return { view: 'net', folded, focus, related, open: new Set() };
+    const last = this.trail.lastMap(), folded = new Set(last.folded), open = new Set(last.open || []);
+    for (const id of ids) for (const n of net().chain(id).slice(1, -1)) { folded.delete(n.id); if (n.kind === 'module' || n.kind === 'class') open.add(n.id); }
+    return { view: 'net', folded, focus, related, open };
   }
   filterChanged() {
     resetNet();
@@ -103,9 +103,9 @@ export class Explorer {
     if (target.kind === 'package') {
       if (!c.folded.delete(id)) c.folded.add(id);
       this.keepInPlace(id, () => this.render(true));
-    } else if (target.kind === 'class') {
+    } else if (target.kind === 'module' || target.kind === 'class') {
       if (!c.open.delete(id)) c.open.add(id);
-      this.panel();
+      this.keepInPlace(id, () => this.render(true));
     }
   }
   keepInPlace(id, change) {
@@ -182,12 +182,15 @@ export class Explorer {
   chrome() { paintFrame(this.ui, this.trail.current, this.goTo, this.folds()); }
   folds() {
     const map = this.trail.lastMap();
-    const isOpen = (id) => !net().chain(id).slice(1).some((n) => map.folded.has(n.id));
+    const shut = (n) => map.folded.has(n.id) || ((n.kind === 'module' || n.kind === 'class') && !map.open.has(n.id));
+    const isOpen = (id) => net().nodes.has(id) && !net().chain(id).slice(1).some(shut);
     return { isOpen, toggle: (id) => this.foldFromTree(map, isOpen, id) };
   }
   foldFromTree(map, isOpen, id) {
-    if (isOpen(id)) map.folded.add(id);
-    else for (const n of net().chain(id).slice(1)) map.folded.delete(n.id);
+    const node = net().nodes.get(id);
+    if (!node) return;
+    if (isOpen(id)) { if (node.kind === 'package') map.folded.add(id); else map.open.delete(id); }
+    else for (const n of net().chain(id).slice(1)) { map.folded.delete(n.id); if (n.kind === 'module' || n.kind === 'class') map.open.add(n.id); }
     if (this.trail.current === map) this.keepInPlace(id, () => this.render(true));
     else this.chrome();
   }
@@ -273,7 +276,7 @@ function paintFrame(ui, c, onPick, folds) {
 }
 function crumbExtra(c, focusPath) {
   const isNet = c.view === 'net';
-  const note = isNet ? (c.folded.size ? `· ${c.folded.size} folded` : null) : c.open.size ? `· ${c.open.size} unfolded` : null;
+  const note = isNet ? [c.folded.size ? `· ${c.folded.size} folded` : '', c.open.size ? `· ${c.open.size} open` : ''].filter(Boolean).join(' ') || null : c.open.size ? `· ${c.open.size} unfolded` : null;
   const units = isNet ? (focusPath ? fileUnits(focusPath) : []) : symbolUnits(c);
   const seen = units.length ? el('label', { class: 'seen-toggle', title: 'Tick once you have reviewed these changes' }, seenBox(units, isNet ? baseName(focusPath) : c.sym), isNet ? 'File seen' : 'Seen') : null;
   return note || seen ? el('span', { class: 'crumb-extra' }, note, seen) : null;
