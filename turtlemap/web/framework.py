@@ -103,14 +103,20 @@ class Router:
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, port: int, router: Router, roles: dict[str, str]) -> None:
-        super().__init__((LOOPBACK, port), Handler)
+    def __init__(
+        self,
+        port: int,
+        router: Router,
+        roles: dict[str, str],
+        interface: str = LOOPBACK,
+    ) -> None:
+        super().__init__((interface, port), Handler)
         self.router = router
         self.roles = roles
 
     def server_bind(self) -> None:
         socketserver.TCPServer.server_bind(self)
-        self.server_name = LOOPBACK
+        self.server_name = str(self.server_address[0])
         self.server_port = self.server_address[1]
 
     def start(self) -> None:

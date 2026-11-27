@@ -84,6 +84,17 @@ def make_opened(server: ThreadingHTTPServer, tmp_path: Path) -> None:
         time.sleep(0.05)
 
 
+def test_listens_on_the_interface_it_is_given(tmp_path: Path) -> None:
+    host = ProjectHost(cache_dir=tmp_path / "cache")
+    server = start_server(host, TOKEN, interface="0.0.0.0")
+
+    try:
+        assert server.server_address[0] == "0.0.0.0"
+        assert fetch(server, "/", token=None)[0] == 200
+    finally:
+        server.shutdown()
+
+
 def test_rejects_api_calls_without_the_token(make_server: ThreadingHTTPServer) -> None:
     assert fetch(make_server, "/api/status", token=None)[0] == 403
     assert fetch(make_server, "/api/status", token="wrong")[0] == 403

@@ -8,7 +8,7 @@ from turtlemap.projects.seen import SeenStore
 from turtlemap.web.comparison_service import ComparisonService
 from turtlemap.web.project_service import ProjectService
 from turtlemap.web.static_files import StaticFiles
-from turtlemap.web.framework import Router, Server
+from turtlemap.web.framework import LOOPBACK, Router, Server
 from turtlemap.web.update_service import UpdateService
 from turtlemap.updates.updater import UpdateNotice
 
@@ -22,9 +22,10 @@ def start_server(
     seen_store: SeenStore | None = None,
     comment_store: CommentStore | None = None,
     updates: UpdateNotice | None = None,
+    interface: str = LOOPBACK,
 ) -> Server:
     router = make_router(host, seen_store, comment_store, updates)
-    server = Server(port, router, {token: USER, host.agent_token: AGENT})
+    server = Server(port, router, {token: USER, host.agent_token: AGENT}, interface)
     server.start()
     return server
 
